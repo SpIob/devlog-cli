@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "devlog-cli"
+version = "1.0.0"
+description = "A terminal-based developer journal tool"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "click>=8.0",
+    "rich>=13.0",
+]
+
+[project.scripts]
+devlog = "devlog.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["devlog*"]
+
+[tool.setuptools]
+package-dir = {"" = "."}
