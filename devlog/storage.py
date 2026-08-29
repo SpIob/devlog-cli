@@ -66,6 +66,19 @@ def get_storage_path() -> Path:
     return DEFAULT_DATA_DIR / ENTRIES_FILE_NAME
 
 
+def get_data_dir() -> Path:
+    """Return the directory in which journal artifacts live.
+
+    Respects ``DEVLOG_DATA_DIR`` like :func:`get_storage_path`; defaults
+    to ``~/.devlog``. Used by commands that need to write files
+    alongside ``entries.json`` (e.g. ``devlog export`` writing to
+    ``<data-dir>/exports/``).
+    """
+    if "DEVLOG_DATA_DIR" in os.environ:
+        return Path(os.environ["DEVLOG_DATA_DIR"])
+    return DEFAULT_DATA_DIR
+
+
 def ensure_storage_dir() -> None:
     """Create the storage directory (and any parents) if it does not exist."""
     path = get_storage_path()

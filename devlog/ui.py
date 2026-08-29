@@ -21,7 +21,7 @@ import os
 import re
 import shutil
 import sys
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from rich.box import ROUNDED, SIMPLE
 from rich.console import Console, Group
@@ -34,7 +34,6 @@ from rich.progress import (
     TextColumn,
     TimeElapsedColumn,
 )
-from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
@@ -59,13 +58,29 @@ VERSION = "1.4.0"
 
 MSG_TRUNCATE_LEN = 60
 ID_DISPLAY_LEN = 8
-DATE_DISPLAY_LEN = 19  # "YYYY-MM-DD HH:MM UTC"
+DATE_DISPLAY_LEN = 20  # "YYYY-MM-DD HH:MM UTC" (4+1+2+1+2+1+2+1+2+1+3)
+
+# Column widths are *content* widths (excluding the (0, 1) padding each
+# cell adds). The widths passed to Table.add_column() are bumped by
+# ``_COL_PADDING`` so the content area matches the constants below.
+_COL_PADDING = 2  # default Rich cell padding is (0, 1) on each side
+# Maximum number of extra chars to give the Tags column before the
+# extra room goes to Message.
+_TAGS_GROWTH_CAP = 18
 
 # Width budget at 80-col terminals. Columns 1-3 sum to ~46 chars (incl. padding).
-COL_ID_WIDTH = 8
-COL_DATE_WIDTH = DATE_DISPLAY_LEN + 2  # +2 for padding
-COL_TAGS_MIN = 12
-COL_MESSAGE_MIN = 20
+COL_ID_WIDTH = ID_DISPLAY_LEN  # 8
+COL_DATE_WIDTH = DATE_DISPLAY_LEN  # 20
+COL_TAGS_MIN = 10
+COL_MESSAGE_MIN = 27  # 27 chars is the smallest a journal message can be
+                       # read at a glance; below this the table feels
+                       # claustrophobic and the smart-truncated match
+                       # often falls off the right edge.
+# Minimum terminal width we bother to lay out for. Below this, the table
+# cannot fit the full ID + date columns and Rich would start hiding
+# columns — the user is told to widen their terminal instead.
+MIN_TERMINAL_WIDTH = 80
+MAX_TERMINAL_WIDTH = 160
 
 TAG_NONE = "(none)"
 
@@ -109,6 +124,8 @@ __all__ = [
     "repair_summary",
     "backup_result",
     "doctor_report",
+    "stats_panel",
+    "sparkline",
     "Group",
     "Padding",
     "Text",
@@ -120,7 +137,62 @@ __all__ = [
     "MSG_TRUNCATE_LEN",
     "TAG_NONE",
     "VERSION",
+    "pluralize",
+    "plural_s",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Small helpers
+# ---------------------------------------------------------------------------
+
+
+def pluralize(n: int, singular: str, plural: str | None = None) -> str:
+    """Return ``f"{n} {singular|plural}"`` with the right word form.
+
+    Centralises the "1 entry" / "2 entries" pattern that was previously
+    hand-rolled with inline ``'y' if n == 1 else 'ies'`` expressions,
+    several of which got the pluralisation wrong.
+
+    Args:
+        n: the count. The form is selected purely on whether this is 1.
+        singular: the singular noun form, e.g. ``"entry"``.
+        plural: optional explicit plural form. Defaults to
+            ``singular + "s"`` (with one special case: ``"entry"`` →
+            ``"entries"``).
+
+    Returns:
+        A formatted ``"<n> <word>"`` string. Note: the count is included.
+    """
+    if n == 1:
+        return f"{n} {singular}"
+    if plural is None:
+        plural = "entries" if singular == "entry" else f"{singular}s"
+    return f"{n} {plural}"
+
+
+def _plural_noun(n: int, singular: str, plural: str | None = None) -> str:
+    """Like :func:`pluralize` but without the count prefix.
+
+    Useful inside template strings that already include the count, e.g.
+    ``f"{n} of {total} {_plural_noun(total, 'entry')}"``.
+
+    For *n* in {0, 1}, returns ``singular`` (so "1 row" not "1 rows").
+    """
+    if n == 1:
+        return singular
+    if plural is None:
+        plural = "entries" if singular == "entry" else f"{singular}s"
+    return plural
+
+
+def plural_s(n: int) -> str:
+    """Return ``"s"`` for plurals (n != 1) and ``""`` for n == 1.
+
+    Convenience for suffix-style pluralisation:
+    ``f"duplicate{plural_s(n)}"`` → "duplicate" or "duplicates".
+    """
+    return "" if n == 1 else "s"
 
 
 # ---------------------------------------------------------------------------
@@ -175,9 +247,17 @@ def _format_dt(iso: str) -> str:
         iso: datetime string in ``YYYY-MM-DDTHH:MM:SSZ`` format.
 
     Returns:
-        Formatted as ``YYYY-MM-DD HH:MM UTC``.
+        Formatted as ``YYYY-MM-DD HH:MM UTC``. If the input is not a
+        parseable ISO 8601 timestamp, the raw string is returned
+        unchanged so callers (notably :func:`stats_panel`) never raise
+        on a corrupt store.
     """
-    dt = _dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    if not iso:
+        return "—"
+    try:
+        dt = _dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError):
+        return iso
     return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
@@ -375,36 +455,62 @@ def _tags_text(entry: Entry) -> Text:
 
 
 def _terminal_width() -> int:
-    """Best-effort terminal width with a sane floor and cap."""
+    """Best-effort terminal width with a sane floor and cap.
+
+    Reads from the active Rich ``console`` first, falling back to
+    :func:`shutil.get_terminal_size` for the rare case where the
+    console is queried before being initialised. The floor is
+    :data:`MIN_TERMINAL_WIDTH` (80) so the table never tries to fit
+    into a window too small to show the full 8-char short ID +
+    19-char date + a usable message column.
+    """
+    try:
+        w = console.width
+        if w and w > 0:
+            return max(MIN_TERMINAL_WIDTH, min(w, MAX_TERMINAL_WIDTH))
+    except (AttributeError, RuntimeError):
+        pass
     try:
         w = shutil.get_terminal_size((100, 20)).columns
     except (OSError, ValueError):
         w = 100
-    return max(60, min(w, 160))
+    return max(MIN_TERMINAL_WIDTH, min(w, MAX_TERMINAL_WIDTH))
 
 
 def _column_widths() -> dict:
     """Compute column widths so the table fits the terminal.
 
-    The Message column gets the leftover space; if the terminal is too
-    narrow we shrink tags before we ever let message wrap. Tags are
-    allowed to wrap (a single tag is short, but multiple comma-separated
-    tags can easily exceed 12 chars).
+    The widths returned are the *visible content* widths (what the user
+    sees in the cell, excluding the (0, 1) padding that Rich adds on
+    each side). Callers add :data:`_COL_PADDING` when passing them to
+    :class:`rich.table.Table.add_column`.
+
+    The sum of ``width + _COL_PADDING`` across all columns plus the
+    box border overhead is guaranteed to be at most
+    :func:`_terminal_width`, so Rich never has to shrink any column
+    below its declared ``width=`` and the 8-char short id and 19-char
+    date are never truncated.
     """
     total = _terminal_width()
-    overhead = 12  # box drawing + column padding
-    # Reserve more space for Tags so a typical "frontend, backend" pair
-    # (≈18 chars) fits without wrapping, but shrink it gracefully.
-    tags_width = max(18, min(28, total // 5))
-    msg = max(
-        COL_MESSAGE_MIN,
-        total - overhead - COL_ID_WIDTH - COL_DATE_WIDTH - tags_width,
-    )
+    # Rich renders 4 columns with 5 box borders and 2 chars of padding
+    # on each side of every cell, so the columns (with padding) must
+    # fit in ``total - 5`` chars.
+    col_budget = total - 5
+    fixed = COL_ID_WIDTH + COL_DATE_WIDTH + COL_TAGS_MIN + COL_MESSAGE_MIN
+    # The fixed widths (in content cells) plus their padding (4 cells
+    # × 2 padding) must also fit in the column budget.
+    min_with_padding = fixed + (4 * _COL_PADDING)
+    extra = max(0, col_budget - min_with_padding)
+    # Give the extra room to Tags first (a few more visible tags is
+    # more useful than a few more message chars), then to Message.
+    tags_extra = min(extra, _TAGS_GROWTH_CAP - COL_TAGS_MIN)
+    tags_width = COL_TAGS_MIN + tags_extra
+    message_width = COL_MESSAGE_MIN + (extra - tags_extra)
     return {
         "id": COL_ID_WIDTH,
         "date": COL_DATE_WIDTH,
         "tags": tags_width,
-        "message": msg,
+        "message": message_width,
     }
 
 
@@ -443,25 +549,58 @@ def entries_table(
         header_style="bold",
         expand=False,
     )
-    table.add_column("ID", style=_s("id_dim"), no_wrap=True, width=widths["id"])
-    table.add_column("Date", style=_s("date"), no_wrap=True, width=widths["date"])
-    # Tags may wrap when many tags are present; this is preferable to
-    # truncating them mid-word.
-    table.add_column("Tags", style=_s("tags"), width=widths["tags"])
+    # Widths passed to Rich include the (0, 1) cell padding on each
+    # side, so the visible content area matches the *_DISPLAY_LEN
+    # constants and the short ID is never truncated.
+    table.add_column(
+        "ID",
+        style=_s("id_dim"),
+        no_wrap=True,
+        width=widths["id"] + _COL_PADDING,
+    )
+    table.add_column(
+        "Date",
+        style=_s("date"),
+        no_wrap=True,
+        width=widths["date"] + _COL_PADDING,
+    )
+    # Tags are truncated with an ellipsis when too long to fit, so a
+    # single long tag list never pushes the row taller than its
+    # neighbours. Users who want to see the full tag list can pass
+    # --all to widen the table on a wide terminal.
+    table.add_column(
+        "Tags",
+        style=_s("tags"),
+        no_wrap=True,
+        overflow="ellipsis",
+        width=widths["tags"] + _COL_PADDING,
+    )
     table.add_column(
         "Message",
-        width=widths["message"],
-        footer=f"Showing {len(entries)} of {total} entries.",
+        width=widths["message"] + _COL_PADDING,
+        footer=f"Showing {len(entries)} of {total} {_plural_noun(total, 'entry')}.",
         footer_style="bold",
+        # Keep short messages left-aligned (Rich centres them by
+        # default) and keep the footer flush against the cell's left
+        # edge so it does not float in whitespace.
+        justify="left",
     )
 
+    # Use the actual message column width as the truncation budget.
+    # MSG_TRUNCATE_LEN is the spec-mandated *maximum* (60 chars) — we
+    # never truncate *more* than that, but at narrow terminals the
+    # column is narrower, so the budget shrinks with it. The
+    # smart_truncate path always keeps the matched substring visible
+    # inside the visible window, so even a narrow column still shows
+    # the hit.
+    msg_limit = min(MSG_TRUNCATE_LEN, widths["message"])
     for entry in entries:
         if highlight_query:
             msg_cell = smart_truncate(
-                entry.message, highlight_query, MSG_TRUNCATE_LEN
+                entry.message, highlight_query, msg_limit
             )
         else:
-            msg_cell = escape(_left_truncate(entry.message, MSG_TRUNCATE_LEN))
+            msg_cell = escape(_left_truncate(entry.message, msg_limit))
         table.add_row(
             _short_id(entry),
             _format_dt(entry.created_at),
@@ -639,6 +778,120 @@ def tags_table(
 
 
 # ---------------------------------------------------------------------------
+# Stats panel (`devlog stats`)
+# ---------------------------------------------------------------------------
+
+
+def sparkline(values: list[int]) -> str:
+    """Build a compact horizontal sparkline using block characters.
+
+    The character height encodes the *relative* value within the
+    dataset: the largest value renders as the tallest block (``█``)
+    and zero as the shortest (``▁``). Eight discrete levels are used,
+    so a one-entry day and a 50-entry day are visually distinct but
+    the bars never overflow the cell.
+
+    Args:
+        values: one integer per day, oldest first.
+
+    Returns:
+        A single string of block characters, one per day.
+    """
+    if not values:
+        return ""
+    max_v = max(values) or 1
+    blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+    out = []
+    for v in values:
+        idx = min(len(blocks) - 1, int((v / max_v) * len(blocks)))
+        out.append(blocks[idx])
+    return "".join(out)
+
+
+def stats_panel(
+    *,
+    total: int,
+    first_iso: str,
+    last_iso: str,
+    top_tags: list[tuple[str, int]],
+    last_30_days: list[tuple[str, int]],
+) -> Panel:
+    """Render a `devlog stats` summary as a single panel.
+
+    The layout is a labelled two-column list for the top section,
+    followed by a tag table for the most-used tags, followed by a
+    colourised sparkline of the last 30 days with a 0/max scale
+    underneath.
+
+    Args:
+        total: number of entries in the journal (or filtered subset).
+        first_iso: ISO 8601 timestamp of the oldest entry.
+        last_iso: ISO 8601 timestamp of the newest entry.
+        top_tags: ``[(tag, count), ...]`` ordered most-used first.
+        last_30_days: ``[(iso_date, count), ...]`` oldest first.
+
+    Returns:
+        A configured :class:`rich.panel.Panel`.
+    """
+    first_str = _format_dt(first_iso)
+    last_str = _format_dt(last_iso)
+    sparkline_values = [c for _, c in last_30_days]
+    sparkline_max = max(sparkline_values) if sparkline_values else 0
+
+    # Active-day span (avoid div-by-zero on single-entry journals)
+    try:
+        first_dt = _dt.datetime.fromisoformat(first_iso.replace("Z", "+00:00"))
+        last_dt = _dt.datetime.fromisoformat(last_iso.replace("Z", "+00:00"))
+        span_days = max(1, (last_dt.date() - first_dt.date()).days + 1)
+    except ValueError:
+        span_days = 1
+    avg_per_day = total / span_days
+
+    rows: list[Text] = [
+        _styled_row("Total", str(total)),
+        _styled_row("First", Text(first_str, style=_s("date"))),
+        _styled_row("Last", Text(last_str, style=_s("date"))),
+        _styled_row("Span", f"{span_days} day{'s' if span_days != 1 else ''}"),
+        _styled_row("Avg/day", f"{avg_per_day:.2f}"),
+    ]
+
+    rows.append(Text())
+    if top_tags:
+        rows.append(Text(f"Top {len(top_tags)} tags", style="bold"))
+        for tag, count in top_tags:
+            rows.append(_stats_row_text(f"  {tag}", str(count)))
+    else:
+        rows.append(Text("No tags yet.", style="dim"))
+
+    rows.append(Text())
+    if sparkline_values:
+        rows.append(Text("Last 30 days (entries per day)", style="bold"))
+        rows.append(Text(sparkline(sparkline_values), style=_s("date")))
+        rows.append(
+            Text()
+            .append("0", style="dim")
+            .append(" " * max(0, 30 - len(str(sparkline_max)) - len("0")))
+            .append(str(sparkline_max), style="dim")
+        )
+
+    return Panel(
+        Padding(Group(*rows), (0, 1)),
+        border_style=_s("show_border"),
+        title="Journal Stats",
+        title_align="left",
+    )
+
+
+def _stats_row_text(label: str, value: str) -> Text:
+    """Build a labelled stat row matching the entry-panel style."""
+    t = Text()
+    t.append(f"{label:<12}", style="dim")
+    t.append(": ")
+    t.append(value)
+    return t
+
+
+# ---------------------------------------------------------------------------
 # Export progress
 # ---------------------------------------------------------------------------
 
@@ -671,11 +924,16 @@ def export_progress(total: int) -> Progress:
 
 
 def version_banner() -> None:
-    """Print a styled version line followed by a dim rule."""
+    """Print a styled version line for ``--version``.
+
+    The previous design wrapped the version in a horizontal ``Rule``,
+    but the rule carried no information and overflowed on narrow
+    terminals. A single, prominent version line is enough.
+    """
     console.print(
-        Text("devlog, version ", style="bold") + Text(VERSION, style=_s("banner_version"))
+        Text("devlog, version ", style="bold")
+        + Text(VERSION, style=_s("banner_version"))
     )
-    console.print(Rule(style="dim"))
 
 
 def root_banner() -> None:
@@ -688,7 +946,7 @@ def root_banner() -> None:
         Text("devlog", style="bold")
         + Text("  ·  a terminal-based developer journal", style="dim")
     )
-    console.print(Rule(style="dim"))
+    console.print()
 
     table = Table(
         box=SIMPLE,
@@ -782,7 +1040,7 @@ def repair_summary(
         rows.append(Text(f"Backup written to {backup_path}", style="dim"))
 
     title = Text()
-    title.append("✎ ", style=_bold("info_text"))
+    title.append("🔧 ", style=_bold("info_text"))
     title.append("Repair ", style="bold")
     title.append("· devlog store", style="dim")
 
@@ -850,15 +1108,20 @@ def doctor_report(report: dict) -> Panel:
             Text("yes", style=_s("success_border")) if report["writable"] else Text("no", style=_s("error_text")),
         )
     )
-    rows.append(_styled_row("Entries", str(report["entry_count"])))
+    rows.append(_styled_row("Entries", Text(str(report["entry_count"]), style="bold")))
 
     days = report.get("days_since_last")
     if days is None:
         rows.append(_styled_row("Last entry", Text("—", style="dim")))
     elif days == 0:
-        rows.append(_styled_row("Last entry", "today"))
+        rows.append(_styled_row("Last entry", Text("today", style=_s("date"))))
     else:
-        rows.append(_styled_row("Last entry", f"{days} day{'s' if days != 1 else ''} ago"))
+        rows.append(
+            _styled_row(
+                "Last entry",
+                f"{days} day{'s' if days != 1 else ''} ago",
+            )
+        )
 
     issues = report.get("issues", [])
     rows.append(Text())
@@ -871,13 +1134,41 @@ def doctor_report(report: dict) -> Panel:
                 style=_s("warning_text"),
             )
         )
+        # Enumerate the first few issues inline so the user can act on
+        # them without a second `devlog repair` round-trip. The full
+        # list is preserved in `report["issues"]` for tooling.
+        for issue in issues[:5]:
+            eid = issue.get("entry_id") or "—"
+            if eid and len(eid) > 8:
+                eid = eid[:8] + "…"
+            kind = issue.get("kind", "issue")
+            msg = issue.get("message", "")
+            rows.append(
+                Text()
+                .append("    • ", style="dim")
+                .append(f"[{kind}] ", style=_s("warning_text"))
+                .append(f"{eid} ", style=_s("id_dim"))
+                .append(msg, style="dim")
+            )
+        if len(issues) > 5:
+            rows.append(
+                Text(
+                    f"    …and {len(issues) - 5} more",
+                    style="dim",
+                )
+            )
 
     top = report.get("top_messages") or []
     if top:
         rows.append(Text())
         rows.append(Text("Longest messages:", style="bold"))
         for short_id, length in top:
-            rows.append(Text(f"  • {short_id} — {length} chars", style="dim"))
+            rows.append(
+                Text()
+                .append("  • ", style="dim")
+                .append(short_id, style=_s("id_dim"))
+                .append(f" — {length} chars", style="dim")
+            )
 
     title = Text()
     title.append("🩺 ", style=_bold("info_text"))

@@ -346,10 +346,11 @@ def _interactive_repl() -> None:
 
         # Dispatch by re-invoking the CLI in-process. Easier than re-implementing.
         try:
-            # Use Click's standalone command invocation.
+            # Use Click's standalone command invocation. `mix_stderr=False`
+            # was removed in Click 8.2+; the default is `False` now.
             import click.testing
 
-            runner = click.testing.CliRunner(mix_stderr=False)
+            runner = click.testing.CliRunner()
             # Split shell-style arguments.
             try:
                 import shlex
@@ -370,30 +371,40 @@ def _interactive_repl() -> None:
 
 
 def _print_repl_help() -> None:
-    lines = [
-        "Available commands:",
-        "  add <message> [-t tag ...]   Add a new journal entry",
-        "  l | list [-t tag] [-n N]     List entries, newest first",
-        "  s | search <query>           Search entry messages",
-        "  show <id>                    Show a single entry",
-        "  edit <id> [-m msg] [-t tag]  Edit an entry",
-        "  delete <id> [-y]             Delete an entry",
-        "  today                        Show today's entries",
-        "  tail [N]                     Show the N most recent entries",
-        "  tags                         List tags with usage counts",
-        "  stats                        Summarize the journal",
-        "  rename-tag <old> <new>       Rename a tag across all entries",
-        "  import <path>                Import entries from a file",
-        "  export [-o path]             Export entries to a Markdown file",
-        "  repair [-y] [--dry-run]      Inspect and repair the store",
-        "  backup [-o path]             Write a timestamped backup",
-        "  restore <path>               Restore from a backup file",
-        "  doctor                       Check store health",
-        "  h | help                     Show this help",
-        "  q | quit | exit              Leave the REPL",
+    """Print a one-line description of every command available in the REPL.
+
+    Generated from ``main.list_commands`` so it stays in sync as new
+    commands are added. Includes sub-commands of grouped commands
+    (``theme``) by name. Aliases (``list``, ``search``) are also
+    surfaced as the REPL accepts both forms.
+    """
+    # Pull the short docstring (first line) for each command and the
+    # commands themselves. ``list_commands`` returns every registered
+    # command, including those behind a group like ``theme``.
+    cmds: list[tuple[str, str]] = []
+    for name in sorted(main.list_commands(None)):
+        cmd = main.get_command(None, name)
+        if cmd is None:
+            continue
+        if isinstance(cmd, click.Group):
+            sub = ", ".join(sorted(cmd.list_commands(None)))
+            cmds.append((name, f"{cmd.short_help or ''} (sub: {sub})".strip()))
+        else:
+            cmds.append((name, (cmd.short_help or "").strip()))
+
+    aliases = [
+        ("l", "alias for list"),
+        ("s", "alias for search"),
+        ("h", "alias for help"),
+        ("q", "leave the REPL"),
     ]
-    for line in lines:
-        console.print(line)
+
+    console.print("Available commands:")
+    width = max(len(name) for name, _ in cmds + aliases)
+    for name, desc in cmds:
+        console.print(f"  [bold]{name:<{width}}[/bold]  {desc}")
+    for name, desc in aliases:
+        console.print(f"  [bold]{name:<{width}}[/bold]  {desc}")
 
 
 # ---------------------------------------------------------------------------
@@ -666,12 +677,30 @@ def edit(
     )
 
     if not has_flags:
-        # No flags → spawn $VISUAL / $EDITOR / fallback chain
+        # No flags → spawn $VISUAL / $EDITOR / fallback chain. This
+        # requires a TTY; in a non-interactive shell the editor will
+        # blast terminal-control sequences to stdout and fail noisily.
+        # Scripts that intentionally want the editor in a pipe can set
+        # DEVLOG_ALLOW_EDITOR_IN_PIPE=1 to opt in.
+        if not sys.stdin.isatty() and not os.environ.get(
+            "DEVLOG_ALLOW_EDITOR_IN_PIPE"
+        ):
+            ui.print_error(
+                "`devlog edit <id>` with no flags needs a TTY to open "
+                "your editor. Pass --message, --tag, --add-tag, or "
+                "--remove-tag to change the entry non-interactively, or "
+                "set DEVLOG_ALLOW_EDITOR_IN_PIPE=1 to force the editor "
+                "even when stdin is not a terminal."
+            )
+            sys.exit(1)
         edited_message = _edit_in_editor(match.message)
         if edited_message is None:
             ui.print_error("Editor exited abnormally; no changes saved.")
             sys.exit(2)
         new_message = edited_message
+        message_from_flag = False
+    else:
+        message_from_flag = new_message is not None
 
     # Compute new tags
     current_tags = list(match.tags)
@@ -695,7 +724,12 @@ def edit(
         to_remove = {t.strip().lower() for t in remove_tags}
         current_tags = [t for t in current_tags if t not in to_remove]
 
-    # Determine the final message
+    # Determine the final message. If the user explicitly passed -m ""
+    # via the CLI, reject it; the editor path is allowed to produce an
+    # empty body (the user might be saving a blank note on purpose).
+    if message_from_flag and new_message is not None and not new_message.strip():
+        ui.print_error("MESSAGE cannot be empty.")
+        sys.exit(1)
     final_message = new_message if new_message is not None else match.message
 
     # No-op detection
@@ -1101,6 +1135,12 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
     since_dt = _parse_date_bound(since) if since else None
     until_dt = _parse_date_bound(until, is_upper=True) if until else None
     all_entries = _filter_by_date(all_entries, since_dt, until_dt)
+    # Also drop entries whose created_at cannot be parsed at all, so
+    # downstream formatting (which assumes a valid ISO timestamp) never
+    # crashes. Other commands go through this filter implicitly via
+    # --since/--until; `stats` without date bounds does not, so we apply
+    # it unconditionally here.
+    all_entries = [e for e in all_entries if _is_valid_iso(e.created_at)]
 
     if not all_entries:
         ui.print_info("No entries to summarize.")
@@ -1123,7 +1163,6 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
         d = today - datetime.timedelta(days=i)
         iso = d.strftime("%Y-%m-%d")
         last_30_days.append((iso, per_day.get(iso, 0)))
-    sparkline_data = [count for _, count in last_30_days]
 
     # Top tags
     from collections import Counter
@@ -1152,71 +1191,14 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
         return
 
     # Render
-    from rich.padding import Padding
-    from rich.text import Text
-
-    first_str = ui._format_dt(first_iso)
-    last_str = ui._format_dt(last_iso)
-
-    # Compute active-days span for an average-per-day
-    try:
-        first_dt = datetime.datetime.fromisoformat(first_iso.replace("Z", "+00:00"))
-        last_dt = datetime.datetime.fromisoformat(last_iso.replace("Z", "+00:00"))
-        span_days = max(1, (last_dt.date() - first_dt.date()).days + 1)
-    except ValueError:
-        span_days = 1
-    avg_per_day = total / span_days
-
-    body_rows: list = [
-        Text(),
-        _stats_row("Total", str(total)),
-        _stats_row("First", first_str),
-        _stats_row("Last", last_str),
-        _stats_row("Span", f"{span_days} day{'s' if span_days != 1 else ''}"),
-        _stats_row("Avg/day", f"{avg_per_day:.2f}"),
-        Text(),
-        Text("Top 5 tags", style="bold"),
-    ]
-    for tag, count in top_tags:
-        body_rows.append(_stats_row(f"  {tag}", str(count)))
-
-    body_rows.append(Text())
-    body_rows.append(Text("Last 30 days (each ▏ = 1 entry)", style="bold"))
-    body_rows.append(Text(_ascii_sparkline(sparkline_data), style=ui._s("date")))
-
-    panel = ui.Panel(
-        Padding(ui.Group(*body_rows), (0, 1)),
-        border_style=ui._s("show_border"),
-        title="Journal Stats",
-        title_align="left",
+    panel = ui.stats_panel(
+        total=total,
+        first_iso=first_iso,
+        last_iso=last_iso,
+        top_tags=top_tags,
+        last_30_days=last_30_days,
     )
     console.print(panel)
-
-
-def _ascii_sparkline(values: list[int]) -> str:
-    """Build a compact horizontal sparkline using block characters.
-
-    Each day is one cell. Vertical height is determined by the max value.
-    """
-    if not values:
-        return ""
-    max_v = max(values) or 1
-    # Use 4 height levels of block characters
-    blocks = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-    out = []
-    for v in values:
-        idx = min(len(blocks) - 1, int((v / max_v) * len(blocks)))
-        out.append(blocks[idx])
-    return "".join(out)
-
-
-def _stats_row(label: str, value: str) -> Text:
-    """Build a stats row with the same dim-label style used by entry panels."""
-    t = Text()
-    t.append(f"{label:<10}", style="dim")
-    t.append(": ")
-    t.append(value)
-    return t
 
 
 # ---------------------------------------------------------------------------
@@ -1231,12 +1213,32 @@ def _stats_row(label: str, value: str) -> Text:
 @click.option("--quiet", "-q", is_flag=True, help="Suppress the preview output.")
 def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
     """Rename a tag across all entries (OLD → NEW)."""
-    # Validate NEW with the same rules as add
+    # Pre-validate NEW *as supplied* so an invalid tag (uppercase
+    # letters, spaces, oversize) is rejected with a clear error rather
+    # than silently collapsing to the same value as OLD and triggering
+    # the "OLD and NEW are the same" no-op path. We deliberately check
+    # the raw input here, not a normalised version: tags are stored
+    # lowercased but the user's input is what we're validating.
+    new_stripped = new.strip()
+    if not new_stripped:
+        ui.print_error("NEW tag cannot be empty.")
+        sys.exit(1)
     try:
-        new_normalized = _validate_tags((new,))
+        if not TAG_RE.fullmatch(new_stripped):
+            raise click.UsageError(
+                f'Tag "{new}" contains invalid characters. '
+                "Use lowercase letters, numbers, and hyphens only."
+            )
+        if len(new_stripped) > MAX_TAG_LENGTH:
+            raise click.UsageError(
+                f'Tag "{new}" exceeds maximum length of {MAX_TAG_LENGTH} characters.'
+            )
     except click.UsageError as exc:
         ui.print_error(str(exc))
         sys.exit(1)
+
+    # Now normalise through the shared validator (handles dedup etc.)
+    new_normalized = _validate_tags((new,))
     new_tag = new_normalized[0]
     old_normalized = old.strip().lower()
     if not old_normalized:
@@ -1337,10 +1339,24 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
         elif lower.endswith(".md") or lower.endswith(".markdown"):
             fmt = "markdown"
         else:
-            ui.print_error(
-                f'Cannot auto-detect format for "{path}". Use --format=json or --format=markdown.'
-            )
-            sys.exit(2)
+            # Try to sniff format from the first non-blank character so
+            # users can pipe from stdin or import extensionless files.
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    sniff = fh.read(64)
+            except OSError:
+                sniff = ""
+            stripped = sniff.lstrip()
+            if stripped.startswith("{"):
+                fmt = "json"
+            elif stripped.startswith("#"):
+                fmt = "markdown"
+            else:
+                ui.print_error(
+                    f'Cannot auto-detect format for "{path}". '
+                    "Use --format=json or --format=markdown."
+                )
+                sys.exit(2)
 
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -1357,14 +1373,26 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
             sys.exit(2)
         raw_entries = payload.get("entries", [])
         candidates: list[Entry] = []
+        unreadable_rows = 0
         for item in raw_entries:
+            if not isinstance(item, dict):
+                unreadable_rows += 1
+                continue
+            # Mint a uuid up front when the source row is missing one.
+            # This both preserves stable ids when present AND lets
+            # `Entry(**item)` succeed on rows that omit `id`, instead
+            # of silently dropping them as "unreadable".
+            if "id" not in item or not item["id"]:
+                item = {**item, "id": str(uuid.uuid4())}
             try:
                 e = Entry(**item)
             except (TypeError, ValueError):
+                unreadable_rows += 1
                 continue
             candidates.append(e)
     else:
         candidates = _parse_markdown_export(content)
+        unreadable_rows = 0  # markdown parser returns only valid entries
 
     try:
         existing = storage.load_entries()
@@ -1385,8 +1413,13 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
         if (cand.created_at, cand.message) in existing_fps:
             skipped += 1
             continue
-        # Always mint a fresh id for new entries
-        cand.id = str(uuid.uuid4())
+        # Preserve a stable id from the source when present. Only mint
+        # a fresh uuid if the source row is missing one. This makes
+        # re-imports and backup → restore → import round-trips
+        # idempotent at the id level, so users can cross-reference
+        # entries by short id.
+        if not cand.id:
+            cand.id = str(uuid.uuid4())
         to_add.append(cand)
         existing_ids.add(cand.id)
         existing_fps.add((cand.created_at, cand.message))
@@ -1395,9 +1428,17 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
         line = Text()
         line.append("DRY RUN: ", style=ui._bold("warning_text"))
         line.append(
-            f"would import {len(to_add)} entr{'y' if len(to_add) == 1 else 'ies'}, skip {skipped} duplicate{'s' if skipped != 1 else ''}.",
+            f"would import {len(to_add)} {ui._plural_noun(len(to_add), 'entry')}, "
+            f"skip {skipped} duplicate{ui.plural_s(skipped)}. "
+            if to_add or skipped
+            else "would import 0 entries, skip 0 duplicates. ",
             style=ui._s("warning_text"),
         )
+        if unreadable_rows:
+            line.append(
+                f"Ignored {unreadable_rows} unreadable row{ui.plural_s(unreadable_rows)}.",
+                style=ui._s("warning_text"),
+            )
         console.print(line)
         return
 
@@ -1414,16 +1455,29 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
             line = Text()
             line.append("✔ ", style=ui._bold("success_title"))
             line.append(
-                f"Imported {len(to_add)} entr{'y' if len(to_add) == 1 else 'ies'}, skipped {skipped} duplicate{'s' if skipped != 1 else ''}.",
+                f"Imported {len(to_add)} {ui._plural_noun(len(to_add), 'entry')}, "
+                f"skipped {skipped} duplicate{ui.plural_s(skipped)}. ",
                 style=ui._s("success_border"),
             )
+            if unreadable_rows:
+                line.append(
+                    f"Ignored {unreadable_rows} unreadable row{ui.plural_s(unreadable_rows)}.",
+                    style=ui._s("success_border"),
+                )
             console.print(line)
         else:
             # No new imports — surface the skip count so the user knows it was a no-op, not a bug.
-            if skipped:
-                ui.print_info(
-                    f"No new entries to import ({skipped} duplicate{'s' if skipped != 1 else ''} skipped)."
-                )
+            if skipped or unreadable_rows:
+                parts = []
+                if skipped:
+                    parts.append(
+                        f"{skipped} duplicate{ui.plural_s(skipped)} skipped"
+                    )
+                if unreadable_rows:
+                    parts.append(
+                        f"{unreadable_rows} unreadable row{ui.plural_s(unreadable_rows)} ignored"
+                    )
+                ui.print_info(f"No new entries to import ({', '.join(parts)}).")
             else:
                 ui.print_info("No entries to import.")
 
@@ -1993,7 +2047,7 @@ _BASH_COMPLETION = """# bash completion for devlog
 _devlog_completion() {
     local cur prev words cword
     _init_completion || return
-    local commands="add show edit delete list search today tail tags stats rename-tag import completions export repair backup restore doctor"
+    local commands="add show edit delete list search today tail tags stats theme rename-tag import completions export repair backup restore doctor"
     if [[ ${cword} -eq 1 ]]; then
         COMPREPLY=($(compgen -W "${commands}" -- "${cur}"))
         return
@@ -2001,7 +2055,8 @@ _devlog_completion() {
     case "${words[1]}" in
         edit|delete|show) COMPREPLY=($(compgen -W "$(devlog list --quiet 2>/dev/null | python3 -c 'import sys,json
 for line in sys.stdin: print(json.loads(line)["id"][:8])')" -- "${cur}")) ;;
-        list|search|tail|export) COMPREPLY=($(compgen -W "--tag --limit --all --quiet --since --until" -- "${cur}")) ;;
+        list|search|tail|export) COMPREPLY=($(compgen -W "--tag --limit --all --quiet --since --until --format --output" -- "${cur}")) ;;
+        theme) COMPREPLY=($(compgen -W "list show set path" -- "${cur}")) ;;
     esac
 }
 complete -F _devlog_completion devlog
@@ -2021,9 +2076,10 @@ _devlog() {
         'today:Show today entries'
         'tail:Show the N most recent entries'
         'tags:List tags with usage counts'
+        'theme:View or change the active color theme'
         'stats:Summarize the journal'
         'rename-tag:Rename a tag across all entries'
-        'import:Import entries from a JSON or Markdown file'
+        'import:Import entries from a file'
         'completions:Print a shell completion script'
         'export:Export entries to a Markdown file'
         'repair:Inspect and repair the on-disk journal store'
@@ -2068,23 +2124,40 @@ complete -c devlog -n "__fish_use_subcommand" -a "doctor" -d "Check store health
 @click.option(
     "--output",
     "-o",
+    "output",
     type=click.Path(),
-    default="./devlog-export.md",
+    default=None,
+    help=(
+        "Output file path. Default: <data-dir>/exports/devlog-YYYYMMDD-HHMMSS.<ext> "
+        "where <ext> is md or json based on --format. "
+        "Respects DEVLOG_DATA_DIR."
+    ),
+)
+@click.option(
+    "--format",
+    "-f",
+    "fmt",
+    type=click.Choice(["auto", "markdown", "json"], case_sensitive=False),
+    default="auto",
     show_default=True,
-    help="Output file path.",
+    help=(
+        "Output format. 'auto' infers from the --output extension "
+        "(.json, .md, .markdown) and falls back to Markdown."
+    ),
 )
 @click.option("--tag", "-t", "tags", multiple=True, help="Filter by tag (AND).")
 @click.option("--since", default=None, help="Only export entries on/after this date (UTC).")
 @click.option("--until", default=None, help="Only export entries on/before this date (UTC).")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress output.")
 def export(
-    output: str,
+    output: str | None,
+    fmt: str,
     tags: Tuple[str, ...],
     since: str | None,
     until: str | None,
     quiet: bool,
 ) -> None:
-    """Export entries to a Markdown file."""
+    """Export entries to a Markdown or JSON file."""
     try:
         all_entries = storage.load_entries()
     except StorageError as exc:
@@ -2101,6 +2174,22 @@ def export(
         ui.print_warning("Warning: No entries to export.")
         sys.exit(0)
 
+    # Resolve format. When --output is given, its extension wins unless
+    # the user explicitly asked for a format. When --output is absent,
+    # pick based on --format (auto → markdown by default).
+    fmt_resolved = _resolve_export_format(output, fmt)
+
+    # Resolve output path. If the user did not pass -o, write into
+    # <data-dir>/exports/ instead of polluting the current working dir.
+    if output is None:
+        ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime(
+            "%Y%m%d-%H%M%S"
+        )
+        ext = "json" if fmt_resolved == "json" else "md"
+        export_dir = storage.get_data_dir() / "exports"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        output = str(export_dir / f"devlog-{ts}.{ext}")
+
     def _entry_md(entry: Entry) -> str:
         short_id = entry.id[: ui.ID_DISPLAY_LEN]
         date_str = ui._format_dt(entry.created_at)
@@ -2113,7 +2202,28 @@ def export(
         )
 
     try:
-        if quiet:
+        if fmt_resolved == "json":
+            import dataclasses as _dc
+
+            with open(output, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {"entries": [_dc.asdict(e) for e in filtered]},
+                    fh,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            if not quiet:
+                line = Text()
+                line.append("✔ ", style=ui._bold("success_title"))
+                line.append(
+                    f"Exported {len(filtered)} {ui.pluralize(len(filtered), 'entry')} to ",
+                    style=ui._s("success_border"),
+                )
+                line.append(output, style="bold")
+                err_console.print(line)
+            else:
+                print(output)
+        elif quiet:
             with open(output, "w", encoding="utf-8") as fh:
                 for entry in filtered:
                     fh.write(_entry_md(entry))
@@ -2125,11 +2235,10 @@ def export(
                     for entry in filtered:
                         fh.write(_entry_md(entry))
                         progress.advance(task)
-            entry_word = "entry" if len(filtered) == 1 else "entries"
             line = Text()  # local alias to keep imports tidy
             line.append("✔ ", style=ui._bold("success_title"))
             line.append(
-                f"Exported {len(filtered)} {entry_word} to ",
+                f"Exported {len(filtered)} {ui.pluralize(len(filtered), 'entry')} to ",
                 style=ui._s("success_border"),
             )
             line.append(output, style="bold")
@@ -2137,3 +2246,21 @@ def export(
     except (PermissionError, OSError):
         ui.print_error(f"Cannot write to {output}. Check the path and permissions.")
         sys.exit(2)
+
+
+def _resolve_export_format(output: str | None, fmt: str) -> str:
+    """Pick the final export format.
+
+    ``auto`` infers from the output extension. Unknown extensions fall
+    back to Markdown (preserves pre-1.5 behavior for `devlog export -o
+    foo.txt`). Explicit ``--format`` wins over the extension so users
+    can ``-o out.txt -f json``.
+    """
+    if fmt != "auto":
+        return "json" if fmt.lower() == "json" else "markdown"
+    if output is None:
+        return "markdown"
+    lower = output.lower()
+    if lower.endswith(".json"):
+        return "json"
+    return "markdown"

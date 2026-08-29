@@ -175,3 +175,82 @@ def test_doctor_reports_file_size(runner, data_dir):
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 0
     assert "bytes" in result.output
+
+
+def test_doctor_lists_specific_issues_inline(runner, data_dir):
+    """When the store has validation issues, the doctor panel must
+    enumerate them inline (up to 5) rather than only printing a count
+    that the user has to look up via `devlog repair`.
+
+    Regression: previously, `doctor` printed only
+    "⚠ 3 validation issues — run devlog repair to fix." without any
+    detail, forcing a second round-trip.
+    """
+    payload = {
+        "entries": [
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "message": "good",
+                "tags": [],
+                "created_at": "2026-08-29T00:00:00Z",
+                "updated_at": None,
+            },
+            {
+                "id": "badcreatedat0000000000000000000",
+                "message": "bad-date",
+                "tags": [],
+                "created_at": "not-a-date",
+                "updated_at": None,
+            },
+            {
+                "id": "badtag000000000000000000000000",
+                "message": "bad-tag",
+                "tags": ["BAD TAG!"],
+                "created_at": "2026-08-29T00:00:00Z",
+                "updated_at": None,
+            },
+        ]
+    }
+    (data_dir / "entries.json").write_text(json.dumps(payload))
+
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 1
+    # The count summary is still present.
+    assert "validation issue" in result.output
+    # But the specific issues are now also listed inline. Doctor
+    # truncates entry ids to 8 chars; the first 8 of "badcreatedat..."
+    # is "badcreat".
+    assert "badcreat" in result.output
+    assert "badtag" in result.output
+    # And the kind tag is shown too.
+    assert "bad_timestamp" in result.output
+    assert "bad_tag" in result.output
+
+
+def test_doctor_truncates_long_issue_lists(runner, data_dir):
+    """When there are more than 5 issues, doctor shows the first 5 and
+    a '…and N more' summary line."""
+    # Create a store with 7 entries that all have invalid tags, plus
+    # one valid entry. Use unique ids so no spurious duplicate_id issues.
+    entries = [
+        {
+            "id": f"a{i:07x}-1111-1111-1111-111111111111",
+            "message": "bad",
+            "tags": ["BAD TAG!"],
+            "created_at": "2026-08-29T00:00:00Z",
+            "updated_at": None,
+        }
+        for i in range(7)
+    ]
+    entries.insert(0, {
+        "id": "00000000-0000-0000-0000-000000000000",
+        "message": "good",
+        "tags": [],
+        "created_at": "2026-08-29T00:00:00Z",
+        "updated_at": None,
+    })
+    (data_dir / "entries.json").write_text(json.dumps({"entries": entries}))
+
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 1
+    assert "…and 2 more" in result.output

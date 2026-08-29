@@ -123,7 +123,16 @@ def test_load_theme_warns_and_falls_back_on_bad_toml(tmp_path, monkeypatch):
     assert palette == themes.DEFAULT_THEME
 
 
-def test_load_theme_drops_unknown_role_keys(tmp_path, monkeypatch):
+def test_load_theme_drops_unknown_role_keys_silently(tmp_path, monkeypatch):
+    """Unknown role keys are dropped silently on load. The warning is
+    emitted only at the `theme set` site, so a stale theme.toml with
+    typos no longer spams stderr on every devlog invocation.
+
+    Regression: previously `load_theme` printed a warning per unknown
+    key on every load, which meant every `devlog list` / `devlog add` /
+    `devlog show` was followed by a wall of "Warning: theme role 'X' is
+    unknown" lines after a single typo in `theme set`.
+    """
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
     (tmp_path / "d").mkdir()
     (tmp_path / "d" / "theme.toml").write_text(
@@ -134,8 +143,10 @@ def test_load_theme_drops_unknown_role_keys(tmp_path, monkeypatch):
     buf = io.StringIO()
     palette = themes.load_theme(warn_stream=buf)
     out = buf.getvalue()
-    assert "nonsense" in out
-    assert "other_bad" in out
+    # No load-time warning anymore
+    assert "nonsense" not in out
+    assert "other_bad" not in out
+    assert "unknown" not in out.lower()
     # Override applied
     assert palette["date"] == "red"
     # Unknown keys absent
@@ -157,6 +168,47 @@ def test_load_theme_no_palette_section_returns_defaults(tmp_path, monkeypatch):
     (tmp_path / "d" / "theme.toml").write_text('[other]\nfoo = "bar"\n', encoding="utf-8")
     palette = themes.load_theme()
     assert palette == themes.DEFAULT_THEME
+
+
+def test_theme_set_warns_about_unknown_role_keys(tmp_path, monkeypatch):
+    """`devlog theme set` is the sole site that warns about unknown
+    role keys. Users see the warning once, at the moment of the typo.
+    """
+    from click.testing import CliRunner
+    from devlog.cli import main
+
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+
+    src = tmp_path / "src.toml"
+    src.write_text(
+        '[palette]\ndate = "red"\nnonsense = "blue"\nother_bad = "green"\n',
+        encoding="utf-8",
+    )
+    runner = CliRunner()
+    result = runner.invoke(main, ["theme", "set", str(src)])
+    assert result.exit_code == 0
+    # Two warnings, one per unknown key, in sorted order.
+    assert "nonsense" in result.output
+    assert "other_bad" in result.output
+    # And it's a "warning", not an error.
+    assert "unknown and will be ignored" in result.output
+
+
+def test_load_theme_is_silent_across_invocations(tmp_path, monkeypatch):
+    """Repeated calls to `load_theme` (one per devlog invocation) must
+    not accumulate output. Regression for the warning-spam bug.
+    """
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "red"\nnonsense = "blue"\n',
+        encoding="utf-8",
+    )
+    buf = io.StringIO()
+    for _ in range(5):
+        themes.load_theme(warn_stream=buf)
+    assert buf.getvalue() == ""
 
 
 # ---------------------------------------------------------------------------

@@ -276,7 +276,8 @@ devlog edit ID [OPTIONS]
 
 **Notes:**
 
-- If no flag is passed, the entry's current message is opened in `$VISUAL` / `$EDITOR` (falling back to `nano` or `vi` if neither is set). Save and exit to apply the edit; abort to discard.
+- If no flag is passed, the entry's current message is opened in `$VISUAL` / `$EDITOR` (falling back to `nano` or `vi` if neither is set). Save and exit to apply the edit; abort to discard. This requires a TTY; in a non-interactive shell (CI, scripts, output captured to a file), `edit` with no flags errors out instead of dumping terminal escapes. Set `DEVLOG_ALLOW_EDITOR_IN_PIPE=1` to opt in to the old behaviour.
+- An empty `--message` is rejected with the same `MESSAGE cannot be empty` error as `devlog add`. The editor path is allowed to produce an empty body, since the user may want to save a blank note on purpose.
 - No-op edits (the result equals the existing entry) print `No changes.` and exit 0 without touching the file.
 - Tag flags combine: `--tag` runs first, then `--add-tag` adds, then `--remove-tag` removes.
 - Validation rules for tag characters and length match `devlog add`.
@@ -518,6 +519,7 @@ devlog rename-tag OLD NEW [OPTIONS]
 - Every entry that contains `OLD` is rewritten in place. The entry's `created_at` is preserved and `updated_at` is set to the current UTC time.
 - If an entry already carries `NEW`, the result is deduplicated so no entry ends up with the same tag twice.
 - If no entries carry `OLD`, prints `No entries with tag "<old>".` and exits 0.
+- `NEW` is validated against the same character/length rules as `devlog add` and rejected with a clear error if it would be invalid. (Older versions used to silently no-op when the lowercased NEW happened to equal OLD — that path is fixed.)
 
 **Examples:**
 
@@ -545,7 +547,10 @@ devlog import PATH [OPTIONS]
 
 **Notes:**
 
-- Each imported entry gets a freshly-minted `id`, so re-importing the same file is safe and idempotent: the second import is a no-op (entries are recognised by their existing id or by their `(created_at, message)` fingerprint).
+- Re-importing the same file is safe and idempotent: entries are recognised by their existing `id` (when present in the source) or by their `(created_at, message)` fingerprint, so the second import is a no-op.
+- Stable `id` values in the source JSON are preserved across re-imports, so a `devlog export` → `devlog import` round-trip keeps short ids stable for cross-referencing. If the source row omits `id`, devlog mints a fresh one.
+- Unreadable rows in a JSON import (non-dict items or entries missing required fields) are reported in the summary line as `Ignored N unreadable rows.`
+- Auto-detect sniffs the first non-blank character when the file extension is missing, so pipes and extensionless files work: leading `{` → JSON, leading `#` → Markdown.
 - If the file format cannot be detected and `--format` was not given, exits with code 2.
 - Malformed JSON or markdown that contains no `## …` headings exits with code 2.
 
@@ -592,7 +597,7 @@ devlog -- -i
 DEVLOG_INTERACTIVE=1 devlog
 ```
 
-**REPL commands:**
+**REPL commands** (run `help` at the prompt to see the up-to-date list — every command in the CLI is available, plus a few aliases):
 
 | Command | What it does |
 |---------|--------------|
@@ -606,9 +611,11 @@ DEVLOG_INTERACTIVE=1 devlog
 | `tail [N]` | Show the N most recent entries. |
 | `tags` | List tags with usage counts. |
 | `stats` | Summarize the journal. |
+| `theme` | View or change the active color theme (sub: `list`, `show`, `set`, `path`). |
 | `rename-tag <old> <new>` | Rename a tag. |
 | `import <path>` | Import entries. |
-| `export [-o path]` | Export to Markdown. |
+| `completions <shell>` | Print a shell completion script. |
+| `export [-o path]` | Export to Markdown or JSON. |
 | `repair [-y] [--dry-run]` | Inspect and repair the on-disk store. |
 | `backup [-o path]` | Write a timestamped backup. |
 | `restore <path>` | Restore from a backup file. |
@@ -618,7 +625,7 @@ DEVLOG_INTERACTIVE=1 devlog
 
 **Notes:**
 
-- Requires a TTY. Outside a TTY the command exits with code 1 and a clear error message.
+- Requires a TTY. Outside a TTY the command exits with code 1 and a clear error message. Set `DEVLOG_INTERACTIVE_FORCE=1` to bypass the TTY check (useful in tests, scripts, or remote shells).
 - Any other subcommand argument is dispatched to the underlying CLI in-process.
 
 **Examples:**
@@ -632,7 +639,7 @@ DEVLOG_INTERACTIVE=1 devlog
 
 ### `devlog export`
 
-Export all entries (or a filtered subset) to a Markdown file.
+Export all entries (or a filtered subset) to a Markdown or JSON file.
 
 ```
 devlog export [OPTIONS]
@@ -640,7 +647,8 @@ devlog export [OPTIONS]
 
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
-| `--output` | `-o` | path | `./devlog-export.md` | Destination file path. Existing files are overwritten without prompting. |
+| `--output` | `-o` | path | `<data-dir>/exports/devlog-YYYYMMDD-HHMMSS.<ext>` | Destination file path. Existing files are overwritten without prompting. When omitted, files land in `$DEVLOG_DATA_DIR/exports/` (or `~/.devlog/exports/`) rather than the current working directory, so `cd`-ing around doesn't pollute the cwd. |
+| `--format` | `-f` | `auto` \| `markdown` \| `json` | `auto` | Output format. `auto` infers from the `--output` extension (`.json` → JSON, `.md`/`.markdown` → Markdown, anything else → Markdown). Explicit `--format` wins over the extension. |
 | `--tag` | `-t` | string | None | Export only entries that carry all specified tags. Repeatable; AND logic. |
 | `--since` | — | string | None | Only export entries on or after this date. See [Date filters](#date-filters). |
 | `--until` | — | string | None | Only export entries on or before this date. See [Date filters](#date-filters). |
@@ -661,7 +669,7 @@ Rewrote auth middleware to use JWT refresh tokens.
 **Notes:**
 
 - A Rich progress bar is shown on STDERR during the write (suppress with `--quiet`).
-- If no entries exist (or no entries match the tag filters), prints `Warning: No entries to export.` and exits with code 0.
+- If no entries exist (or no entries match the tag filters), prints `Warning: No entries to export.` and exits with code 0. **No file is created in that case**, so you can safely re-run after emptying the journal.
 - If the output path is not writable, exits with code 2 and a clear error message.
 
 **Examples:**
@@ -893,6 +901,14 @@ You can make the variable permanent by adding it to your shell configuration:
 # ~/.zshrc or ~/.bashrc
 export DEVLOG_DATA_DIR="$HOME/Dropbox/devlog"
 ```
+
+### `DEVLOG_INTERACTIVE_FORCE`
+
+Set to `1` to bypass the TTY check that normally gates `devlog --interactive`. Useful in tests, scripts, or remote shells. The check still applies to `devlog edit <id>` with no flags unless `DEVLOG_ALLOW_EDITOR_IN_PIPE=1` is also set.
+
+### `DEVLOG_ALLOW_EDITOR_IN_PIPE`
+
+Set to `1` to allow `devlog edit <id>` with no flags to spawn `$EDITOR` even when stdin is not a TTY. The default is to error out, since editors like `nano`/`vi` print screen-clear sequences that pollute captured output. Set this when scripting edits via the editor.
 
 ### Themes
 

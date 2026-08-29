@@ -97,6 +97,7 @@ def test_edit_no_changes_reports_noop(runner):
 
 def test_edit_with_editor_existing_text(runner, data_dir, tmp_path, monkeypatch):
     """When no flags are passed, the editor is opened on the current message."""
+    monkeypatch.setenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", "1")  # drive editor in a pipe
     editor_script = tmp_path / "fake_editor.sh"
     editor_script.write_text("#!/bin/sh\necho 'edited via script' > \"$1\"\n")
     editor_script.chmod(0o755)
@@ -111,6 +112,7 @@ def test_edit_with_editor_existing_text(runner, data_dir, tmp_path, monkeypatch)
 
 def test_edit_editor_non_zero_exit(runner, data_dir, tmp_path, monkeypatch):
     """An editor that exits non-zero must surface an error and NOT save."""
+    monkeypatch.setenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", "1")  # drive editor in a pipe
     editor_script = tmp_path / "bad_editor.sh"
     editor_script.write_text("#!/bin/sh\nexit 1\n")
     editor_script.chmod(0o755)
@@ -147,10 +149,100 @@ def test_edit_no_editor_configured(runner, data_dir, monkeypatch):
     import shutil
     monkeypatch.delenv("VISUAL", raising=False)
     monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", "1")  # bypass TTY guard
     monkeypatch.setattr(shutil, "which", lambda n: None)
 
     sid = _add(runner, "msg")
     result = runner.invoke(main, ["edit", sid])
     assert result.exit_code == 1
     assert "No editor configured" in result.output
+
+
+def test_edit_rejects_empty_message_flag(runner, data_dir):
+    """`edit -m ""` must be rejected (mirrors the `add` validation)."""
+    sid = _add(runner, "original")
+    result = runner.invoke(main, ["edit", sid, "-m", ""])
+    assert result.exit_code == 1
+    assert "MESSAGE cannot be empty" in result.output
+    # Original message preserved.
+    assert storage.load_entries()[0].message == "original"
+
+
+def test_edit_rejects_whitespace_only_message_flag(runner, data_dir):
+    """A whitespace-only -m is also rejected."""
+    sid = _add(runner, "original")
+    result = runner.invoke(main, ["edit", sid, "-m", "   "])
+    assert result.exit_code == 1
+    assert "MESSAGE cannot be empty" in result.output
+    assert storage.load_entries()[0].message == "original"
+
+
+def test_edit_editor_path_can_produce_empty_message(
+    runner, data_dir, tmp_path, monkeypatch
+):
+    """When the user uses the editor (no -m flag), an empty body is
+    allowed: a user might intentionally save a blank note via the
+    editor. This guards against over-restricting the editor flow when
+    adding the explicit -m validation.
+    """
+    monkeypatch.setenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", "1")  # drive editor in a pipe
+    editor_script = tmp_path / "blank_editor.sh"
+    editor_script.write_text('#!/bin/sh\n: > "$1"\n')  # truncate
+    editor_script.chmod(0o755)
+    monkeypatch.setenv("EDITOR", str(editor_script))
+
+    sid = _add(runner, "original")
+    result = runner.invoke(main, ["edit", sid])
+    assert result.exit_code == 0
+    assert storage.load_entries()[0].message == ""
+
+
+def test_edit_no_flags_in_non_tty_errors(runner, data_dir, monkeypatch):
+    """`devlog edit <id>` with no flags in a non-TTY must error out
+    cleanly instead of dumping terminal escapes from the editor.
+
+    Regression: previously, in a non-TTY shell (CI, scripts, output
+    captured to a file), `devlog edit` would silently spawn the
+    fallback editor (nano/vi) which prints screen-clear sequences and
+    fails, polluting the output.
+    """
+    # Ensure no opt-in env var is set.
+    monkeypatch.delenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", raising=False)
+    # Belt-and-braces: no $VISUAL / $EDITOR either, so the message is
+    # about TTY, not about a missing editor.
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+
+    sid = _add(runner, "msg")
+    result = runner.invoke(main, ["edit", sid])
+    assert result.exit_code == 1
+    assert "needs a TTY" in result.output
+
+
+def test_edit_no_flags_in_non_tty_with_force_env_works(
+    runner, data_dir, tmp_path, monkeypatch
+):
+    """Setting DEVLOG_ALLOW_EDITOR_IN_PIPE=1 lets scripts drive the
+    editor in a pipe (the previous behavior).
+    """
+    monkeypatch.setenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", "1")
+    editor_script = tmp_path / "fake_editor.sh"
+    editor_script.write_text('#!/bin/sh\necho "edited via pipe" > "$1"\n')
+    editor_script.chmod(0o755)
+    monkeypatch.setenv("EDITOR", str(editor_script))
+
+    sid = _add(runner, "original")
+    result = runner.invoke(main, ["edit", sid])
+    assert result.exit_code == 0
+    assert storage.load_entries()[0].message == "edited via pipe"
+
+
+def test_edit_with_flag_in_non_tty_works(runner, data_dir):
+    """Sanity: explicit -m / -t / etc. flags bypass the TTY guard, so
+    scripts can edit entries without an interactive editor.
+    """
+    sid = _add(runner, "original")
+    result = runner.invoke(main, ["edit", sid, "-m", "new text"])
+    assert result.exit_code == 0
+    assert storage.load_entries()[0].message == "new text"
 

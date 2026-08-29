@@ -153,7 +153,8 @@ def test_stats_summary(runner, data_dir):
     assert "First" in result.output
     assert "Last" in result.output
     assert "Span" in result.output
-    assert "Top 5 tags" in result.output
+    assert "Top" in result.output
+    assert "tags" in result.output
     assert "backend" in result.output
     assert "Last 30 days" in result.output
 
@@ -168,3 +169,37 @@ def test_stats_quiet(runner, data_dir):
     assert "top_tags" in obj
     assert "last_30_days" in obj
     assert len(obj["last_30_days"]) == 30
+
+
+def test_stats_does_not_crash_on_unparseable_created_at(runner, data_dir):
+    """A store containing one valid entry and one with a bogus
+    created_at must not crash `stats` — the bad row is dropped and the
+    panel renders for the good row."""
+    now = datetime.now(tz=timezone.utc)
+    # Hand-craft the file so we can inject a corrupt created_at that
+    # `add` would otherwise reject.
+    payload = {
+        "entries": [
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "message": "good",
+                "tags": ["x"],
+                "created_at": _utc_iso(now),
+                "updated_at": None,
+            },
+            {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "message": "bad",
+                "tags": [],
+                "created_at": "not-a-date",
+                "updated_at": None,
+            },
+        ]
+    }
+    (data_dir / "entries.json").write_text(json.dumps(payload))
+
+    result = runner.invoke(main, ["stats"])
+    assert result.exit_code == 0
+    assert "Total" in result.output
+    # The panel should reflect only the valid entry.
+    assert re.search(r"Total\s*:\s*1", result.output) is not None

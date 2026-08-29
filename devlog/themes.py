@@ -181,13 +181,11 @@ def load_theme(warn_stream=None) -> dict[str, str]:
         )
         return dict(DEFAULT_THEME)
 
-    unknown = sorted(k for k in raw if k not in ROLES)
-    for key in unknown:
-        print(
-            f"Warning: theme role '{key}' is unknown and will be ignored.",
-            file=warn_stream,
-        )
-
+    # Unknown role keys are silently dropped here. The warning is
+    # emitted at the *set* site (see `devlog.cli.theme_set`) so users
+    # only see it once, at the moment they typed a bad role. This used
+    # to spam stderr on every devlog invocation, which made the journal
+    # unusable after a single typo.
     merged = dict(DEFAULT_THEME)
     for role in ROLES:
         if role in raw:
