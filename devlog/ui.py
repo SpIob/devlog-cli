@@ -54,7 +54,7 @@ def _bold(role: str) -> str:
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 MSG_TRUNCATE_LEN = 60
 ID_DISPLAY_LEN = 8
@@ -240,15 +240,22 @@ def print_info(message: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _format_dt(iso: str) -> str:
+def _format_dt(iso: str, *, tz=None, tz_label: str = "UTC") -> str:
     """Convert a stored ISO 8601 UTC string to display form.
 
     Args:
         iso: datetime string in ``YYYY-MM-DDTHH:MM:SSZ`` format.
+        tz: optional :class:`zoneinfo.ZoneInfo`. When supplied, the
+            value is converted to the local zone before rendering. The
+            conversion does not change the on-disk timestamp; it only
+            affects how the timestamp is *shown*.
+        tz_label: suffix appended after the time (default ``"UTC"``).
+            When a *tz* is supplied, callers usually pass the zone's
+            key (e.g. ``"EST"``) for clarity.
 
     Returns:
-        Formatted as ``YYYY-MM-DD HH:MM UTC``. If the input is not a
-        parseable ISO 8601 timestamp, the raw string is returned
+        Formatted as ``YYYY-MM-DD HH:MM <tz_label>``. If the input is
+        not a parseable ISO 8601 timestamp, the raw string is returned
         unchanged so callers (notably :func:`stats_panel`) never raise
         on a corrupt store.
     """
@@ -258,7 +265,9 @@ def _format_dt(iso: str) -> str:
         dt = _dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
     except (ValueError, TypeError, AttributeError):
         return iso
-    return dt.strftime("%Y-%m-%d %H:%M UTC")
+    if tz is not None:
+        dt = dt.astimezone(tz)
+    return dt.strftime(f"%Y-%m-%d %H:%M {tz_label}")
 
 
 def _styled_row(label: str, value) -> Text:
@@ -766,7 +775,7 @@ def tags_table(
         "Last used",
         style=_s("date"),
         no_wrap=True,
-        footer=f"Across {total_entries} entr{'y' if total_entries == 1 else 'ies'}.",
+        footer=f"Across {total_entries} {_plural_noun(total_entries, 'entry')}.",
         footer_style="bold",
     )
 
@@ -808,6 +817,140 @@ def sparkline(values: list[int]) -> str:
     return "".join(out)
 
 
+# ---------------------------------------------------------------------------
+# Calendar heatmap (`devlog calendar`)
+# ---------------------------------------------------------------------------
+
+
+# Characters used by the heatmap. `█` for the busiest days, `▫` for
+# the next tier, `▪` for the second-lightest, `·` for the lightest
+# non-zero day, and a space for empty days. Two characters per day
+# keeps the grid from collapsing visually on narrow terminals.
+_HEATMAP_CHARS = [" ", "·", "▪", "▫", "█"]
+
+
+def calendar_grid(per_day: dict, *, year: int) -> Text:
+    """Build a year-grid heatmap (53 weeks × 7 days) of entry counts.
+
+    Each cell is one character wide and styled with the corresponding
+    ``heatmap_*`` theme role. Days outside the requested *year* are
+    rendered as a space; days in the year with no entries are also a
+    space but use the ``heatmap_empty`` style for clarity.
+
+    The grid is laid out Sunday-first (the international convention)
+    and each column is one ISO week. The first column may be padded
+    with leading spaces so the 1st of January falls on the correct
+    weekday row.
+
+    Args:
+        per_day: ``{YYYY-MM-DD: count}`` map. Dates outside *year* are
+            ignored.
+        year: the 4-digit year to render.
+
+    Returns:
+        A :class:`rich.text.Text` of the grid (one row per weekday,
+        with a trailing newline per row, ready to print).
+    """
+    import calendar as _cal
+    import datetime as _dt
+
+    # Find the weekday of Jan 1 (0=Mon, 6=Sun). We render Sunday-first
+    # so the first column is the week containing the first Sunday
+    # on/before Jan 1.
+    jan1 = _dt.date(year, 1, 1)
+    dec31 = _dt.date(year, 12, 31)
+    # `calendar.SUNDAY = 6` already; .firstweekday is what we want.
+    firstweekday = _cal.SUNDAY  # always Sunday for this view
+    first_col_pad = (jan1.weekday() - firstweekday) % 7  # 0 if Jan 1 is Sunday
+    total_days = (dec31 - jan1).days + 1
+    total_cells = first_col_pad + total_days
+    num_weeks = (total_cells + 6) // 7  # ceil to whole weeks
+
+    # Pre-compute the max for the relative scale.
+    max_count = max(per_day.values()) if per_day else 0
+
+    def _char_for(count: int) -> tuple[str, str]:
+        """Map a count to (character, theme role)."""
+        if count <= 0 or max_count <= 0:
+            return " ", "heatmap_empty"
+        # Distribute into 4 non-zero tiers based on fraction of max.
+        ratio = count / max_count
+        if ratio > 0.75:
+            return "█", "heatmap_l4"
+        if ratio > 0.5:
+            return "▫", "heatmap_l3"
+        if ratio > 0.25:
+            return "▪", "heatmap_l2"
+        return "·", "heatmap_l1"
+
+    grid = Text()
+    # Build a 7×N array of (char, role) tuples.
+    for weekday in range(7):
+        for week in range(num_weeks):
+            cell_index = week * 7 + weekday
+            day_offset = cell_index - first_col_pad
+            if day_offset < 0 or day_offset >= total_days:
+                # Outside the year → leading/trailing space.
+                grid.append(" ", style=_s("heatmap_empty"))
+            else:
+                d = jan1 + _dt.timedelta(days=day_offset)
+                key = d.strftime("%Y-%m-%d")
+                count = per_day.get(key, 0)
+                ch, role = _char_for(count)
+                grid.append(ch, style=_s(role))
+        grid.append("\n")
+    return grid
+
+
+def calendar_panel(per_day: dict, *, year: int, tz=None) -> Panel:
+    """Wrap :func:`calendar_grid` in a cyan-bordered panel with a legend.
+
+    Args:
+        per_day: ``{YYYY-MM-DD: count}`` map. The bucketing date is
+            the local date when *tz* is set, otherwise UTC.
+        year: the year to render.
+        tz: optional :class:`zoneinfo.ZoneInfo`.
+
+    Returns:
+        A configured :class:`rich.panel.Panel`.
+    """
+    grid = calendar_grid(per_day, year=year)
+    total = sum(per_day.values())
+    active_days = sum(1 for v in per_day.values() if v > 0)
+
+    body_rows: list = [grid]
+    body_rows.append(Text())
+    legend = Text()
+    legend.append("less ", style="dim")
+    legend.append("·", style=_s("heatmap_l1"))
+    legend.append(" ", style="dim")
+    legend.append("▪", style=_s("heatmap_l2"))
+    legend.append(" ", style="dim")
+    legend.append("▫", style=_s("heatmap_l3"))
+    legend.append(" ", style="dim")
+    legend.append("█", style=_s("heatmap_l4"))
+    legend.append(" more", style="dim")
+    body_rows.append(legend)
+    body_rows.append(
+        Text(
+            f"{active_days} active day{plural_s(active_days)} · "
+            f"{total} {_plural_noun(total, 'entry')} in {year}",
+            style="dim",
+        )
+    )
+
+    title = Text()
+    title.append("Calendar ", style="bold")
+    title.append(f"· {year}", style="dim")
+
+    return Panel(
+        Padding(Group(*body_rows), (0, 1)),
+        border_style=_s("show_border"),
+        title=title,
+        title_align="left",
+    )
+
+
 def stats_panel(
     *,
     total: int,
@@ -815,6 +958,8 @@ def stats_panel(
     last_iso: str,
     top_tags: list[tuple[str, int]],
     last_30_days: list[tuple[str, int]],
+    tz=None,
+    tz_label: str = "UTC",
 ) -> Panel:
     """Render a `devlog stats` summary as a single panel.
 
@@ -829,19 +974,32 @@ def stats_panel(
         last_iso: ISO 8601 timestamp of the newest entry.
         top_tags: ``[(tag, count), ...]`` ordered most-used first.
         last_30_days: ``[(iso_date, count), ...]`` oldest first.
+        tz: optional :class:`zoneinfo.ZoneInfo` used to render
+            ``first_iso`` and ``last_iso`` in the user's local zone.
+            The on-disk representation is unaffected.
+        tz_label: label appended after the displayed timestamp
+            (default ``"UTC"``). Pass the zone's key (e.g. ``"EST"``)
+            when *tz* is set.
 
     Returns:
         A configured :class:`rich.panel.Panel`.
     """
-    first_str = _format_dt(first_iso)
-    last_str = _format_dt(last_iso)
+    first_str = _format_dt(first_iso, tz=tz, tz_label=tz_label)
+    last_str = _format_dt(last_iso, tz=tz, tz_label=tz_label)
     sparkline_values = [c for _, c in last_30_days]
     sparkline_max = max(sparkline_values) if sparkline_values else 0
 
-    # Active-day span (avoid div-by-zero on single-entry journals)
+    # Active-day span (avoid div-by-zero on single-entry journals).
+    # We compute the span in the same zone the user is looking at, so
+    # an entry at 23:00 UTC on Jan 1 and another at 01:00 UTC on Jan 3
+    # span 3 local days in America/New_York (Dec 31, Jan 1, Jan 2) but
+    # 2 UTC days.
     try:
         first_dt = _dt.datetime.fromisoformat(first_iso.replace("Z", "+00:00"))
         last_dt = _dt.datetime.fromisoformat(last_iso.replace("Z", "+00:00"))
+        if tz is not None:
+            first_dt = first_dt.astimezone(tz)
+            last_dt = last_dt.astimezone(tz)
         span_days = max(1, (last_dt.date() - first_dt.date()).days + 1)
     except ValueError:
         span_days = 1
@@ -851,7 +1009,7 @@ def stats_panel(
         _styled_row("Total", str(total)),
         _styled_row("First", Text(first_str, style=_s("date"))),
         _styled_row("Last", Text(last_str, style=_s("date"))),
-        _styled_row("Span", f"{span_days} day{'s' if span_days != 1 else ''}"),
+        _styled_row("Span", f"{span_days} day{plural_s(span_days)}"),
         _styled_row("Avg/day", f"{avg_per_day:.2f}"),
     ]
 
@@ -963,10 +1121,15 @@ def root_banner() -> None:
     table.add_row("list", "List entries, newest first")
     table.add_row("search", "Search entry messages")
     table.add_row("today", "Show today's entries")
+    table.add_row("yesterday", "Show yesterday's entries")
+    table.add_row("week", "Show the last 7 days")
     table.add_row("tail", "Show the N most recent entries")
     table.add_row("tags", "List tags with usage counts")
+    table.add_row("tag", "Show or delete entries with a tag")
+    table.add_row("merge-tag", "Merge two tags across all entries")
     table.add_row("theme", "View or change the active color theme")
     table.add_row("stats", "Summarize the journal")
+    table.add_row("calendar", "Show a year-grid heatmap of activity")
     table.add_row("rename-tag", "Rename a tag across all entries")
     table.add_row("import", "Import entries from a JSON or Markdown file")
     table.add_row("completions", "Print a shell completion script")
@@ -1012,7 +1175,7 @@ def repair_summary(
     else:
         rows.append(
             Text(
-                f"Found {len(issues)} issue{'s' if len(issues) != 1 else ''}:",
+                f"Found {len(issues)} issue{plural_s(len(issues))}:",
                 style="bold",
             )
         )
@@ -1029,10 +1192,9 @@ def repair_summary(
     if dry_run:
         rows.append(Text("DRY RUN — no changes were written.", style=_bold("warning_text")))
     else:
-        verb = "Removed" if dropped else "Removed"
         rows.append(
             Text(
-                f"{verb} {dropped} entr{'y' if dropped == 1 else 'ies'}, kept {kept}.",
+                f"Removed {dropped} {_plural_noun(dropped, 'entry')}, kept {kept}.",
                 style=_s("success_border"),
             )
         )
@@ -1063,7 +1225,7 @@ def backup_result(path: str, count: int) -> Text:
     line = Text()
     line.append("✔ ", style=_bold("success_title"))
     line.append(
-        f"Backed up {count} entr{'y' if count == 1 else 'ies'} to ",
+        f"Backed up {count} {_plural_noun(count, 'entry')} to ",
         style=_s("success_border"),
     )
     line.append(path, style="bold")
@@ -1099,7 +1261,7 @@ def doctor_report(report: dict) -> Panel:
     rows.append(
         _styled_row(
             "Size",
-            f"{report['size_bytes']} byte{'s' if report['size_bytes'] != 1 else ''}",
+            f"{report['size_bytes']} byte{plural_s(report['size_bytes'])}",
         )
     )
     rows.append(
@@ -1119,7 +1281,7 @@ def doctor_report(report: dict) -> Panel:
         rows.append(
             _styled_row(
                 "Last entry",
-                f"{days} day{'s' if days != 1 else ''} ago",
+                f"{days} day{plural_s(days)} ago",
             )
         )
 
@@ -1130,7 +1292,7 @@ def doctor_report(report: dict) -> Panel:
     else:
         rows.append(
             Text(
-                f"⚠ {len(issues)} validation issue{'s' if len(issues) != 1 else ''} — run `devlog repair` to fix.",
+                f"⚠ {len(issues)} validation issue{plural_s(len(issues))} — run `devlog repair` to fix.",
                 style=_s("warning_text"),
             )
         )
@@ -1167,7 +1329,10 @@ def doctor_report(report: dict) -> Panel:
                 Text()
                 .append("  • ", style="dim")
                 .append(short_id, style=_s("id_dim"))
-                .append(f" — {length} chars", style="dim")
+                .append(
+                    f" — {length} {('char' if length == 1 else 'chars')}",
+                    style="dim",
+                )
             )
 
     title = Text()

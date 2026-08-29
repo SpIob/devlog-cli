@@ -79,6 +79,16 @@ def test_rename_tag_dry_run_does_not_write(runner, data_dir):
     assert entries[0].updated_at is None
 
 
+def test_rename_tag_dry_run_with_quiet_is_silent(runner, data_dir):
+    """`rename-tag --dry-run --quiet` must produce no output."""
+    _seed("c2222222-1111-1111-1111-111111111111", "msg", tags=["x"])
+    result = runner.invoke(
+        main, ["rename-tag", "x", "y", "--dry-run", "--quiet"]
+    )
+    assert result.exit_code == 0
+    assert result.output.strip() == ""
+
+
 def test_rename_tag_no_match(runner, data_dir):
     _seed("d1111111-1111-1111-1111-111111111111", "msg", tags=["a"])
     result = runner.invoke(main, ["rename-tag", "nonexistent", "x"])
@@ -245,6 +255,29 @@ def test_import_dry_run(runner, data_dir, tmp_path):
     assert storage.load_entries() == []
 
 
+def test_import_dry_run_with_quiet_is_silent(runner, data_dir, tmp_path):
+    """`import --dry-run --quiet` must produce no output."""
+    src = tmp_path / "src.json"
+    src.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "id": "json-y",
+                        "message": "y",
+                        "tags": [],
+                        "created_at": "2025-01-01T00:00:00Z",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    result = runner.invoke(main, ["import", str(src), "--dry-run", "--quiet"])
+    assert result.exit_code == 0
+    assert result.output.strip() == ""
+
+
 def test_import_malformed_json(runner, tmp_path):
     src = tmp_path / "bad.json"
     src.write_text("not json at all", encoding="utf-8")
@@ -391,6 +424,14 @@ def test_completions_bash(runner):
     assert "theme" in result.output
     # And 'theme' sub-commands are offered after `devlog theme `.
     assert 'COMPREPLY=($(compgen -W "list show set path"' in result.output
+    # The newer commands (`tag`, `merge-tag`, `week`, `yesterday`,
+    # `calendar`) must also be in the bash command list — otherwise
+    # tab-completion for them silently disappears after a release
+    # adds new top-level subcommands.
+    for cmd in ("tag ", "merge-tag", "week", "yesterday", "calendar"):
+        assert cmd in result.output, (
+            f"bash completion is missing command: {cmd!r}"
+        )
 
 
 def test_completions_zsh(runner):
@@ -400,12 +441,22 @@ def test_completions_zsh(runner):
     assert "'add" in result.output
     # Regression: 'theme' was missing from the zsh command list.
     assert "'theme:" in result.output
+    # Same drift-check as the bash test: every new top-level command
+    # must appear in the zsh list, or users get silent surprise.
+    for cmd in ("'tag:", "'merge-tag:", "'week:", "'yesterday:", "'calendar:"):
+        assert cmd in result.output, (
+            f"zsh completion is missing command: {cmd!r}"
+        )
 
 
 def test_completions_fish(runner):
     result = runner.invoke(main, ["completions", "fish"])
     assert result.exit_code == 0
     assert "complete -c devlog" in result.output
+    for cmd in ('-a "tag"', '-a "merge-tag"', '-a "week"', '-a "yesterday"', '-a "calendar"'):
+        assert cmd in result.output, (
+            f"fish completion is missing command: {cmd!r}"
+        )
 
 
 def test_completions_invalid_shell(runner):
@@ -463,7 +514,8 @@ def test_interactive_help(monkeypatch, tmp_path):
     # Every command group + its sub-commands should be discoverable.
     for cmd in [
         "add", "show", "edit", "delete", "list", "search", "today",
-        "tail", "tags", "stats", "rename-tag", "import", "completions",
+        "yesterday", "week", "tail", "tags", "tag", "merge-tag", "stats",
+        "calendar", "rename-tag", "import", "completions",
         "export", "repair", "backup", "restore", "doctor", "theme",
     ]:
         assert cmd in result.output, f"REPL help missing command: {cmd}"

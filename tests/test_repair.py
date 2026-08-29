@@ -331,6 +331,14 @@ def test_repair_corrupt_json_errors(runner, tmp_path):
     assert result.exit_code == 2
     assert "Cannot repair" in result.output
     assert "restore" in result.output.lower()
+    # The error string must not contain two adjacent periods (a
+    # concatenation artifact from the storage error message ending in
+    # "to reset." and the cli tacking on ". Restore from …").
+    assert ".." not in result.output
+    # The wrapped storage error starts with "Error:" — once routed
+    # through the "Cannot repair:" prefix, only one colon boundary
+    # should remain visible to the user.
+    assert result.output.count("Error:") <= 1
 
 
 # ---------------------------------------------------------------------------

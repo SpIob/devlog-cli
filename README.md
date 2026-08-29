@@ -86,20 +86,39 @@ devlog show a1b2c3d4
 # Edit a typo in an entry's message
 devlog edit a1b2c3d4 -m "Corrected message text"
 
+# Backdate a forgotten entry
+devlog add "Wrote the README yesterday" --at "2h"
+
 # Delete an entry (prompts for confirmation; use -y to skip)
 devlog delete a1b2c3d4 -y
 
 # See which tags you use most
 devlog tags
 
-# See what you logged today
+# Show all entries with a particular tag
+devlog tag backend
+
+# Strip a tag from every entry that has it
+devlog tag backend --delete
+
+# Merge two tags (add NEW to entries that have OLD, then remove OLD)
+devlog merge-tag backend devops
+
+# See what you logged today / yesterday
 devlog today
+devlog yesterday
+
+# See the last 7 days
+devlog week
 
 # See the 10 most recent entries
 devlog tail 10
 
 # Get a quick journal summary with a 30-day sparkline
 devlog stats
+
+# See a year-grid heatmap of activity
+devlog calendar
 
 # Rename a tag across every entry
 devlog rename-tag backend devops
@@ -135,6 +154,7 @@ devlog add MESSAGE [OPTIONS]
 |-------------------|-------|------|----------|---------|-------------|
 | `MESSAGE` | — | string | Yes | — | The body of the journal entry. |
 | `--tag` | `-t` | string | No | — | Attach a tag to the entry. Repeatable: `-t backend -t bugfix`. Tags are normalized to lowercase. Allowed characters: `[a-z0-9-]`. |
+| `--at` | — | string | No | — | Backfill the entry with a custom `created_at`. Accepts absolute timestamps (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`, `…Z`) and relative ones (`2h`, `30m` ago). With `DEVLOG_TZ` set, naive inputs are interpreted in that zone. |
 | `--quiet` | `-q` | flag | No | False | Suppress confirmation output. Exits silently with code 0 on success. |
 
 **Notes:**
@@ -151,6 +171,8 @@ devlog add MESSAGE [OPTIONS]
 devlog add "Finished OAuth2 integration"
 devlog add "Refactored database connection pool" -t backend -t refactor
 devlog add "Deployed hotfix to production" -t devops -q
+devlog add "Wrote the README yesterday" --at "2h"
+devlog add "Logged a meeting from 9am" --at "2025-08-28T09:00:00Z"
 ```
 
 ---
@@ -213,6 +235,7 @@ devlog search QUERY [OPTIONS]
 **Notes:**
 
 - Matching substrings are highlighted in bold yellow in the Message column.
+- An empty or whitespace-only `QUERY` is rejected with `QUERY cannot be empty.` and exits with code 1.
 - If no results are found, prints `No entries matched "<query>".` and exits with code 0.
 - Tag filters and the search term both apply simultaneously (AND logic).
 
@@ -259,7 +282,7 @@ devlog show a1b2c3d4-e5f6-7890-abcd-ef1234567890 --quiet
 
 ### `devlog edit`
 
-Edit an entry's message and/or tags in place. Preserves the original `created_at` and sets `updated_at` on success.
+Edit an entry's message and/or tags in place. Preserves the original `created_at` (unless `--at` is supplied) and sets `updated_at` on success.
 
 ```
 devlog edit ID [OPTIONS]
@@ -272,6 +295,8 @@ devlog edit ID [OPTIONS]
 | `--tag` | `-t` | string, repeatable | No | — | Replace the tag set with this list. Existing tags are discarded. |
 | `--add-tag` | — | string, repeatable | No | — | Append tags to the existing set. Duplicates are silently dropped. |
 | `--remove-tag` | — | string, repeatable | No | — | Remove tags from the existing set. |
+| `--at` | — | string | No | — | Replace the entry's `created_at`. Same format as `add --at`. Prompts for confirmation unless `--yes` is also passed. |
+| `--yes` | `-y` | flag | No | False | Skip the `--at` confirmation prompt. |
 | `--quiet` | `-q` | flag | No | False | Suppress confirmation output. |
 
 **Notes:**
@@ -289,6 +314,7 @@ devlog edit a1b2c3d4 -m "Corrected typo in the original entry"
 devlog edit a1b2c3d4 --add-tag urgent
 devlog edit a1b2c3d4 --remove-tag docs --add-tag refactor
 devlog edit a1b2c3d4     # opens $EDITOR with the current message
+devlog edit a1b2c3d4 --at "2025-08-28T09:00:00Z" --yes   # re-time without prompt
 ```
 
 ---
@@ -398,7 +424,7 @@ devlog theme path
 
 ### `devlog today`
 
-Show entries created today (UTC), newest first.
+Show entries created today, newest first.
 
 ```
 devlog today [OPTIONS]
@@ -411,7 +437,7 @@ devlog today [OPTIONS]
 
 **Notes:**
 
-- "Today" is computed in UTC. If you log entries late in your local timezone, they may appear in a different day's bucket.
+- "Today" is computed in the local zone when `DEVLOG_TZ` is set, otherwise UTC. Set `DEVLOG_TZ=America/New_York` to make `today`, `yesterday`, and `week` reflect your wall clock.
 - Empty state: prints `No entries yet today.` and exits 0.
 
 **Examples:**
@@ -420,6 +446,52 @@ devlog today [OPTIONS]
 devlog today
 devlog today --limit 5
 devlog today --quiet
+```
+
+---
+
+### `devlog yesterday`
+
+Show entries created yesterday, newest first. Same local-tz semantics as `today`.
+
+```
+devlog yesterday [OPTIONS]
+```
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | `-n` | integer | 50 | Maximum entries to show. |
+| `--quiet` | `-q` | flag | False | Output raw JSON lines instead of a table. |
+
+**Examples:**
+
+```bash
+devlog yesterday
+devlog yesterday --quiet
+```
+
+---
+
+### `devlog week`
+
+Show entries from the last 7 days, newest first. The window ends on today (or the `--day` anchor) and spans the 6 days before it.
+
+```
+devlog week [OPTIONS]
+```
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | `-n` | integer | 100 | Maximum entries to show. |
+| `--day` | — | string (YYYY-MM-DD) | today | Anchor day; the week ends on this day and includes the 6 days before it. |
+| `--quiet` | `-q` | flag | False | Output raw JSON lines instead of a table. |
+
+**Examples:**
+
+```bash
+devlog week
+devlog week --day 2025-05-10
+devlog week --limit 20 --quiet
 ```
 
 ---
@@ -464,7 +536,8 @@ devlog stats [OPTIONS]
 
 **Notes:**
 
-- The sparkline is an ASCII bar (`▁`–`█`) representing entries per day for the last 30 UTC days.
+- The sparkline is an ASCII bar (`▁`–`█`) representing entries per day for the last 30 days. The window and date range are computed in the local zone when `DEVLOG_TZ` is set, otherwise UTC.
+- The `First` / `Last` / `Span` lines render in the local zone when `DEVLOG_TZ` is set (the `… UTC` suffix becomes the zone's key, e.g. `… EST`).
 - Empty state: prints `No entries to summarize.` and exits 0.
 
 **Example output:**
@@ -499,6 +572,68 @@ devlog stats --quiet | jq '.total, .top_tags'
 
 ---
 
+### `devlog tag`
+
+Show entries that carry a tag, or strip a tag from every entry that has it. (No entries are deleted by `--delete`.)
+
+```
+devlog tag NAME [OPTIONS]
+```
+
+| Argument / Option | Short | Type | Required | Default | Description |
+|-------------------|-------|------|----------|---------|-------------|
+| `NAME` | — | string | Yes | — | The tag to inspect. Normalised to lowercase. |
+| `--delete` | — | flag | False | Strip the tag from every entry that has it. |
+| `--dry-run` | — | flag | False | With `--delete`: show what would change without writing. |
+| `--limit` | `-n` | integer | 20 | Show mode: max entries to list. |
+| `--all` | — | flag | False | Show mode: override `--limit` and list every entry. |
+| `--quiet` | `-q` | flag | False | Output raw JSON lines (or suppress the success line under `--delete`). |
+
+**Notes:**
+
+- `NAME` is validated with the same rules as `devlog add` (lowercase, `[a-z0-9-]`, ≤ 32 chars).
+- Use `devlog merge-tag A B` if you want to *combine* two tags instead of just inspecting or removing one.
+
+**Examples:**
+
+```bash
+devlog tag backend
+devlog tag backend --limit 5
+devlog tag backend --delete -y
+devlog tag backend --delete --dry-run
+```
+
+---
+
+### `devlog calendar`
+
+Show a year-grid heatmap of journal activity. Each cell is one day; the colour tier reflects the entry count for that day.
+
+```
+devlog calendar [OPTIONS]
+```
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--year` | — | integer | current year | Year to render. |
+| `--quiet` | `-q` | flag | False | Output a `{YYYY-MM-DD: count}` JSON map for the year. |
+
+**Notes:**
+
+- The grid uses the `heatmap_empty` / `heatmap_l1` … `heatmap_l4` theme roles. See [Themes](#themes) to restyle.
+- The bucketing date is the local date when `DEVLOG_TZ` is set, otherwise UTC. With `DEVLOG_TZ=America/New_York`, an entry at 02:00 UTC on Jan 1 lands in Dec 31's cell.
+- Empty state: prints `No entries in <year>.` and exits 0.
+
+**Examples:**
+
+```bash
+devlog calendar
+devlog calendar --year 2024
+devlog calendar --year 2024 --quiet | jq
+```
+
+---
+
 ### `devlog rename-tag`
 
 Rename a tag across every entry in the journal (bulk replace).
@@ -526,6 +661,36 @@ devlog rename-tag OLD NEW [OPTIONS]
 ```bash
 devlog rename-tag backend devops
 devlog rename-tag bugfix fix --dry-run
+```
+
+---
+
+### `devlog merge-tag`
+
+Merge `OLD` into `NEW` across every entry: every entry that has `OLD` gets `NEW` added (deduplicated) and `OLD` removed. Entries that already carry `NEW` are not double-tagged.
+
+```
+devlog merge-tag OLD NEW [OPTIONS]
+```
+
+| Argument / Option | Short | Type | Required | Default | Description |
+|-------------------|-------|------|----------|---------|-------------|
+| `OLD` | — | string | Yes | — | The tag to retire. |
+| `NEW` | — | string | Yes | — | The tag to consolidate into. Validated with the same rules as `devlog add`. |
+| `--dry-run` | — | flag | False | Show the count of affected entries without writing. |
+| `--quiet` | `-q` | flag | False | Suppress the success line. |
+
+**Notes:**
+
+- If `OLD.lower() == NEW.lower()` after normalisation, the command prints `OLD and NEW are the same ("…"). No changes made.` and exits 0.
+- If no entries carry `OLD`, prints `No entries with tag "OLD".` and exits 0.
+- For a pure rename use `devlog rename-tag`. For stripping a tag entirely, use `devlog tag <name> --delete`.
+
+**Examples:**
+
+```bash
+devlog merge-tag backend devops
+devlog merge-tag bugfix fix --dry-run
 ```
 
 ---
@@ -902,6 +1067,31 @@ You can make the variable permanent by adding it to your shell configuration:
 export DEVLOG_DATA_DIR="$HOME/Dropbox/devlog"
 ```
 
+### `DEVLOG_TZ`
+
+Set an IANA time-zone name (e.g. `America/New_York`, `Europe/Berlin`) to make time-bucketed commands reflect your wall clock instead of UTC. When set:
+
+- `today`, `yesterday`, `week`, `stats`, and `calendar` bucket entries by **local** date.
+- `--since` / `--until` and `Nd` / `Nw` are interpreted at **local midnight** and converted to UTC for the comparison.
+- `stats` renders the `First` / `Last` / `Span` lines with the zone's key suffix (e.g. `… EST`) instead of `… UTC`.
+- `add --at "2025-08-28 09:00"` and `edit --at "2025-08-28 09:00"` (no offset) are interpreted in this zone.
+
+On-disk timestamps are always UTC, regardless of this setting.
+
+```bash
+export DEVLOG_TZ="America/New_York"
+devlog today          # → entries from today in New York
+devlog stats          # → date range rendered in EST
+devlog list --since 7d   # → last 7 local days
+```
+
+A bad zone name surfaces a red error and exit 1, never a silent fallback to UTC:
+
+```bash
+$ DEVLOG_TZ="Not/A_Real_Zone" devlog today
+Error: Invalid DEVLOG_TZ "Not/A_Real_Zone": …
+```
+
 ### `DEVLOG_INTERACTIVE_FORCE`
 
 Set to `1` to bypass the TTY check that normally gates `devlog --interactive`. Useful in tests, scripts, or remote shells. The check still applies to `devlog edit <id>` with no flags unless `DEVLOG_ALLOW_EDITOR_IN_PIPE=1` is also set.
@@ -967,6 +1157,11 @@ The full list of roles:
 | `banner_version` | version number on `--version` | `bold cyan` |
 | `banner_command` | command names in root help banner | `bold cyan` |
 | `zebra_alt` | alternate-row dim style in `list` | `dim` |
+| `heatmap_empty` | empty cells in the `calendar` heatmap | `grey15` |
+| `heatmap_l1` | lightest non-zero tier in the heatmap | `green` |
+| `heatmap_l2` | second heatmap tier | `color(34)` |
+| `heatmap_l3` | third heatmap tier | `color(40)` |
+| `heatmap_l4` | busiest day in the heatmap | `color(46)` |
 
 Notes:
 

@@ -98,3 +98,39 @@ def test_search_quiet(runner):
     assert result.exit_code == 0
     obj = json.loads(result.output.strip().splitlines()[0])
     assert "Cache" in obj["message"]
+
+
+# ---------------------------------------------------------------------------
+# Empty / whitespace-only query
+# ---------------------------------------------------------------------------
+
+
+def test_search_empty_query_errors(runner):
+    """An empty QUERY is a user error, not "match every entry".
+
+    `click.argument` does not reject an empty string at the parser
+    level, so without an explicit guard `devlog search ""` returns
+    every entry with the awkward subtitle ``Query: ""``. Treat it as
+    a usage error instead so users get actionable feedback.
+    """
+    _add(runner, "alpha")
+    _add(runner, "beta")
+    result = runner.invoke(main, ["search", ""])
+    assert result.exit_code == 1
+    assert "QUERY" in result.output
+    # The full entry list must not leak through.
+    assert "alpha" not in result.output
+    assert "beta" not in result.output
+
+
+def test_search_whitespace_only_query_errors(runner):
+    """A whitespace-only QUERY is also a usage error.
+
+    Otherwise the user would see the equally-awkward
+    ``No entries matched "   "`` when they intended to type a real
+    query.
+    """
+    _add(runner, "alpha")
+    result = runner.invoke(main, ["search", "   "])
+    assert result.exit_code == 1
+    assert "QUERY" in result.output

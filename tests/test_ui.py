@@ -285,6 +285,97 @@ def test_format_dt_human_readable():
     assert out == "2025-05-11 10:22 UTC"
 
 
+def test_pluralize_basic():
+    assert ui.pluralize(0, "entry") == "0 entries"
+    assert ui.pluralize(1, "entry") == "1 entry"
+    assert ui.pluralize(2, "entry") == "2 entries"
+
+
+def test_pluralize_explicit_plural():
+    # Custom plural overrides the default +s / ies rule.
+    assert ui.pluralize(1, "child", "children") == "1 child"
+    assert ui.pluralize(2, "child", "children") == "2 children"
+
+
+def test_pluralize_special_case_for_entry():
+    # "entry" is the one English noun with an -ies plural in our domain.
+    assert ui.pluralize(1, "entry") == "1 entry"
+    assert ui.pluralize(0, "entry") == "0 entries"
+
+
+def test_plural_noun():
+    """_plural_noun returns just the noun, not the count prefix."""
+    assert ui._plural_noun(0, "entry") == "entries"
+    assert ui._plural_noun(1, "entry") == "entry"
+    assert ui._plural_noun(2, "entry") == "entries"
+
+
+def test_plural_s():
+    """plural_s returns "s" for n != 1, "" for n == 1."""
+    assert ui.plural_s(0) == "s"
+    assert ui.plural_s(1) == ""
+    assert ui.plural_s(2) == "s"
+
+
+def test_no_off_by_one_plural_in_captured_outputs():
+    """Regression guard: every user-visible plural form must be correct.
+
+    Drive a few representative commands and assert that no rendered
+    string contains a malformed number+word pairing like
+    "1 entries", "2 entry", or "0 entry".
+    """
+    import json
+    import os
+    import shutil
+    import tempfile
+    from click.testing import CliRunner
+
+    from devlog import cli as cli_mod
+    from devlog import themes
+
+    themes.reset_cache()
+
+    tmp = tempfile.mkdtemp(prefix="devlog-plural-")
+    runner = CliRunner(env={"DEVLOG_DATA_DIR": tmp})
+    try:
+        # Seed three entries so we exercise both singular and plural
+        # for "entry" / "entries" in the same output.
+        runner.invoke(cli_mod.main, ["add", "first entry", "-t", "x"])
+        runner.invoke(cli_mod.main, ["add", "second entry", "-t", "x"])
+        runner.invoke(cli_mod.main, ["add", "third entry", "-t", "y"])
+
+        # Collect every output.
+        outputs: list[str] = []
+        for argv in (
+            ["list"],
+            ["list", "-t", "x"],
+            ["tags"],
+            ["stats"],
+        ):
+            result = runner.invoke(cli_mod.main, argv)
+            assert result.exit_code == 0
+            outputs.append(_strip_ansi(result.output))
+
+        # Common mistakes we want to catch. "1 entries", "2 entry",
+        # "0 entry" are the well-known English off-by-one errors.
+        forbidden_substrings = [
+            "1 entries",
+            "2 entry\n",  # end-of-line is the most common context
+            "2 entry.",
+            "2 entry ",
+            "0 entry\n",
+            "0 entry.",
+            "0 entry ",
+        ]
+        for i, out in enumerate(outputs):
+            for needle in forbidden_substrings:
+                assert needle not in out, (
+                    f"output[{i}] contains malformed plural: {needle!r}"
+                )
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_tags_text_handles_empty():
     e = _make_entry(tags=[])
     t = ui._tags_text(e)
@@ -348,10 +439,15 @@ def test_root_banner_lists_all_commands():
         "list",
         "search",
         "today",
+        "yesterday",
+        "week",
         "tail",
         "tags",
+        "tag",
+        "merge-tag",
         "theme",
         "stats",
+        "calendar",
         "rename-tag",
         "import",
         "completions",

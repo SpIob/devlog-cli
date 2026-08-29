@@ -28,11 +28,12 @@ Running `devlog` with no subcommand, or `devlog --help`, must print the standard
 |---------|--------|
 | `MESSAGE` | Positional, required, string. The body of the journal entry. |
 | `--tag` / `-t` | Option, multiple=True, string. Attach one or more tags. Repeatable: `-t backend -t bugfix`. |
+| `--at` | Option, string. Backfill the entry with a custom `created_at`. Accepts absolute timestamps (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`, `…Z`) and relative ones (`Nh`, `Nm` ago). With `DEVLOG_TZ` set, naive inputs are interpreted in that zone. |
 | `--quiet` / `-q` | Flag. Suppress confirmation output. Exit 0 silently on success. |
 
 **Behaviour:**
 
-- Generates a new entry with a UUID, the message text, a UTC ISO 8601 timestamp, and the provided tags.
+- Generates a new entry with a UUID, the message text, a UTC ISO 8601 timestamp (from `--at` if supplied, else "now"), and the provided tags.
 - Appends the entry to the JSON storage file.
 - Uses atomic write (temp file + `os.replace()`) to prevent corruption.
 - Tags are normalized to lowercase and stripped of leading/trailing whitespace before storage.
@@ -172,6 +173,8 @@ Empty results: Print `No entries matched "<query>".` Exit 0.
 | `--tag` | `-t` | string, multiple | None | Replace the tag set with this list. |
 | `--add-tag` | — | string, multiple | None | Append tags. |
 | `--remove-tag` | — | string, multiple | None | Remove tags. |
+| `--at` | — | string | None | Replace `created_at`. Same input forms as `add --at`. Prompts for confirmation unless `--yes` is also passed. |
+| `--yes` | `-y` | flag | False | Skip the `--at` confirmation prompt. |
 | `--quiet` | `-q` | flag | False | Suppress the success panel. |
 
 **Behaviour:**
@@ -179,8 +182,8 @@ Empty results: Print `No entries matched "<query>".` Exit 0.
 - If no flag is passed, opens the current message in `$VISUAL` / `$EDITOR` (fallback to `nano`, then `vi`). Read back on save; abort on non-zero exit.
 - Tag operations combine: `--tag` runs first (replaces), then `--add-tag` appends (deduplicated), then `--remove-tag` removes.
 - New tag values are validated using the same rules as `add`.
-- `id` and `created_at` are preserved; `updated_at` is set to the current UTC time on every successful edit.
-- If the new state equals the old state, the command prints `No changes.` and exits 0 without writing.
+- `id` is preserved; `created_at` is preserved unless `--at` is supplied (in which case it's set to the parsed value); `updated_at` is set to the current UTC time on every successful edit.
+- If the new state equals the old state, the command prints `No changes.` and exits 0 without writing. A `--at` change counts as a real change.
 
 **Failure cases:**
 
@@ -245,7 +248,7 @@ Empty results: Print `No entries matched "<query>".` Exit 0.
 
 ### Command 8a — `today`
 
-**Purpose:** Show entries created today (UTC), newest first.  
+**Purpose:** Show entries created today, newest first. The "today" bucket is the **local date in the `DEVLOG_TZ` zone when set, otherwise UTC** — see [Date filters](#date-filters) and the `DEVLOG_TZ` env-var section for the exact semantics.  
 **Usage:**  
 `devlog today [OPTIONS]`
 
@@ -254,7 +257,7 @@ Empty results: Print `No entries matched "<query>".` Exit 0.
 | `--limit` | `-n` | integer | 50 | Maximum entries to show. |
 | `--quiet` | `-q` | flag | False | Output raw JSON lines. |
 
-**Behaviour:** Filters entries whose `created_at` starts with today's UTC date (`YYYY-MM-DD`), sorts newest first, slices to `--limit`. Renders the same Rich table as `list` with a `Today · N entries` title and today's date as subtitle.
+**Behaviour:** Filters entries whose local date (per `DEVLOG_TZ`) is today, sorts newest first, slices to `--limit`. Renders the same Rich table as `list` with a `Today · N entries` title and today's date as subtitle.
 
 **Failure cases:**
 
@@ -262,6 +265,52 @@ Empty results: Print `No entries matched "<query>".` Exit 0.
 |-----------|--------|-----------|
 | `--limit` not positive | STDERR: `Error: --limit must be a positive integer.` | 1 |
 | No entries today | `No entries yet today.` | 0 |
+
+---
+
+### Command 8a-`yesterday` — `yesterday`
+
+**Purpose:** Show entries created yesterday, newest first. Same local-tz semantics as `today`.  
+**Usage:**  
+`devlog yesterday [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | `-n` | integer | 50 | Maximum entries to show. |
+| `--quiet` | `-q` | flag | False | Output raw JSON lines. |
+
+**Behaviour:** Filters entries whose local date (per `DEVLOG_TZ`) is today minus one day, sorts newest first, slices to `--limit`. Renders the same Rich table as `list` with a `Yesterday · N entries` title and yesterday's date as subtitle.
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| `--limit` not positive | STDERR: `Error: --limit must be a positive integer.` | 1 |
+| No entries yesterday | `No entries yet yesterday.` | 0 |
+
+---
+
+### Command 8a-`week` — `week`
+
+**Purpose:** Show entries from the last 7 days, newest first. The window ends on today (or the `--day` anchor) and spans the 6 days before it.  
+**Usage:**  
+`devlog week [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | `-n` | integer | 100 | Maximum entries to show. |
+| `--day` | — | string (YYYY-MM-DD) | today | Anchor day; the week ends on this day and includes the 6 days before it. |
+| `--quiet` | `-q` | flag | False | Output raw JSON lines. |
+
+**Behaviour:** Filters entries whose local date (per `DEVLOG_TZ`) falls in `[anchor - 6 days, anchor]`, sorts newest first, slices to `--limit`. Renders the same Rich table as `list` with a `Week · <from> → <to> · N entries` title.
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| `--limit` not positive | STDERR: `Error: --limit must be a positive integer.` | 1 |
+| Invalid `--day` | STDERR: `Error: --day "<value>" is not a valid date.` | 2 |
+| No entries in the window | `No entries in the last 7 days (<from> to <to>).` | 0 |
 
 ---
 
@@ -306,11 +355,36 @@ Empty results: Print `No entries matched "<query>".` Exit 0.
 - `Span` — number of days from first to last (inclusive, minimum 1).
 - `Avg/day` — `total / span_days`.
 - `Top 5 tags` — most-used tags by occurrence.
-- `Last 30 days` — ASCII sparkline (block characters `▁`–`█`) of entries per day for the last 30 UTC days, oldest left to newest right.
+- `Last 30 days` — ASCII sparkline (block characters `▁`–`█`) of entries per day for the last 30 days, oldest left to newest right. The window and per-day bucketing are computed in the local zone when `DEVLOG_TZ` is set, otherwise UTC.
+- `First` / `Last` are formatted in the local zone when `DEVLOG_TZ` is set (the `… UTC` suffix becomes the zone's key, e.g. `… EST`).
+- `Span` is computed against local-day boundaries when `DEVLOG_TZ` is set, otherwise UTC.
 
 JSON quiet output includes `total`, `first`, `last`, `top_tags` (array of `{tag, count}`), and `last_30_days` (array of `{date, count}`).
 
 **Failure cases:** No entries → `No entries to summarize.` Exit 0.
+
+---
+
+### Command 8c-`calendar` — `calendar`
+
+**Purpose:** Show a year-grid heatmap of journal activity. Each cell is one day; the colour tier reflects the entry count for that day.  
+**Usage:**  
+`devlog calendar [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--year` | — | integer | current year | Year to render. |
+| `--quiet` | `-q` | flag | False | Output a `{YYYY-MM-DD: count}` JSON map for the year. |
+
+**Behaviour:**
+
+- Renders 53 weeks × 7 days (Sunday-first) using Unicode block characters (`·` / `▪` / `▫` / `█`) plus a space for empty cells.
+- The bucketing date is the local date when `DEVLOG_TZ` is set, otherwise UTC.
+- Each non-zero cell is coloured by the `heatmap_l1`–`heatmap_l4` theme roles based on its fraction of the year's max. Empty cells use `heatmap_empty`.
+- A `less ▏ ▪ ▫ █ more` legend is appended, plus a footer line: `N active days · M entries in <year>`.
+- The grid is wrapped in a cyan-bordered `Calendar · <year>` panel.
+
+**Failure cases:** No entries in the year → `No entries in <year>.` Exit 0.
 
 ---
 
@@ -331,6 +405,70 @@ JSON quiet output includes `total`, `first`, `last`, `top_tags` (array of `{tag,
 - Loads all entries; for each entry containing `OLD`, replaces `OLD` with `NEW` and dedupes.
 - Sets `updated_at = now` on every affected entry.
 - Persists via the same atomic write as other commands.
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| Invalid `NEW` chars | `Error: Tag "..." contains invalid characters.` | 1 |
+| No entries with `OLD` | `No entries with tag "...".` | 0 |
+| `OLD == NEW` (after normalization) | `OLD and NEW are the same ("..."). No changes made.` | 0 |
+| Storage error | via `_handle_storage_error` | 2 |
+
+---
+
+### Command 8d-`tag` — `tag` (per-tag page + delete)
+
+**Purpose:** Show every entry with a tag, or strip a tag from every entry that has it (no entries are deleted by `--delete`).  
+**Usage:**  
+`devlog tag NAME [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `NAME` | — | string | Yes | The tag to inspect. Normalised to lowercase. |
+| `--delete` | — | flag | False | Strip the tag from every entry that has it. |
+| `--dry-run` | — | flag | False | With `--delete`: show what would change without writing. |
+| `--limit` | `-n` | integer | 20 | Show mode: max entries to list. |
+| `--all` | — | flag | False | Show mode: override `--limit` and list every entry. |
+| `--quiet` | `-q` | flag | False | Output raw JSON lines (or suppress the success line under `--delete`). |
+
+**Behaviour:**
+
+- Validates `NAME` with the same rules as `add` (lowercase, `[a-z0-9-]`, ≤ 32 chars).
+- Show mode: filter entries that carry `NAME`, sort newest first, slice, render with the standard table (`Tag: <name> · N entries` title).
+- Delete mode: count, dry-run print, atomic save, success line. Mirrors the structure of `rename-tag` / `merge-tag`.
+- `updated_at` is set on every affected entry under `--delete`.
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| Invalid `NAME` chars | `Error: Tag "..." contains invalid characters.` | 1 |
+| No entries with `NAME` (in show or delete mode) | `No entries with tag "...".` | 0 |
+| Storage error | via `_handle_storage_error` | 2 |
+
+---
+
+### Command 8d-`merge-tag` — `merge-tag`
+
+**Purpose:** Merge two tags across the journal. For each entry that carries `OLD`, `NEW` is added (deduplicated) and `OLD` is removed.  
+**Usage:**  
+`devlog merge-tag OLD NEW [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `OLD` | — | string | Yes | The tag to retire. |
+| `NEW` | — | string | Yes | The tag to consolidate into. Validated with the same rules as `add`. |
+| `--dry-run` | — | flag | False | Show the count of affected entries without writing. |
+| `--quiet` | `-q` | flag | False | Suppress the success line. |
+
+**Behaviour:**
+
+- Validates `NEW` using the same rules as `add` (lowercase, `[a-z0-9-]`, ≤ 32 chars).
+- For each entry containing `OLD`: add `NEW` to the tag set, dedupe, remove `OLD`. Skip entries that already carry `NEW` (the result is "still de-tagged with OLD, not double-tagged with NEW").
+- Sets `updated_at = utc_now()` on every affected entry.
+- Persists via the same atomic write as other commands.
+- Summary: `Merged "OLD" into "NEW" across N entries (M already had NEW; skipped).`
 
 **Failure cases:**
 
@@ -424,6 +562,11 @@ The active theme is a flat mapping of *role* names (each one a UI element) to Ri
 | `banner_version` | version number on `--version` | `bold cyan` |
 | `banner_command` | command names in root help banner | `bold cyan` |
 | `zebra_alt` | alternate-row dim style in `list` | `dim` |
+| `heatmap_empty` | empty cells in the `calendar` heatmap | `grey15` |
+| `heatmap_l1` | lightest non-zero tier in the heatmap | `green` |
+| `heatmap_l2` | second heatmap tier | `color(34)` |
+| `heatmap_l3` | third heatmap tier | `color(40)` |
+| `heatmap_l4` | busiest day in the heatmap | `color(46)` |
 
 **Style value format:** Any Rich style string is accepted — named colors (`"red"`, `"bright_cyan"`), hex (`"#ff8800"`), 256-color (`"color(208)"`), true-color triples (`"rgb((255,136,0))"`), or composites (`"bold yellow"`).
 
@@ -623,14 +766,14 @@ The `--since` and `--until` options on `list`, `search`, `export`, and `stats` a
 
 | Format | Meaning |
 |--------|---------|
-| `YYYY-MM-DD` | That date at 00:00 UTC. As an upper bound, includes the whole day (00:00–23:59:59). |
-| `YYYY-MM-DDTHH:MM[:SS]` | ISO 8601, treated as UTC if no offset. |
-| `YYYY-MM-DDTHH:MM:SSZ` | ISO 8601 with explicit UTC. |
+| `YYYY-MM-DD` | That date at 00:00 in the **local zone** when `DEVLOG_TZ` is set, otherwise UTC. As an upper bound, includes the whole day. |
+| `YYYY-MM-DDTHH:MM[:SS]` | ISO 8601, interpreted in the local zone when no offset is supplied and `DEVLOG_TZ` is set, otherwise UTC. |
+| `YYYY-MM-DDTHH:MM:SSZ` / with offset | ISO 8601 with explicit offset; the offset is honoured. |
 | `YYYY-MM-DD HH:MM[:SS]` | Space-separated form, same semantics as `T`. |
-| `today` | Today at 00:00 UTC. |
-| `yesterday` | Yesterday at 00:00 UTC. |
-| `Nd` | N days ago at 00:00 UTC (e.g. `7d`, `30d`). |
-| `Nw` | N weeks ago at 00:00 UTC (e.g. `1w`, `2w`). |
+| `today` | Today at 00:00 in the local zone when `DEVLOG_TZ` is set, otherwise UTC. |
+| `yesterday` | Yesterday at 00:00 in the local zone when `DEVLOG_TZ` is set, otherwise UTC. |
+| `Nd` | N days ago at 00:00 in the local zone when `DEVLOG_TZ` is set, otherwise UTC. |
+| `Nw` | N weeks ago at 00:00 in the local zone when `DEVLOG_TZ` is set, otherwise UTC. |
 
 Both bounds are inclusive. Either or both may be combined. Entries whose `created_at` is unparseable are silently dropped when any bound is set.
 
@@ -676,6 +819,17 @@ Top-level key is `"entries"`, value is an array of entry objects. New entries ar
 - Default path: `~/.devlog/entries.json`
 - Override via environment variable: `DEVLOG_DATA_DIR`. If set, the file lives at `$DEVLOG_DATA_DIR/entries.json`.
 - The directory is created automatically on first run if it does not exist.
+
+### Time-Zone Convention (`DEVLOG_TZ`)
+
+- Optional environment variable, IANA name (e.g. `America/New_York`, `Europe/Berlin`). Validated via `zoneinfo`; the `tzdata` package provides the IANA database on Windows and as a fallback elsewhere.
+- When set, the following shift to **local** semantics:
+    - `today`, `yesterday`, `week`, `stats`, and `calendar` bucket entries by local date.
+    - `--since` / `--until` and `Nd` / `Nw` are interpreted at local midnight, then converted to UTC for the comparison.
+    - `stats` renders `First` / `Last` with the zone's key suffix (e.g. `… EST`) instead of `… UTC`; `Span` is computed against local-day boundaries.
+    - `add --at "YYYY-MM-DD"` / `--at "YYYY-MM-DDTHH:MM"` (no explicit offset) is interpreted in this zone, then converted to UTC for storage.
+- On-disk timestamps are always UTC, regardless of this setting.
+- Bad zone name → red error panel, exit 1. No silent fallback to UTC.
 
 ### Tag Constraints
 
@@ -893,3 +1047,36 @@ Claude C must produce a `README.md` containing the following sections in this or
 6. Configuration — Document `DEVLOG_DATA_DIR` environment variable. Show example usage. Include the `Themes` subsection covering `theme.toml` location, format, the role list, and the `devlog theme list|show|set|path` subcommands.
 7. Development Setup — Clone, create venv, install in editable mode (`pip install -e .`), run tests (`pytest`)
 8. License — MIT
+
+---
+
+## I. What's New in 1.5
+
+This drop is **additive and non-breaking** — every v1.4 invocation behaves identically when the new env vars and options are not used. On-disk format and the public CLI surface remain backwards compatible.
+
+### Local timezone (`DEVLOG_TZ`)
+
+- New env var. IANA name (`America/New_York`, `Europe/Berlin`, …). Validated via `zoneinfo`; the `tzdata` package provides IANA data on Windows and as a fallback.
+- When set, `today` / `yesterday` / `week` / `stats` / `calendar` bucket by local date. `--since` / `--until` and `Nd` / `Nw` are interpreted at local midnight. `stats` renders `First` / `Last` with the zone's key suffix.
+- On-disk `created_at` remains UTC.
+- Bad zone name → red error and exit 1 (no silent fallback).
+
+### New commands
+
+- `devlog yesterday` — yesterday's entries, local-tz bucketed.
+- `devlog week [--day YYYY-MM-DD]` — last 7 days, anchored on the supplied day or today.
+- `devlog tag <name> [--delete]` — per-tag page (show every entry with the tag) or strip the tag from every entry. New `--delete --dry-run` previews the change.
+- `devlog merge-tag OLD NEW` — bulk merge of two tags. `OLD` is added to every entry that has `NEW` (deduplicated), then `OLD` is removed. Skip-count reported in the summary.
+- `devlog calendar [--year YYYY]` — year-grid heatmap (53 weeks × 7 days) of entry counts, using new `heatmap_*` theme roles.
+
+### `add` / `edit` `--at`
+
+- New `--at` option on `add` and `edit`. Accepts absolute (`YYYY-MM-DD`, `YYYY-MM-DDTHH:MM`, `…Z`) and relative (`Nh`, `Nm` ago) timestamps. With `DEVLOG_TZ` set, naive inputs are interpreted in that zone.
+- `edit --at` prompts for confirmation unless `--yes` is also passed. The `--at` change counts as a real edit (a no-op `No changes.` is not printed when only the timestamp changes).
+
+### Other
+
+- New `tzdata` runtime dependency.
+- New theme roles: `heatmap_empty`, `heatmap_l1`, `heatmap_l2`, `heatmap_l3`, `heatmap_l4`. Defaults are graded greens (`grey15` / `green` / `color(34)` / `color(40)` / `color(46)`).
+- `devlog` root banner now lists `yesterday`, `week`, `tag`, `merge-tag`, and `calendar`.
+- New tests: `test_timezone.py`, `test_week_yesterday.py`, `test_tag_command.py`, `test_merge_tag.py`, `test_calendar.py`, plus extensions to `test_add.py` and `test_edit.py`. Total test count: 360 (was 281 in v1.4).

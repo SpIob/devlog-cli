@@ -65,6 +65,11 @@ ROLES: frozenset[str] = frozenset(
         "banner_version",
         "banner_command",
         "zebra_alt",
+        "heatmap_empty",
+        "heatmap_l1",
+        "heatmap_l2",
+        "heatmap_l3",
+        "heatmap_l4",
     }
 )
 
@@ -90,6 +95,11 @@ DEFAULT_THEME: dict[str, str] = {
     "banner_version": "bold cyan",
     "banner_command": "bold cyan",
     "zebra_alt": "dim",
+    "heatmap_empty": "grey15",
+    "heatmap_l1": "green",
+    "heatmap_l2": "color(34)",
+    "heatmap_l3": "color(40)",
+    "heatmap_l4": "color(46)",
 }
 
 
@@ -311,6 +321,11 @@ _THEME_TEMPLATE = """# devlog theme
 # banner_version   = "bold cyan"
 # banner_command   = "bold cyan"
 # zebra_alt        = "dim"
+# heatmap_empty    = "grey15"
+# heatmap_l1       = "green"
+# heatmap_l2       = "color(34)"
+# heatmap_l3       = "color(40)"
+# heatmap_l4       = "color(46)"
 """
 
 

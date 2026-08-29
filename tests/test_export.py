@@ -221,3 +221,30 @@ def test_export_empty_default_does_not_create_file(runner, data_dir):
     assert result.exit_code == 0
     exports_dir = Path(str(data_dir)) / "exports"
     assert not exports_dir.exists()
+
+
+# ---------------------------------------------------------------------------
+# Success-line wording
+# ---------------------------------------------------------------------------
+
+
+def test_export_success_line_does_not_duplicate_count(runner, tmp_path):
+    """The non-quiet success line must read "Exported N entries" (or
+    "N entry"), not "Exported N N entries".
+
+    Regression: `ui.pluralize` returns the *count + word* form
+    ("2 entries") and the code was inserting that into a string
+    that already included the count, producing "Exported 2 2 entries".
+    """
+    _add(runner, "alpha")
+    _add(runner, "beta")
+    for fmt in (None, "json"):
+        out = tmp_path / f"out_{fmt or 'md'}"
+        args = ["export", "--output", str(out)]
+        if fmt:
+            args += ["--format", fmt]
+        result = runner.invoke(main, args)
+        assert result.exit_code == 0
+        # The bug was visible on the user-facing success line.
+        assert "2 2" not in result.output
+        assert "Exported 2 entries" in result.output

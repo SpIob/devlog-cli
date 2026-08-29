@@ -489,3 +489,67 @@ def default_backup_filename(now: Optional[datetime] = None) -> str:
     elif now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     return f"entries-{now.strftime('%Y%m%d-%H%M%S')}.json"
+
+
+# ---------------------------------------------------------------------------
+# Timezone helpers
+# ---------------------------------------------------------------------------
+
+
+def local_date_for(iso: str, tz) -> "date":
+    """Return the local date for a stored UTC ISO 8601 timestamp.
+
+    Args:
+        iso: a timestamp string in ``YYYY-MM-DDTHH:MM:SSZ`` form.
+        tz: a :class:`zoneinfo.ZoneInfo` (or ``None``, which falls back
+            to UTC — i.e. returns the date portion of the stored string).
+
+    Returns:
+        A :class:`datetime.date` in the requested zone.
+
+    Notes:
+        Unparseable input returns the epoch date (``1970-01-01``) so
+        callers can still sort/filter without raising. The repair
+        command's stats path drops unparseable rows; this helper
+        exists for the *read* side, where we'd rather show a row in a
+        wrong bucket than crash.
+    """
+    import datetime as _dt
+    from datetime import timezone as _tz
+
+    if not iso:
+        return _dt.date(1970, 1, 1)
+    try:
+        dt = _dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    except (ValueError, TypeError, AttributeError):
+        return _dt.date(1970, 1, 1)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz.utc)
+    if tz is not None:
+        dt = dt.astimezone(tz)
+    return dt.date()
+
+
+def _resolve_zoneinfo(tz_name: str):
+    """Resolve an IANA tz name to a ``ZoneInfo``, or raise ``ValueError``.
+
+    Kept as a separate function so tests can patch the implementation
+    without monkey-patching the stdlib import.
+
+    Args:
+        tz_name: a non-empty IANA name like ``"America/New_York"``.
+
+    Raises:
+        ValueError: when the name is not recognised by the system
+            zoneinfo data (or the ``tzdata`` package on Windows).
+    """
+    try:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+    except ImportError as exc:  # pragma: no cover - 3.9+ always has it
+        raise ValueError(
+            "zoneinfo is not available on this Python build"
+        ) from exc
+    try:
+        return ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(str(exc)) from exc

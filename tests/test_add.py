@@ -101,3 +101,80 @@ def test_add_storage_permission_error(runner, tmp_path):
         result = runner.invoke(main, ["add", "Will fail"])
     assert result.exit_code == 2
     assert "Cannot write to storage file" in result.output
+
+
+# ---------------------------------------------------------------------------
+# --at (backfill)
+# ---------------------------------------------------------------------------
+
+
+def test_add_at_absolute_date(runner, tmp_path, monkeypatch):
+    """`add --at YYYY-MM-DD` writes the entry with the supplied date at midnight UTC."""
+    from devlog import storage
+    # The runner fixture sets DEVLOG_DATA_DIR in the subprocess env,
+    # but `storage.load_entries()` reads from the in-process
+    # os.environ. Set it via monkeypatch so both paths agree.
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    result = runner.invoke(main, ["add", "backfilled", "--at", "2025-01-15"])
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    assert len(entries) == 1
+    # The on-disk representation is always UTC; the local-midnight form
+    # is converted to UTC. With no DEVLOG_TZ the input is UTC.
+    assert entries[0].created_at == "2025-01-15T00:00:00Z"
+    assert entries[0].message == "backfilled"
+
+
+def test_add_at_iso_timestamp(runner, tmp_path, monkeypatch):
+    from devlog import storage
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    result = runner.invoke(main, ["add", "x", "--at", "2025-02-15T09:30:00Z"])
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    assert entries[0].created_at == "2025-02-15T09:30:00Z"
+
+
+def test_add_at_relative_hours(runner, tmp_path, monkeypatch):
+    """`--at 2h` should be roughly 2 hours before now (UTC)."""
+    from devlog import storage
+    from datetime import datetime, timezone, timedelta
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    before = datetime.now(tz=timezone.utc)
+    result = runner.invoke(main, ["add", "x", "--at", "2h"])
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    ts = datetime.strptime(entries[0].created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    # ts should be 2h before `before`, give or take a couple of seconds.
+    assert abs((before - ts) - timedelta(hours=2)) < timedelta(seconds=5)
+
+
+def test_add_at_relative_minutes(runner, tmp_path, monkeypatch):
+    """`--at 30m` should be roughly 30 minutes before now."""
+    from devlog import storage
+    from datetime import datetime, timezone, timedelta
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    before = datetime.now(tz=timezone.utc)
+    result = runner.invoke(main, ["add", "x", "--at", "30m"])
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    ts = datetime.strptime(entries[0].created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    assert abs((before - ts) - timedelta(minutes=30)) < timedelta(seconds=5)
+
+
+def test_add_at_invalid(runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    result = runner.invoke(main, ["add", "x", "--at", "not-a-date"])
+    assert result.exit_code == 2
+    assert "Invalid --at" in result.output
+
+
+def test_add_at_with_local_tz(runner, tmp_path, monkeypatch):
+    """With DEVLOG_TZ set, a naive timestamp is interpreted in that zone."""
+    from devlog import storage
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("DEVLOG_TZ", "America/New_York")
+    # 2025-02-15 09:00 in NY (EST) is 14:00 UTC (winter, no DST yet).
+    result = runner.invoke(main, ["add", "x", "--at", "2025-02-15T09:00:00"])
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    assert entries[0].created_at == "2025-02-15T14:00:00Z"

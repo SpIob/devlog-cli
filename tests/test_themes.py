@@ -65,6 +65,11 @@ def test_default_theme_values_match_pre_theming_strings():
         "banner_version": "bold cyan",
         "banner_command": "bold cyan",
         "zebra_alt": "dim",
+        "heatmap_empty": "grey15",
+        "heatmap_l1": "green",
+        "heatmap_l2": "color(34)",
+        "heatmap_l3": "color(40)",
+        "heatmap_l4": "color(46)",
     }
     assert themes.DEFAULT_THEME == expected
 

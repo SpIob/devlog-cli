@@ -170,6 +170,19 @@ def test_doctor_reports_longest_messages(runner, data_dir):
     assert "30 chars" in result.output  # "a longer entry than the others" = 30 chars
 
 
+def test_doctor_singular_chars_for_one_char_message(runner, data_dir):
+    """A 1-character message must report ``1 char`` (singular), not
+    ``1 chars`` (the latter is a long-standing English error).
+    """
+    _seed("11111111-1111-1111-1111-111111111111", "x", _utc_iso(datetime.now(tz=timezone.utc)))
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 0
+    # The line that lists the longest message should read "1 char",
+    # not "1 chars".
+    assert "1 char" in result.output
+    assert "1 chars" not in result.output
+
+
 def test_doctor_reports_file_size(runner, data_dir):
     _seed("11111111-1111-1111-1111-111111111111", "x", _utc_iso(datetime.now(tz=timezone.utc)))
     result = runner.invoke(main, ["doctor"])

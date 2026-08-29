@@ -90,6 +90,23 @@ def test_edit_no_changes_reports_noop(runner):
     assert "No changes" in result.output
 
 
+def test_edit_no_op_with_quiet_suppresses_noop_message(runner, data_dir):
+    """A no-op edit under --quiet must produce no output at all.
+
+    Otherwise the user can never script `devlog edit -q -m X id` and
+    tell success from no-op. The `No changes.` line is informational
+    for an interactive user; under `-q` it must be silenced like every
+    other success-path message.
+    """
+    sid = _add(runner, "Same", "backend")
+    result = runner.invoke(
+        main, ["edit", sid, "--message", "Same", "--tag", "backend", "--quiet"]
+    )
+    assert result.exit_code == 0
+    assert "No changes" not in result.output
+    assert result.output.strip() == ""
+
+
 # ---------------------------------------------------------------------------
 # Editor path
 # ---------------------------------------------------------------------------
@@ -245,4 +262,104 @@ def test_edit_with_flag_in_non_tty_works(runner, data_dir):
     result = runner.invoke(main, ["edit", sid, "-m", "new text"])
     assert result.exit_code == 0
     assert storage.load_entries()[0].message == "new text"
+
+
+# ---------------------------------------------------------------------------
+# --at (backfill / re-time)
+# ---------------------------------------------------------------------------
+
+
+def test_edit_at_with_yes_changes_created_at(runner, data_dir):
+    """`edit --at … --yes` changes created_at and updates updated_at."""
+    sid = _add(runner, "msg")
+    original_created = storage.load_entries()[0].created_at
+    result = runner.invoke(
+        main, ["edit", sid, "--at", "2025-01-15T09:00:00Z", "--yes"]
+    )
+    assert result.exit_code == 0
+    entry = storage.load_entries()[0]
+    assert entry.created_at == "2025-01-15T09:00:00Z"
+    assert entry.created_at != original_created
+    # updated_at is set to the new "now".
+    assert entry.updated_at is not None
+    # updated_at is recent (within the last 60 seconds).
+    from datetime import datetime, timezone, timedelta
+    upd = datetime.strptime(entry.updated_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    assert (datetime.now(tz=timezone.utc) - upd) < timedelta(seconds=60)
+
+
+def test_edit_at_prompts_and_decline_aborts(runner, data_dir):
+    """Without --yes, a `--at` change prompts; declining aborts."""
+    from click.testing import CliRunner
+    runner = CliRunner(env={"DEVLOG_DATA_DIR": str(data_dir)})
+    sid = _add(runner, "msg")
+    # Decline the prompt by feeding 'n' to stdin.
+    result = runner.invoke(
+        main, ["edit", sid, "--at", "2025-01-15T09:00:00Z"],
+        input="n",
+    )
+    assert result.exit_code == 0
+    assert "Aborted" in result.output
+    # Storage must be unchanged.
+    entry = storage.load_entries()[0]
+    assert entry.created_at != "2025-01-15T09:00:00Z"
+
+
+def test_edit_at_prompts_and_accept_writes(runner, data_dir):
+    """Without --yes, accepting the prompt with 'y' writes the change."""
+    sid = _add(runner, "msg")
+    result = runner.invoke(
+        main, ["edit", sid, "--at", "2025-01-15T09:00:00Z"],
+        input="y",
+    )
+    assert result.exit_code == 0
+    assert storage.load_entries()[0].created_at == "2025-01-15T09:00:00Z"
+
+
+def test_edit_at_relative(runner, data_dir):
+    """`--at 2h` works on edit too."""
+    from datetime import datetime, timezone, timedelta
+    sid = _add(runner, "msg")
+    before = datetime.now(tz=timezone.utc)
+    result = runner.invoke(main, ["edit", sid, "--at", "2h", "--yes"])
+    assert result.exit_code == 0
+    after = datetime.now(tz=timezone.utc)
+    entry = storage.load_entries()[0]
+    ts = datetime.strptime(entry.created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    assert abs((before - ts) - timedelta(hours=2)) < timedelta(seconds=5)
+
+
+def test_edit_at_invalid(runner, data_dir):
+    sid = _add(runner, "msg")
+    result = runner.invoke(main, ["edit", sid, "--at", "garbage", "--yes"])
+    assert result.exit_code == 2
+    assert "Invalid --at" in result.output
+
+
+def test_edit_at_with_message_and_tags(runner, data_dir):
+    """`--at` combines with `-m` and `--add-tag` correctly."""
+    sid = _add(runner, "msg", "x")
+    result = runner.invoke(
+        main,
+        ["edit", sid, "-m", "new", "--add-tag", "y", "--at", "2025-01-15T09:00:00Z", "--yes"],
+    )
+    assert result.exit_code == 0
+    entry = storage.load_entries()[0]
+    assert entry.message == "new"
+    assert "x" in entry.tags
+    assert "y" in entry.tags
+    assert entry.created_at == "2025-01-15T09:00:00Z"
+
+
+def test_edit_at_same_value_is_noop(runner, data_dir):
+    """If `--at` resolves to the same value the entry already has, the
+    edit is a no-op (and the prompt is skipped)."""
+    sid = _add(runner, "msg")
+    current = storage.load_entries()[0].created_at
+    # Pass the same instant back; no --yes needed because no real change.
+    result = runner.invoke(main, ["edit", sid, "--at", current])
+    assert result.exit_code == 0
+    assert "No changes" in result.output
+    # Storage unchanged.
+    assert storage.load_entries()[0].created_at == current
 

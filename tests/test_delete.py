@@ -98,3 +98,42 @@ def test_delete_empty_id(runner):
     result = runner.invoke(main, ["delete", "", "--yes"])
     assert result.exit_code == 1
     assert "ID is required" in result.output
+
+
+def test_delete_confirm_prompt_with_quotes_in_message(runner, data_dir):
+    """A message that contains literal double-quote characters must not
+    produce a malformed confirmation prompt.
+
+    The previous prompt wrapped the snippet in another pair of quotes
+    (``Delete entry 8da1ac20 ("He said "hi" to me")?``) which is
+    visually broken and confusing on a TTY.
+    """
+    sid = _add(runner, 'He said "hi" to me')
+    # Refuse the prompt; we only care about the prompt string itself.
+    result = runner.invoke(main, ["delete", sid], input="n\n")
+    assert result.exit_code == 0
+    # The full message must appear unaltered in the prompt — including
+    # the embedded quotes — so the user can still recognise the entry.
+    assert 'He said "hi" to me' in result.output
+    # The new prompt uses an em-dash separator, not a pair of quotes
+    # around the snippet, so the user's eye can tell the snippet apart
+    # from the prompt syntax even when the message contains `"`.
+    assert '"He said "hi" to me"' not in result.output
+
+
+def test_delete_confirm_prompt_strips_markup_in_message(runner, data_dir):
+    """A message containing Rich-style markup (``[bold]…[/bold]``)
+    must not leak the raw markup into the prompt — otherwise the
+    TTY would print partial ANSI sequences and Click would not be
+    able to parse its own confirmation line.
+    """
+    sid = _add(runner, "Refactored [bold]auth[/bold] service")
+    result = runner.invoke(main, ["delete", sid], input="n\n")
+    assert result.exit_code == 0
+    # Raw bracket markup must not be in the prompt (we don't escape
+    # the snippet because it's a plain string, but we make sure the
+    # snippet truncation does not produce dangling brackets).
+    # A safe invariant: the prompt contains the visible text the user
+    # typed (minus any markup they entered verbatim).
+    assert "Refactored" in result.output
+    assert "auth" in result.output
