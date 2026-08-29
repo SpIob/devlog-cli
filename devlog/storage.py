@@ -1,8 +1,11 @@
 import dataclasses
 import json
 import os
+import re
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from devlog.models import Entry
 
@@ -12,6 +15,11 @@ from devlog.models import Entry
 
 DEFAULT_DATA_DIR = Path.home() / ".devlog"
 ENTRIES_FILE_NAME = "entries.json"
+BACKUPS_DIR_NAME = "backups"
+
+# Tag validation: must match the rules enforced by cli._validate_tags
+_TAG_RE = re.compile(r"^[a-z0-9\-]+$")
+_MAX_TAG_LENGTH = 32
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +43,7 @@ class CorruptedStorageError(StorageError):
     def __init__(self, path: Path):
         super().__init__(
             f"Error: Storage file is corrupted at {path}. "
-            "Back it up and delete it to reset, or restore from backup."
+            "Run 'devlog repair' or delete the file to reset."
         )
 
 
@@ -217,3 +225,254 @@ def delete_entry(entry_id: str) -> bool:
         return False
     save_entries(new_entries)
     return True
+
+
+# ---------------------------------------------------------------------------
+# Validation (for `devlog repair` / `devlog doctor`)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class Issue:
+    """A single problem found in the on-disk entry store.
+
+    Attributes:
+        kind:       short category slug (e.g. ``"missing_field"``,
+                    ``"bad_tag"``, ``"bad_timestamp"``, ``"duplicate_id"``).
+        entry_id:   id of the offending entry when known, otherwise None.
+        index:      0-based index in the on-disk ``entries`` list, or -1
+                    if the issue applies to the payload as a whole.
+        field:      the offending field name when applicable, otherwise None.
+        message:    human-readable description safe to print to the user.
+    """
+    kind: str
+    message: str
+    entry_id: Optional[str] = None
+    index: int = -1
+    field: Optional[str] = None
+
+
+def _is_valid_iso_timestamp(value: object) -> bool:
+    """Return True if *value* parses as a ``YYYY-MM-DDTHH:MM:SSZ`` timestamp.
+
+    Accepts the canonical form produced by ``cli.add``; anything else is
+    rejected. We intentionally do not try to be lenient here — invalid
+    timestamps are exactly what `devlog repair` should surface.
+    """
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return False
+    try:
+        # ``fromisoformat`` accepts a ``+HH:MM`` suffix in py3.7+, so we
+        # translate the trailing ``Z`` to ``+00:00`` for the parse.
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _validate_tag_values(tags: object) -> list[str]:
+    """Return the list of *tags* (assumed to be a list of strings).
+
+    Validation matches ``cli._validate_tags``: each tag must match
+    ``^[a-z0-9-]+$`` and be at most 32 characters. This is a *strict*
+    re-check — we do not normalise — so users with hand-edited files
+    can see what needs fixing.
+    """
+    if not isinstance(tags, list):
+        return [f"tags field must be a list (got {type(tags).__name__})"]
+    problems: list[str] = []
+    for t in tags:
+        if not isinstance(t, str):
+            problems.append(f"tag must be a string (got {type(t).__name__})")
+            continue
+        if not _TAG_RE.fullmatch(t):
+            problems.append(f'tag "{t}" has invalid characters')
+            continue
+        if len(t) > _MAX_TAG_LENGTH:
+            problems.append(f'tag "{t}" exceeds {_MAX_TAG_LENGTH} chars')
+    return problems
+
+
+def validate_entries(data: object) -> list[Issue]:
+    """Inspect a parsed JSON payload and return a list of issues.
+
+    The function is pure: it does not touch the filesystem. It accepts
+    anything (including ``None``) and reports each problem as a separate
+    ``Issue`` instance. A return value of ``[]`` means the payload is
+    structurally valid and ready to be loaded.
+
+    Validation rules:
+
+      - Top level must be a dict containing an ``"entries"`` key.
+      - ``"entries"`` must be a list.
+      - Each item must be a dict with: ``id`` (non-empty str),
+        ``message`` (str), ``created_at`` (parseable ISO 8601 UTC), and
+        ``tags`` (list of valid tag strings). ``updated_at`` is
+        optional but, if present, must also be a parseable timestamp.
+      - All ``id`` values must be unique within the payload.
+
+    Args:
+        data: the value returned by ``json.load``.
+
+    Returns:
+        list[Issue]: a (possibly empty) list of issues found. Order is
+        deterministic so callers can render stable reports.
+    """
+    issues: list[Issue] = []
+
+    if not isinstance(data, dict):
+        issues.append(
+            Issue(kind="bad_root", message="root must be a JSON object")
+        )
+        return issues
+
+    if "entries" not in data:
+        issues.append(
+            Issue(kind="missing_field", field="entries", message='missing "entries" key')
+        )
+        return issues
+
+    raw_entries = data["entries"]
+    if not isinstance(raw_entries, list):
+        issues.append(
+            Issue(
+                kind="bad_field",
+                field="entries",
+                message='"entries" must be a list',
+            )
+        )
+        return issues
+
+    seen_ids: dict[str, int] = {}
+    for i, item in enumerate(raw_entries):
+        prefix = f"entry[{i}]"
+        if not isinstance(item, dict):
+            issues.append(
+                Issue(
+                    kind="bad_item",
+                    index=i,
+                    message=f"{prefix} must be a JSON object",
+                )
+            )
+            continue
+
+        # id
+        entry_id = item.get("id")
+        if not isinstance(entry_id, str) or not entry_id:
+            issues.append(
+                Issue(
+                    kind="missing_field",
+                    index=i,
+                    field="id",
+                    message=f"{prefix} missing or empty 'id'",
+                )
+            )
+        else:
+            if entry_id in seen_ids:
+                issues.append(
+                    Issue(
+                        kind="duplicate_id",
+                        index=i,
+                        entry_id=entry_id,
+                        message=(
+                            f"{prefix} id '{entry_id[:8]}' is a duplicate of "
+                            f"entry[{seen_ids[entry_id]}]"
+                        ),
+                    )
+                )
+            else:
+                seen_ids[entry_id] = i
+
+        # message
+        message = item.get("message")
+        if not isinstance(message, str):
+            issues.append(
+                Issue(
+                    kind="missing_field",
+                    index=i,
+                    field="message",
+                    entry_id=entry_id if isinstance(entry_id, str) else None,
+                    message=f"{prefix} missing or non-string 'message'",
+                )
+            )
+
+        # created_at
+        created_at = item.get("created_at")
+        if created_at is None:
+            issues.append(
+                Issue(
+                    kind="missing_field",
+                    index=i,
+                    field="created_at",
+                    entry_id=entry_id if isinstance(entry_id, str) else None,
+                    message=f"{prefix} missing 'created_at'",
+                )
+            )
+        elif not _is_valid_iso_timestamp(created_at):
+            issues.append(
+                Issue(
+                    kind="bad_timestamp",
+                    index=i,
+                    field="created_at",
+                    entry_id=entry_id if isinstance(entry_id, str) else None,
+                    message=f"{prefix} 'created_at' is not a valid ISO 8601 UTC timestamp",
+                )
+            )
+
+        # updated_at (optional)
+        updated_at = item.get("updated_at", None)
+        if updated_at is not None and not _is_valid_iso_timestamp(updated_at):
+            issues.append(
+                Issue(
+                    kind="bad_timestamp",
+                    index=i,
+                    field="updated_at",
+                    entry_id=entry_id if isinstance(entry_id, str) else None,
+                    message=f"{prefix} 'updated_at' is not a valid ISO 8601 UTC timestamp",
+                )
+            )
+
+        # tags
+        tags = item.get("tags", [])
+        tag_problems = _validate_tag_values(tags)
+        for tp in tag_problems:
+            issues.append(
+                Issue(
+                    kind="bad_tag",
+                    index=i,
+                    field="tags",
+                    entry_id=entry_id if isinstance(entry_id, str) else None,
+                    message=f"{prefix} {tp}",
+                )
+            )
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# Backup helpers (for `devlog backup` / `devlog restore`)
+# ---------------------------------------------------------------------------
+
+
+def get_backups_dir() -> Path:
+    """Return the absolute path to the backups directory.
+
+    The backups directory sits next to the entries file: ``<data_dir>/backups``.
+    The directory is *not* created here — callers should create it
+    lazily.
+    """
+    return get_storage_path().parent / BACKUPS_DIR_NAME
+
+
+def default_backup_filename(now: Optional[datetime] = None) -> str:
+    """Return a timestamped backup filename (e.g. ``entries-20260129-153045.json``).
+
+    Args:
+        now: optional datetime to use; defaults to ``datetime.now(UTC)``.
+    """
+    from datetime import timezone
+    if now is None:
+        now = datetime.now(tz=timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return f"entries-{now.strftime('%Y%m%d-%H%M%S')}.json"

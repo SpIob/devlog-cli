@@ -38,13 +38,24 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
+from devlog import themes
 from devlog.models import Entry
+
+
+def _s(role: str) -> str:
+    """Shorthand for :func:`devlog.themes.get_style`."""
+    return themes.get_style(role)
+
+
+def _bold(role: str) -> str:
+    """Shorthand for :func:`devlog.themes.get_bold_style`."""
+    return themes.get_bold_style(role)
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 MSG_TRUNCATE_LEN = 60
 ID_DISPLAY_LEN = 8
@@ -86,6 +97,7 @@ __all__ = [
     "entry_panel",
     "entries_table",
     "tags_table",
+    "theme_table",
     "show_panel",
     "edit_panel",
     "delete_panel",
@@ -94,12 +106,16 @@ __all__ = [
     "export_progress",
     "version_banner",
     "root_banner",
+    "repair_summary",
+    "backup_result",
+    "doctor_report",
     "Group",
     "Padding",
     "Text",
     "Panel",
     "Table",
     "Progress",
+    "themes",
     "ID_DISPLAY_LEN",
     "MSG_TRUNCATE_LEN",
     "TAG_NONE",
@@ -119,26 +135,31 @@ def print_error(message: str) -> None:
         message: the error text. Should not be prefixed with an icon.
     """
     body = Text()
-    body.append("✘ ", style="bold red")
-    body.append(message, style="red")
+    body.append("✘ ", style=_bold("error_text"))
+    body.append(message, style=_s("error_text"))
     err_console.print(
-        Panel(body, border_style="red", title="Error", title_align="left")
+        Panel(
+            body,
+            border_style=_s("error_border"),
+            title="Error",
+            title_align="left",
+        )
     )
 
 
 def print_warning(message: str) -> None:
     """Print a yellow warning to STDERR (single line, no panel)."""
     line = Text()
-    line.append("⚠ ", style="bold yellow")
-    line.append(message, style="yellow")
+    line.append("⚠ ", style=_bold("warning_text"))
+    line.append(message, style=_s("warning_text"))
     err_console.print(line)
 
 
 def print_info(message: str) -> None:
     """Print a dim info line to STDOUT with an ℹ icon."""
     line = Text()
-    line.append("ℹ ", style="dim")
-    line.append(message, style="dim")
+    line.append("ℹ ", style=_s("info_text"))
+    line.append(message, style=_s("info_text"))
     console.print(line)
 
 
@@ -185,8 +206,8 @@ def entry_panel(
     *,
     title: str = "Entry added",
     title_icon: str = "✔",
-    title_style: str = "bold green",
-    border_style: str = "green",
+    title_style: str | None = None,
+    border_style: str | None = None,
     show_full_id: bool = False,
     footer_hint: str = "Run `devlog list` to see all entries.",
 ) -> Panel:
@@ -201,28 +222,34 @@ def entry_panel(
         entry:        the entry to render.
         title:        the panel title (the part after the icon).
         title_icon:   leading icon character (e.g. ``"✔"`` or ``"📄"``).
-        title_style:  Rich style for the title.
-        border_style: Rich style for the panel border.
+        title_style:  Rich style for the title. Defaults to the
+            ``success_title`` theme role.
+        border_style: Rich style for the panel border. Defaults to the
+            ``success_border`` theme role.
         show_full_id: when True, render the full UUID as a row.
         footer_hint:  dim italic footer line (set to empty to hide).
 
     Returns:
         A configured ``rich.panel.Panel`` ready to print.
     """
+    if title_style is None:
+        title_style = _s("success_title")
+    if border_style is None:
+        border_style = _s("success_border")
     short_id = entry.id[:ID_DISPLAY_LEN]
     tags_display = (
-        Text(", ".join(entry.tags), style="magenta")
+        Text(", ".join(entry.tags), style=_s("tags"))
         if entry.tags
         else Text(TAG_NONE, style="dim")
     )
-    date_text = Text(_format_dt(entry.created_at), style="cyan")
+    date_text = Text(_format_dt(entry.created_at), style=_s("date"))
 
     rows = [
         _styled_row("Date", date_text),
         _styled_row("Tags", tags_display),
     ]
     if show_full_id:
-        rows.append(_styled_row("ID", Text(entry.id, style="dim white")))
+        rows.append(_styled_row("ID", Text(entry.id, style=_s("id_dim"))))
     rows.append(_styled_row("Note", Text(entry.message)))
     rows.append(Text())
     if footer_hint:
@@ -294,7 +321,7 @@ def smart_truncate(
         parts.append("…")
     if prefix:
         parts.append(escape(prefix))
-    parts.append(f"[bold yellow]{escape(match_text)}[/bold yellow]")
+    parts.append(f"[{_s('match_highlight')}]{escape(match_text)}[/{_s('match_highlight')}]")
     if suffix:
         parts.append(escape(suffix))
     if end < len(message):
@@ -323,9 +350,10 @@ def highlight_message(message: str, query: str) -> str:
     trunc = _left_truncate(message)
     if not query:
         return escape(trunc)
+    highlight = _s("match_highlight")
     return re.sub(
         re.escape(query),
-        lambda m: f"[bold yellow]{escape(m.group(0))}[/bold yellow]",
+        lambda m: f"[{highlight}]{escape(m.group(0))}[/{highlight}]",
         escape(trunc),
         flags=re.IGNORECASE,
     )
@@ -343,7 +371,7 @@ def _short_id(entry: Entry) -> str:
 def _tags_text(entry: Entry) -> Text:
     if not entry.tags:
         return Text(TAG_NONE, style="dim")
-    return Text(", ".join(entry.tags), style="magenta")
+    return Text(", ".join(entry.tags), style=_s("tags"))
 
 
 def _terminal_width() -> int:
@@ -411,15 +439,15 @@ def entries_table(
         caption=subtitle or None,
         caption_style="dim",
         caption_justify="left",
-        row_styles=["", "dim"],
+        row_styles=["", _s("zebra_alt")],
         header_style="bold",
         expand=False,
     )
-    table.add_column("ID", style="dim white", no_wrap=True, width=widths["id"])
-    table.add_column("Date", style="cyan", no_wrap=True, width=widths["date"])
+    table.add_column("ID", style=_s("id_dim"), no_wrap=True, width=widths["id"])
+    table.add_column("Date", style=_s("date"), no_wrap=True, width=widths["date"])
     # Tags may wrap when many tags are present; this is preferable to
     # truncating them mid-word.
-    table.add_column("Tags", style="magenta", width=widths["tags"])
+    table.add_column("Tags", style=_s("tags"), width=widths["tags"])
     table.add_column(
         "Message",
         width=widths["message"],
@@ -462,15 +490,15 @@ def show_panel(entry: Entry) -> Panel:
         A configured ``rich.panel.Panel`` ready to print.
     """
     short_id = entry.id[:ID_DISPLAY_LEN]
-    full_id = Text(entry.id, style="dim white")
+    full_id = Text(entry.id, style=_s("id_dim"))
     tags_display = (
-        Text(", ".join(entry.tags), style="magenta")
+        Text(", ".join(entry.tags), style=_s("tags"))
         if entry.tags
         else Text(TAG_NONE, style="dim")
     )
-    created_text = Text(_format_dt(entry.created_at), style="cyan")
+    created_text = Text(_format_dt(entry.created_at), style=_s("date"))
     updated_text = (
-        Text(_format_dt(entry.updated_at), style="yellow")
+        Text(_format_dt(entry.updated_at), style=_s("updated"))
         if entry.updated_at
         else Text("—", style="dim")
     )
@@ -491,7 +519,7 @@ def show_panel(entry: Entry) -> Panel:
 
     return Panel(
         body,
-        border_style="cyan",
+        border_style=_s("show_border"),
         title=title,
         title_align="left",
         padding=(0, 1),
@@ -501,12 +529,12 @@ def show_panel(entry: Entry) -> Panel:
 def delete_panel(entry: Entry) -> Panel:
     """Render a destructive confirmation that an entry was deleted."""
     short_id = entry.id[:ID_DISPLAY_LEN]
-    date_text = Text(_format_dt(entry.created_at), style="cyan")
+    date_text = Text(_format_dt(entry.created_at), style=_s("date"))
     tags_str = ", ".join(entry.tags) if entry.tags else TAG_NONE
-    tags_text = Text(tags_str, style="magenta" if entry.tags else "dim")
+    tags_text = Text(tags_str, style=_s("tags") if entry.tags else "dim")
 
     body = Group(
-        _styled_row("ID", Text(short_id, style="dim white")),
+        _styled_row("ID", Text(short_id, style=_s("id_dim"))),
         _styled_row("Date", date_text),
         _styled_row("Tags", tags_text),
         Text(),
@@ -514,13 +542,13 @@ def delete_panel(entry: Entry) -> Panel:
     )
 
     title = Text()
-    title.append("✘ ", style="bold red")
-    title.append("Entry deleted", style="bold red")
+    title.append("✘ ", style=_bold("delete_border"))
+    title.append("Entry deleted", style=_bold("delete_border"))
     title.append(f"  ·  {short_id}", style="dim")
 
     return Panel(
         body,
-        border_style="red",
+        border_style=_s("delete_border"),
         title=title,
         title_align="left",
         padding=(0, 1),
@@ -530,14 +558,14 @@ def delete_panel(entry: Entry) -> Panel:
 def edit_panel(entry: Entry) -> Panel:
     """Render a blue-bordered confirmation that an entry was edited."""
     short_id = entry.id[:ID_DISPLAY_LEN]
-    date_text = Text(_format_dt(entry.created_at), style="cyan")
+    date_text = Text(_format_dt(entry.created_at), style=_s("date"))
     updated_text = (
-        Text(_format_dt(entry.updated_at), style="yellow")
+        Text(_format_dt(entry.updated_at), style=_s("updated"))
         if entry.updated_at
         else Text("—", style="dim")
     )
     tags_display = (
-        Text(", ".join(entry.tags), style="magenta")
+        Text(", ".join(entry.tags), style=_s("tags"))
         if entry.tags
         else Text(TAG_NONE, style="dim")
     )
@@ -551,13 +579,13 @@ def edit_panel(entry: Entry) -> Panel:
     )
 
     title = Text()
-    title.append("✎ ", style="bold blue")
-    title.append("Entry updated", style="bold blue")
+    title.append("✎ ", style=_bold("edit_border"))
+    title.append("Entry updated", style=_bold("edit_border"))
     title.append(f"  ·  {short_id}", style="dim")
 
     return Panel(
         body,
-        border_style="blue",
+        border_style=_s("edit_border"),
         title=title,
         title_align="left",
         padding=(0, 1),
@@ -593,11 +621,11 @@ def tags_table(
         header_style="bold",
         expand=False,
     )
-    table.add_column("Tag", style="magenta", no_wrap=True)
+    table.add_column("Tag", style=_s("tags"), no_wrap=True)
     table.add_column("Count", style="bold", justify="right", no_wrap=True)
     table.add_column(
         "Last used",
-        style="cyan",
+        style=_s("date"),
         no_wrap=True,
         footer=f"Across {total_entries} entr{'y' if total_entries == 1 else 'ies'}.",
         footer_style="bold",
@@ -644,7 +672,9 @@ def export_progress(total: int) -> Progress:
 
 def version_banner() -> None:
     """Print a styled version line followed by a dim rule."""
-    console.print(Text("devlog, version ", style="bold") + Text(VERSION, style="bold cyan"))
+    console.print(
+        Text("devlog, version ", style="bold") + Text(VERSION, style=_s("banner_version"))
+    )
     console.print(Rule(style="dim"))
 
 
@@ -666,7 +696,7 @@ def root_banner() -> None:
         padding=(0, 2),
         expand=False,
     )
-    table.add_column(style="bold cyan", no_wrap=True)
+    table.add_column(style=_s("banner_command"), no_wrap=True)
     table.add_column(style="default")
     table.add_row("add", "Add a new journal entry")
     table.add_row("show", "Show a single entry by ID")
@@ -677,11 +707,16 @@ def root_banner() -> None:
     table.add_row("today", "Show today's entries")
     table.add_row("tail", "Show the N most recent entries")
     table.add_row("tags", "List tags with usage counts")
+    table.add_row("theme", "View or change the active color theme")
     table.add_row("stats", "Summarize the journal")
     table.add_row("rename-tag", "Rename a tag across all entries")
     table.add_row("import", "Import entries from a JSON or Markdown file")
     table.add_row("completions", "Print a shell completion script")
     table.add_row("export", "Export entries to a Markdown file")
+    table.add_row("repair", "Inspect and repair the on-disk journal store")
+    table.add_row("backup", "Write a timestamped copy of the journal")
+    table.add_row("restore", "Restore the journal from a backup file")
+    table.add_row("doctor", "Check the journal store for corruption")
     console.print(table)
 
     console.print(
@@ -689,3 +724,220 @@ def root_banner() -> None:
         + Text("devlog <command> --help", style="bold")
         + Text(" for details on a specific command.", style="dim")
     )
+
+
+# ---------------------------------------------------------------------------
+# Repair summary (`devlog repair`)
+# ---------------------------------------------------------------------------
+
+
+def repair_summary(
+    issues: list, dropped: int, kept: int, *, dry_run: bool, backup_path: str | None
+) -> Panel:
+    """Render a panel summarising a `devlog repair` invocation.
+
+    Args:
+        issues:      list of :class:`devlog.storage.Issue` objects.
+        dropped:     number of entries the repair removed.
+        kept:        number of entries retained.
+        dry_run:     True when the user passed --dry-run (no write happened).
+        backup_path: path to a backup file when --backup was used, else None.
+
+    Returns:
+        A configured :class:`rich.panel.Panel`.
+    """
+    from devlog.storage import Issue
+
+    rows: list[Text] = []
+    if not issues:
+        rows.append(Text("✔ No issues found. Nothing to repair.", style=_s("success_border")))
+    else:
+        rows.append(
+            Text(
+                f"Found {len(issues)} issue{'s' if len(issues) != 1 else ''}:",
+                style="bold",
+            )
+        )
+        rows.append(Text())
+        # Show at most 20 issues to keep the panel readable
+        for issue in issues[:20]:
+            assert isinstance(issue, Issue)
+            short = (issue.entry_id[:8] + "…") if issue.entry_id and len(issue.entry_id) > 8 else (issue.entry_id or f"#{issue.index}")
+            rows.append(Text(f"  • [{short}] {issue.message}", style=_s("warning_text")))
+        if len(issues) > 20:
+            rows.append(Text(f"  …and {len(issues) - 20} more", style="dim"))
+
+    rows.append(Text())
+    if dry_run:
+        rows.append(Text("DRY RUN — no changes were written.", style=_bold("warning_text")))
+    else:
+        verb = "Removed" if dropped else "Removed"
+        rows.append(
+            Text(
+                f"{verb} {dropped} entr{'y' if dropped == 1 else 'ies'}, kept {kept}.",
+                style=_s("success_border"),
+            )
+        )
+    if backup_path:
+        rows.append(Text(f"Backup written to {backup_path}", style="dim"))
+
+    title = Text()
+    title.append("✎ ", style=_bold("info_text"))
+    title.append("Repair ", style="bold")
+    title.append("· devlog store", style="dim")
+
+    return Panel(
+        Group(*rows),
+        border_style=_s("info_text"),
+        title=title,
+        title_align="left",
+        padding=(0, 1),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Backup result (`devlog backup`)
+# ---------------------------------------------------------------------------
+
+
+def backup_result(path: str, count: int) -> Text:
+    """Build a one-line confirmation for a successful backup."""
+    line = Text()
+    line.append("✔ ", style=_bold("success_title"))
+    line.append(
+        f"Backed up {count} entr{'y' if count == 1 else 'ies'} to ",
+        style=_s("success_border"),
+    )
+    line.append(path, style="bold")
+    return line
+
+
+# ---------------------------------------------------------------------------
+# Doctor report (`devlog doctor`)
+# ---------------------------------------------------------------------------
+
+
+def doctor_report(report: dict) -> Panel:
+    """Render a `devlog doctor` health report as a panel.
+
+    Args:
+        report: dict with keys:
+            - ``ok``         (bool): True if the store is fully clean.
+            - ``path``       (str): absolute path to the entries file.
+            - ``writable``   (bool): whether the data dir is writable.
+            - ``exists``     (bool): whether the entries file exists.
+            - ``size_bytes`` (int): file size, or 0 if missing.
+            - ``entry_count`` (int): number of valid entries.
+            - ``issues``     (list[Issue]): validation issues, possibly empty.
+            - ``days_since_last`` (int | None): days since the most recent entry.
+            - ``top_messages`` (list[(str, int)]): top 3 longest messages.
+
+    Returns:
+        A configured :class:`rich.panel.Panel`.
+    """
+    rows: list[Text] = []
+    rows.append(_styled_row("Path", Text(report["path"], style=_s("id_dim"))))
+    rows.append(_styled_row("Exists", "yes" if report["exists"] else "no"))
+    rows.append(
+        _styled_row(
+            "Size",
+            f"{report['size_bytes']} byte{'s' if report['size_bytes'] != 1 else ''}",
+        )
+    )
+    rows.append(
+        _styled_row(
+            "Writable",
+            Text("yes", style=_s("success_border")) if report["writable"] else Text("no", style=_s("error_text")),
+        )
+    )
+    rows.append(_styled_row("Entries", str(report["entry_count"])))
+
+    days = report.get("days_since_last")
+    if days is None:
+        rows.append(_styled_row("Last entry", Text("—", style="dim")))
+    elif days == 0:
+        rows.append(_styled_row("Last entry", "today"))
+    else:
+        rows.append(_styled_row("Last entry", f"{days} day{'s' if days != 1 else ''} ago"))
+
+    issues = report.get("issues", [])
+    rows.append(Text())
+    if not issues:
+        rows.append(Text("✔ No validation issues.", style=_s("success_border")))
+    else:
+        rows.append(
+            Text(
+                f"⚠ {len(issues)} validation issue{'s' if len(issues) != 1 else ''} — run `devlog repair` to fix.",
+                style=_s("warning_text"),
+            )
+        )
+
+    top = report.get("top_messages") or []
+    if top:
+        rows.append(Text())
+        rows.append(Text("Longest messages:", style="bold"))
+        for short_id, length in top:
+            rows.append(Text(f"  • {short_id} — {length} chars", style="dim"))
+
+    title = Text()
+    title.append("🩺 ", style=_bold("info_text"))
+    title.append("Doctor", style="bold")
+    if report.get("ok"):
+        title.append("  ·  all clear", style=_s("success_border"))
+    else:
+        title.append("  ·  attention", style=_s("warning_text"))
+
+    border = _s("success_border") if report.get("ok") else _s("warning_text")
+    return Panel(
+        Group(*rows),
+        border_style=border,
+        title=title,
+        title_align="left",
+        padding=(0, 1),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Theme table (`devlog theme list` / `devlog theme show`)
+# ---------------------------------------------------------------------------
+
+
+def theme_table(
+    palette: Mapping[str, str] | None = None,
+    *,
+    title: str = "Active theme",
+) -> Table:
+    """Render a two-column table of role → style mappings.
+
+    Used by the ``devlog theme list`` subcommand. When *palette* is
+    omitted, the active theme is rendered. Roles are shown in
+    :data:`devlog.themes.ROLES` order so the output is stable across
+    runs and easy to diff.
+
+    Args:
+        palette: a ``{role: style}`` mapping. Defaults to the active
+            theme from :mod:`devlog.themes`.
+        title:   the table title (default: ``"Active theme"``).
+
+    Returns:
+        A configured ``rich.table.Table`` instance.
+    """
+    if palette is None:
+        palette = themes.get_active_theme()
+
+    table = Table(
+        box=ROUNDED,
+        show_header=True,
+        title=title,
+        title_justify="left",
+        title_style="bold",
+        header_style="bold",
+        expand=False,
+    )
+    table.add_column("Role", style=_s("id_dim"), no_wrap=True)
+    table.add_column("Style", style="default")
+
+    for role in sorted(themes.ROLES):
+        table.add_row(role, palette[role])
+
+    return table

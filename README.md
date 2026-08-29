@@ -104,6 +104,11 @@ devlog stats
 # Rename a tag across every entry
 devlog rename-tag backend devops
 
+# Customize the colors (optional)
+devlog theme show > ~/.devlog/theme.toml
+$EDITOR ~/.devlog/theme.toml
+devlog theme set ~/.devlog/theme.toml
+
 # Import entries from an exported Markdown file
 devlog import ~/notes/old-log.md
 
@@ -163,6 +168,8 @@ devlog list [OPTIONS]
 | `--tag` | `-t` | string | None | Filter by tag. Repeatable. Multiple flags use AND logic — entry must carry all specified tags. |
 | `--limit` | `-n` | integer | 20 | Maximum number of entries to display. Must be a positive integer. |
 | `--all` | — | flag | False | Override `--limit` and display every entry. |
+| `--since` | — | string | None | Only show entries on or after this date. See [Date filters](#date-filters). |
+| `--until` | — | string | None | Only show entries on or before this date. See [Date filters](#date-filters). |
 | `--quiet` | `-q` | flag | False | Output one raw JSON object per line to STDOUT instead of the Rich table. Useful for scripting. |
 
 **Notes:**
@@ -179,6 +186,8 @@ devlog list
 devlog list -t bugfix
 devlog list -t backend -t auth --limit 5
 devlog list --all
+devlog list --since 2025-01-01 --until 2025-12-31
+devlog list --since 7d
 devlog list --quiet | jq '.tags'
 ```
 
@@ -197,6 +206,8 @@ devlog search QUERY [OPTIONS]
 | `QUERY` | — | string | Yes | — | Search term. Case-insensitive substring match against the message field. |
 | `--tag` | `-t` | string | No | None | Narrow results to entries that also carry these tags. Repeatable; AND logic. |
 | `--limit` | `-n` | integer | No | 20 | Maximum number of results to display. |
+| `--since` | — | string | No | None | Only show entries on or after this date. See [Date filters](#date-filters). |
+| `--until` | — | string | No | None | Only show entries on or before this date. See [Date filters](#date-filters). |
 | `--quiet` | `-q` | flag | No | False | Output raw JSON lines to STDOUT instead of the Rich table. |
 
 **Notes:**
@@ -211,6 +222,7 @@ devlog search QUERY [OPTIONS]
 devlog search "null pointer"
 devlog search "cache" -t backend
 devlog search "deploy" --limit 10
+devlog search "refactor" --since 7d
 devlog search "refactor" --quiet | jq '.'
 ```
 
@@ -340,6 +352,49 @@ devlog tags --quiet | jq '.tag'
 
 ---
 
+### `devlog theme`
+
+View or change the active color theme. Themes live in `~/.devlog/theme.toml` (or `$DEVLOG_DATA_DIR/theme.toml` when set) and override individual color roles. See the [Themes](#themes) section for the full list of roles and a starter file.
+
+```
+devlog theme SUBCOMMAND
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `devlog theme list` | Print every role and its current style as a two-column table. |
+| `devlog theme show [ROLE]` | Print the value of a single role, or dump a starter `theme.toml` (all roles commented out) to STDOUT. |
+| `devlog theme set PATH` | Validate and install a theme file as the active theme. Unknown roles are dropped with a warning. |
+| `devlog theme path` | Print the absolute path to the active theme file. |
+
+**Examples:**
+
+```bash
+# See every color role
+devlog theme list
+
+# Read a single role's value
+devlog theme show date
+# → cyan
+
+# Generate a starter theme file you can edit
+devlog theme show > ~/my-theme.toml
+$EDITOR ~/my-theme.toml   # uncomment and tweak the roles you want to change
+devlog theme set ~/my-theme.toml
+
+# Find the active theme path (useful for `ln -s` workflows)
+devlog theme path
+# → /Users/you/.devlog/theme.toml
+```
+
+**Notes:**
+
+- A missing or malformed `theme.toml` is non-fatal: devlog warns once on STDERR and falls back to the built-in default palette.
+- Unknown role keys in the file are dropped with a per-key warning, not a hard error.
+- Changes take effect on the next `devlog` invocation.
+
+---
+
 ### `devlog today`
 
 Show entries created today (UTC), newest first.
@@ -403,6 +458,8 @@ devlog stats [OPTIONS]
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
 | `--quiet` | `-q` | flag | False | Output a single JSON object with the summary. |
+| `--since` | — | string | None | Only include entries on or after this date. See [Date filters](#date-filters). |
+| `--until` | — | string | None | Only include entries on or before this date. See [Date filters](#date-filters). |
 
 **Notes:**
 
@@ -552,6 +609,10 @@ DEVLOG_INTERACTIVE=1 devlog
 | `rename-tag <old> <new>` | Rename a tag. |
 | `import <path>` | Import entries. |
 | `export [-o path]` | Export to Markdown. |
+| `repair [-y] [--dry-run]` | Inspect and repair the on-disk store. |
+| `backup [-o path]` | Write a timestamped backup. |
+| `restore <path>` | Restore from a backup file. |
+| `doctor` | Check store health. |
 | `h \| help` | Show the REPL help. |
 | `q \| quit \| exit` | Leave the REPL. |
 
@@ -581,6 +642,8 @@ devlog export [OPTIONS]
 |--------|-------|------|---------|-------------|
 | `--output` | `-o` | path | `./devlog-export.md` | Destination file path. Existing files are overwritten without prompting. |
 | `--tag` | `-t` | string | None | Export only entries that carry all specified tags. Repeatable; AND logic. |
+| `--since` | — | string | None | Only export entries on or after this date. See [Date filters](#date-filters). |
+| `--until` | — | string | None | Only export entries on or before this date. See [Date filters](#date-filters). |
 | `--quiet` | `-q` | flag | False | Suppress the progress bar and confirmation. Prints only the output path on success. |
 
 **Output format per entry:**
@@ -607,7 +670,194 @@ Rewrote auth middleware to use JWT refresh tokens.
 devlog export
 devlog export -o ~/notes/week-20.md
 devlog export -t backend -o backend-log.md
+devlog export --since 2025-01-01 --until 2025-12-31 -o year.md
 devlog export --quiet -o /tmp/devlog.md
+```
+
+---
+
+### `devlog repair`
+
+Inspect the on-disk journal and, optionally, rewrite it to drop malformed rows. Useful when `devlog doctor` reports validation issues, or when the file has been hand-edited and broken.
+
+```
+devlog repair [OPTIONS]
+```
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--dry-run` | — | flag | False | Show the issues and what would be dropped, without writing. |
+| `--yes` | `-y` | flag | False | Skip the "drop N entries — continue?" confirmation. |
+| `--backup` / `--no-backup` | — | flag | `--backup` | Write a timestamped backup to `<data-dir>/backups/` before the rewrite. |
+| `--quiet` | `-q` | flag | False | Suppress the summary panel. |
+
+**Notes:**
+
+- A backup is written *before* the file is rewritten, so you can always undo a repair with `devlog restore <backup-file>`.
+- Validation rules match the storage contract: every entry must have a non-empty `id` and `message`, a parseable `created_at` (ISO 8601 UTC), and tags that match `^[a-z0-9-]+$` with at most 32 characters.
+- Duplicate ids keep the first occurrence; subsequent duplicates are reported and dropped.
+- Exit code is `0` when nothing was dropped, `1` when entries were dropped (or when issues were found in dry-run mode? — no, dry-run is always `0`).
+- A corrupted JSON file (invalid syntax) is not repairable; the command exits with code 2 and tells you to restore from a backup.
+
+**Examples:**
+
+```bash
+# See what's wrong, without writing
+devlog repair --dry-run
+
+# Drop invalid rows, writing a backup first
+devlog repair -y
+
+# Run the repair non-interactively from a script
+devlog repair -y --no-backup
+```
+
+---
+
+### `devlog backup`
+
+Write a timestamped copy of the journal. The default destination is `<data-dir>/backups/entries-YYYYMMDD-HHMMSS.json`. The file is a normal `entries.json` — it can be inspected, edited, and round-tripped through `devlog restore`.
+
+```
+devlog backup [OPTIONS]
+```
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--output` | `-o` | path | `<data-dir>/backups/entries-TIMESTAMP.json` | Backup file path. Parent directories are created if they don't exist. |
+| `--quiet` | `-q` | flag | False | Print only the backup path (no success panel). |
+
+**Notes:**
+
+- The backup is just a copy of `entries.json` (the JSON shape that `devlog` reads on every startup). It can be inspected, edited, and used as input to `devlog restore`.
+- Backups are placed under `<data-dir>/backups/` by default; that directory is created lazily on first use.
+- Empty journals can be backed up too — the resulting file is `{"entries": []}`.
+
+**Examples:**
+
+```bash
+# Default: timestamped file under the data dir
+devlog backup
+
+# Custom path
+devlog backup -o ~/archives/devlog-$(date +%F).json
+
+# Scripting: capture the path, then move the file
+devlog backup --quiet
+```
+
+---
+
+### `devlog restore`
+
+Replace the current journal with the contents of a backup file. Per-row issues in the backup are skipped with a warning, so a hand-edited or partially-corrupted backup can still be partially restored.
+
+```
+devlog restore PATH [OPTIONS]
+```
+
+| Argument / Option | Short | Type | Required | Default | Description |
+|-------------------|-------|------|----------|---------|-------------|
+| `PATH` | — | path | Yes | — | Backup file. Must exist and be readable. |
+| `--yes` | `-y` | flag | No | False | Skip the "overwrite current journal?" confirmation. |
+| `--dry-run` | — | flag | No | False | Validate the backup and report what would be restored, without writing. |
+| `--quiet` | `-q` | flag | No | False | Suppress the success line. |
+
+**Notes:**
+
+- A non-empty journal prompts for confirmation by default; pass `-y` to skip the prompt in scripts.
+- If the backup is structurally invalid (root is not a JSON object, or `entries` is not a list), the command refuses to restore and exits with code 2.
+- Per-row issues (bad tags, unparseable timestamps, duplicate ids) are reported as warnings and skipped; the rest is restored.
+- Restoring from an empty backup empties the journal — use `--dry-run` first if you're unsure.
+
+**Examples:**
+
+```bash
+devlog restore ~/archives/devlog-2025-01-15.json
+devlog restore backups/entries-20260829-080713.json -y
+devlog restore some-backup.json --dry-run
+```
+
+---
+
+### `devlog doctor`
+
+Check the journal store for corruption and report a quick health snapshot: file path, size, entry count, days since the most recent entry, validation issues, and the three longest messages.
+
+```
+devlog doctor [OPTIONS]
+```
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--quiet` | `-q` | flag | False | Output a single JSON object with the report. |
+
+**Notes:**
+
+- Exit code: `0` when the store is clean, `1` when validation issues are found (run `devlog repair` to fix), `2` when the file is corrupt or unwritable.
+- "Days since last entry" is computed in UTC.
+- The probe writes a one-byte file inside the data dir to confirm write access; it removes the file before exiting.
+
+**Example output:**
+
+```
+╭─ 🩺 Doctor  ·  all clear ────────────────────────────────────────────────────╮
+│ Path  : /Users/you/.devlog/entries.json                                       │
+│ Exists: yes                                                                   │
+│ Size  : 4.2 KB                                                                │
+│ Writable: yes                                                                 │
+│ Entries: 142                                                                  │
+│ Last entry: today                                                             │
+│                                                                               │
+│ ✔ No validation issues.                                                       │
+│                                                                               │
+│ Longest messages:                                                             │
+│   • a1b2c3d4… — 248 chars                                                     │
+│   • c3d4e5f6… — 192 chars                                                     │
+│   • 9f8e7d6c… — 165 chars                                                     │
+╰───────────────────────────────────────────────────────────────────────────────╯
+```
+
+**Examples:**
+
+```bash
+devlog doctor
+devlog doctor --quiet | jq '{ok, entry_count, issues: (.issues | length)}'
+```
+
+---
+
+## Date filters
+
+`devlog list`, `devlog search`, `devlog export`, and `devlog stats` all accept `--since` and `--until` flags. Bounds are inclusive: `--until 2025-01-15` includes entries written on January 15th.
+
+| Format | Meaning |
+|--------|---------|
+| `YYYY-MM-DD` | That date at 00:00 UTC. As an upper bound, includes the whole day. |
+| `YYYY-MM-DDTHH:MM` | ISO 8601, treated as UTC if no offset. |
+| `YYYY-MM-DDTHH:MM:SSZ` | ISO 8601 with explicit UTC. |
+| `YYYY-MM-DD HH:MM` | Space-separated form, same semantics as `T`. |
+| `today` | Today at 00:00 UTC. |
+| `yesterday` | Yesterday at 00:00 UTC. |
+| `Nd` | N days ago at 00:00 UTC (e.g. `7d`, `30d`). |
+| `Nw` | N weeks ago at 00:00 UTC (e.g. `1w`, `2w`). |
+
+Both bounds may be combined. Entries with unparseable timestamps are silently dropped when any bound is set, since a date filter is meaningless for them.
+
+**Examples:**
+
+```bash
+# Everything logged in 2025
+devlog list --since 2025-01-01 --until 2025-12-31
+
+# Last 7 days, as JSON
+devlog list --since 7d --quiet
+
+# Stats for Q1
+devlog stats --since 2025-01-01 --until 2025-03-31
+
+# Export last month
+devlog export --since 30d -o month.md
 ```
 
 ---
@@ -644,6 +894,72 @@ You can make the variable permanent by adding it to your shell configuration:
 export DEVLOG_DATA_DIR="$HOME/Dropbox/devlog"
 ```
 
+### Themes
+
+devlog's colors are themable. A user theme lives at `~/.devlog/theme.toml` (or `$DEVLOG_DATA_DIR/theme.toml` when set) and overrides individual color roles. Roles you omit use the built-in defaults, so the file is always optional.
+
+```bash
+# See the path to your active theme file
+devlog theme path
+# → /Users/you/.devlog/theme.toml
+
+# See every role and its current value
+devlog theme list
+
+# See a single role
+devlog theme show date
+# → cyan
+
+# Dump a starter theme.toml to STDOUT (all roles commented out, safe template)
+devlog theme show > my-theme.toml
+
+# Install a theme file
+devlog theme set ~/dotfiles/devlog-theme.toml
+# → Theme installed at /Users/you/.devlog/theme.toml (17 roles).
+```
+
+The file format is standard TOML with one `[palette]` section. Each key is a *role* (the UI element to color) and each value is a [Rich style string](https://rich.readthedocs.io/en/stable/appendix/colors.html) — a named color, a hex code, a 256-color index, or a composite like `"bold yellow"`.
+
+```toml
+# ~/.devlog/theme.toml
+[palette]
+date             = "bright_cyan"   # default: "cyan"
+tags             = "white"         # default: "magenta"
+success_border   = "bright_green"  # default: "green"
+match_highlight  = "bold magenta"  # default: "bold yellow"
+id_dim           = "grey50"        # default: "dim white"
+```
+
+The full list of roles:
+
+| Role | Used for | Default |
+|---|---|---|
+| `error_border` | red panel border on errors | `red` |
+| `error_text` | red error text and ✘ icon | `red` |
+| `warning_text` | yellow warning text and ⚠ icon | `yellow` |
+| `info_text` | dim ℹ info line | `dim` |
+| `success_border` | green border on `add` success panel | `green` |
+| `success_title` | green title + ✔ icon on `add` success | `bold green` |
+| `show_border` | cyan border on `show` and stats panels | `cyan` |
+| `delete_border` | red border + ✘ on `delete` | `red` |
+| `edit_border` | blue border + ✎ on `edit` | `blue` |
+| `date` | cyan date cells in tables and panels | `cyan` |
+| `updated` | yellow "Updtd" cells | `yellow` |
+| `tags` | magenta tag cells | `magenta` |
+| `id_dim` | dim short-id cells | `dim white` |
+| `match_highlight` | yellow search-match highlight | `bold yellow` |
+| `banner_version` | version number on `--version` | `bold cyan` |
+| `banner_command` | command names in root help banner | `bold cyan` |
+| `zebra_alt` | alternate-row dim style in `list` | `dim` |
+
+Notes:
+
+- Box styles, icons, and layout are not themable in this version. The theming layer is intentionally limited to colors.
+- A malformed `theme.toml` is non-fatal: devlog prints one warning to STDERR (`Warning: theme file at … is invalid; using default theme.`) and renders with the defaults.
+- Unknown role keys are dropped with a warning per key.
+- `NO_COLOR=1` and non-TTY output always suppress color regardless of the theme.
+- Changes take effect on the next devlog invocation; no daemon or reload needed.
+
 ---
 
 ## Development Setup
@@ -676,6 +992,7 @@ devlog-cli/
 │   ├── __init__.py
 │   ├── cli.py          ← Click entry point, all command definitions
 │   ├── ui.py           ← Rich rendering helpers (panels, tables, errors)
+│   ├── themes.py       ← Theme loader and role contract
 │   ├── storage.py      ← File I/O, JSON read/write, atomic write logic
 │   └── models.py       ← Entry dataclass / TypedDict definition
 ├── tests/
@@ -689,7 +1006,12 @@ devlog-cli/
 │   ├── test_tags.py
 │   ├── test_today_tail_stats.py
 │   ├── test_rename_import_completions_tui.py
-│   └── test_ui.py
+│   ├── test_themes.py
+│   ├── test_ui.py
+│   ├── test_date_range.py
+│   ├── test_repair.py
+│   ├── test_backup_restore.py
+│   └── test_doctor.py
 ├── pyproject.toml
 └── README.md
 ```

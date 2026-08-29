@@ -70,6 +70,8 @@ Running `devlog` with no subcommand, or `devlog --help`, must print the standard
 | `--tag` | `-t` | string, multiple | None | Filter by tag. Multiple flags = AND logic. |
 | `--limit` | `-n` | integer | 20 | Max entries to show. |
 | `--all` |  | flag | False | Override limit and show every entry. |
+| `--since` |  | string | None | Only show entries on/after this date. See "Date filters" below. |
+| `--until` |  | string | None | Only show entries on/before this date. See "Date filters" below. |
 | `--quiet` | `-q` | flag | False | Output raw JSON lines to STDOUT instead of table. |
 
 **Behaviour:**
@@ -112,6 +114,8 @@ Empty state: Print to STDOUT: `No entries found.` (or `No entries match your fil
 | `QUERY` | Positional, required, string. Search term. Case-insensitive substring match against the message field. |
 | `--tag` / `-t` | Option, multiple, string. Optionally narrow results to entries that also match these tags (AND logic). |
 | `--limit` / `-n` | Option, integer, default 20. Max results to display. |
+| `--since` | Option, string, default None. Only show entries on/after this date. |
+| `--until` | Option, string, default None. Only show entries on/before this date. |
 | `--quiet` / `-q` | Flag. Output raw JSON lines to STDOUT. |
 
 **Behaviour:**
@@ -293,6 +297,8 @@ Empty results: Print `No entries matched "<query>".` Exit 0.
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
 | `--quiet` | `-q` | flag | False | Output a single JSON summary. |
+| `--since` | — | string | None | Only include entries on/after this date. See "Date filters" below. |
+| `--until` | — | string | None | Only include entries on/before this date. See "Date filters" below. |
 
 **Behaviour:** Loads all entries, computes:
 - `Total` — entry count.
@@ -378,7 +384,78 @@ JSON quiet output includes `total`, `first`, `last`, `top_tags` (array of `{tag,
 
 ---
 
-### Command 8g — `--interactive` (REPL)
+### Command 8g — `theme` (color theming)
+
+**Purpose:** View or change the active color theme.  
+**Usage:**  
+`devlog theme {list|show|set|path}`
+
+The active theme is a flat mapping of *role* names (each one a UI element) to Rich style strings. The roles are the single source of truth for every color that the renderer emits; box styles, icons, and layout are intentionally not themable in this version.
+
+**File location:** `~/.devlog/theme.toml`, or `$DEVLOG_DATA_DIR/theme.toml` when set. The file is optional — without it, the built-in default palette is used and no warning is printed.
+
+**Subcommands:**
+
+| Subcommand | Behaviour |
+|------------|-----------|
+| `devlog theme list` | Print every role and its current style as a two-column Rich table. Exit 0. |
+| `devlog theme show [ROLE]` | Without arg: dump a starter `theme.toml` (all roles commented out) to STDOUT. With arg: print the value of that single role. Unknown role → exit 1 with a red error panel. |
+| `devlog theme set PATH` | Validate *PATH* as TOML, copy to the active theme path. Unknown roles in the file are dropped with a per-key warning on STDERR. Malformed TOML → exit 1 with a red error panel. |
+| `devlog theme path` | Print the absolute path of the active theme file. Exit 0. |
+
+**Role contract (the values users may set):**
+
+| Role | Used for | Default |
+|------|----------|---------|
+| `error_border` | red border on `print_error` | `red` |
+| `error_text` | red error text and ✘ icon | `red` |
+| `warning_text` | yellow warning text and ⚠ icon | `yellow` |
+| `info_text` | dim ℹ info line | `dim` |
+| `success_border` | green border on `add` success | `green` |
+| `success_title` | green title + ✔ icon on `add` success | `bold green` |
+| `show_border` | cyan border on `show` and stats | `cyan` |
+| `delete_border` | red border + ✘ on `delete` | `red` |
+| `edit_border` | blue border + ✎ on `edit` | `blue` |
+| `date` | cyan date cells in tables and panels | `cyan` |
+| `updated` | yellow "Updtd" cells | `yellow` |
+| `tags` | magenta tag cells | `magenta` |
+| `id_dim` | dim short-id cells | `dim white` |
+| `match_highlight` | yellow search-match highlight | `bold yellow` |
+| `banner_version` | version number on `--version` | `bold cyan` |
+| `banner_command` | command names in root help banner | `bold cyan` |
+| `zebra_alt` | alternate-row dim style in `list` | `dim` |
+
+**Style value format:** Any Rich style string is accepted — named colors (`"red"`, `"bright_cyan"`), hex (`"#ff8800"`), 256-color (`"color(208)"`), true-color triples (`"rgb((255,136,0))"`), or composites (`"bold yellow"`).
+
+**File format (TOML):**
+
+```toml
+[palette]
+date            = "bright_cyan"
+tags            = "white"
+success_border  = "bright_green"
+match_highlight = "bold magenta"
+```
+
+**Error handling:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| `theme.toml` does not exist | (silent — render with defaults) | 0 |
+| `theme.toml` is malformed TOML | STDERR: `Warning: theme file at <path> is invalid (<detail>); using default theme.` Then render with defaults. | 0 |
+| Unknown role key in file | STDERR: `Warning: theme role '<key>' is unknown and will be ignored.` (one line per key). The key is dropped; the rest of the file is applied. | 0 |
+| `theme show <role>` with bad role | Red error panel: `Unknown role "<role>". Run \`devlog theme list\` to see valid roles.` | 1 |
+| `theme set <path>` with bad TOML | Red error panel: `Theme file is invalid TOML: <detail>`. | 1 |
+
+**Precedence rules:**
+
+1. The `NO_COLOR` environment variable (any value) disables color entirely, regardless of theme. (Same rule as in section G. Color disable.)
+2. A non-TTY output stream also disables color, regardless of theme.
+3. The theme is loaded once per process; the cache is keyed on the path returned by `get_theme_path()`.
+
+---
+
+### Command 8h — `--interactive` (REPL)
 
 **Purpose:** Launch an interactive REPL for browsing and adding entries without leaving the prompt.  
 **Usage:**  
@@ -403,6 +480,8 @@ JSON quiet output includes `total`, `first`, `last`, `top_tags` (array of `{tag,
 |--------|-------|------|---------|-------------|
 | `--output` | `-o` | path string | `./devlog-export.md` | Output file path. |
 | `--tag` | `-t` | string, multiple | None | Export only entries matching all specified tags. |
+| `--since` | — | string | None | Only export entries on/after this date. See "Date filters" below. |
+| `--until` | — | string | None | Only export entries on/before this date. See "Date filters" below. |
 | `--quiet` | `-q` | flag | False | Suppress progress output. Print only the output path on success. |
 
 **Behaviour:**
@@ -434,6 +513,128 @@ Fixed the null pointer issue in the auth module.
 |-----------|--------|-----------|
 | Output path unwritable | STDERR: `Error: Cannot write to <path>. Check the path and permissions.` | 2 |
 | No entries exist | STDERR: `Warning: No entries to export.` Exit 0. | 0 |
+
+---
+
+### Command 10 — `repair`
+
+**Purpose:** Validate the on-disk journal and rewrite it to drop malformed rows. Useful when `devlog doctor` reports validation issues or when the file has been hand-edited and broken.  
+**Usage:**  
+`devlog repair [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--dry-run` | — | flag | False | Show issues and what would be dropped, without writing. |
+| `--yes` | `-y` | flag | False | Skip the "drop N entries — continue?" confirmation. |
+| `--backup` / `--no-backup` | — | flag | `--backup` | Write a timestamped backup to `<data-dir>/backups/` before the rewrite. |
+| `--quiet` | `-q` | flag | False | Suppress the summary panel. |
+
+**Behaviour:**
+
+- Validates every entry in `entries.json` against the schema:
+  - Required: `id` (non-empty string), `message` (string), `created_at` (parseable ISO 8601 UTC), `tags` (list of valid tag strings).
+  - Optional: `updated_at` if present must be a parseable ISO 8601 UTC timestamp.
+  - Each tag must match `^[a-z0-9-]+$` and be ≤ 32 chars.
+  - All `id` values must be unique.
+- Categorises problems as: `bad_root`, `missing_field`, `bad_field`, `bad_item`, `bad_timestamp`, `bad_tag`, `duplicate_id`.
+- Builds a *repair plan*: drops unparseable rows, deduplicates ids (first occurrence wins), drops entries with bad tags or bad timestamps.
+- Writes a backup (`<data-dir>/backups/entries-YYYYMMDD-HHMMSS.json`) of the original file when `--backup` is set and the rewrite actually happens.
+- With `--dry-run`: prints the plan and the issues list. Exit 0.
+- Without `--dry-run`: prompts to confirm (unless `-y` is set), then atomically rewrites the file via the same temp-file + `os.replace()` pattern.
+- Exit code: `0` if nothing was dropped, `1` if any entries were dropped.
+- A corrupted JSON file (invalid syntax) is not repairable: the command prints a clear error pointing to `devlog restore` and exits with code 2.
+
+---
+
+### Command 11 — `backup`
+
+**Purpose:** Write a timestamped copy of the journal for safekeeping.  
+**Usage:**  
+`devlog backup [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--output` | `-o` | path | `<data-dir>/backups/entries-YYYYMMDD-HHMMSS.json` | Backup file path. Parent dirs are created if missing. |
+| `--quiet` | `-q` | flag | False | Print only the backup path (no success panel). |
+
+**Behaviour:**
+
+- The backup is a normal `entries.json` (the same shape the app reads on every startup). It can be inspected, edited, and round-tripped through `devlog restore`.
+- Backups default to `<data-dir>/backups/`; that directory is created on first use.
+- Empty journals can be backed up — the resulting file is `{"entries": []}`.
+
+---
+
+### Command 12 — `restore`
+
+**Purpose:** Replace the current journal with the contents of a backup file.  
+**Usage:**  
+`devlog restore PATH [OPTIONS]`
+
+| Argument / Option | Short | Type | Required | Default | Description |
+|-------------------|-------|------|----------|---------|-------------|
+| `PATH` | — | path | Yes | — | Backup file. Must exist and be readable. |
+| `--yes` | `-y` | flag | No | False | Skip the "overwrite current journal?" confirmation. |
+| `--dry-run` | — | flag | No | False | Validate the backup without writing. |
+| `--quiet` | `-q` | flag | No | False | Suppress the success line. |
+
+**Behaviour:**
+
+- Reads and parses the backup file as JSON.
+- If the root is not a JSON object, or `entries` is not a list, the command refuses to restore and exits with code 2.
+- Applies the same repair plan as `devlog repair` to the loaded data: drops unparseable rows, deduplicates ids, drops bad tags. Per-row issues are reported as warnings and skipped.
+- If the current journal is non-empty, prompts for confirmation unless `--yes` is set.
+- Restoring from an empty backup empties the journal.
+
+---
+
+### Command 13 — `doctor`
+
+**Purpose:** Check the journal store for corruption and report a quick health snapshot.  
+**Usage:**  
+`devlog doctor [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--quiet` | `-q` | flag | False | Output a single JSON health report. |
+
+**Behaviour:** Reports:
+- `Path` — absolute path to `entries.json`.
+- `Exists` / `Size` / `Writable` — file state.
+- `Entries` — count of valid (loadable) entries.
+- `Last entry` — days since the most recent entry (UTC), or `—` for an empty store.
+- Validation issues (if any) — same categorisation as `devlog repair`.
+- Top 3 longest messages by character count.
+- A green "all clear" badge when clean, a yellow "attention" badge otherwise.
+
+**Exit codes:**
+
+| Condition | Exit |
+|-----------|------|
+| Store is clean | 0 |
+| Validation issues found (run `devlog repair`) | 1 |
+| Corrupt JSON / unwritable | 2 |
+
+---
+
+### Date filters
+
+The `--since` and `--until` options on `list`, `search`, `export`, and `stats` accept the following forms:
+
+| Format | Meaning |
+|--------|---------|
+| `YYYY-MM-DD` | That date at 00:00 UTC. As an upper bound, includes the whole day (00:00–23:59:59). |
+| `YYYY-MM-DDTHH:MM[:SS]` | ISO 8601, treated as UTC if no offset. |
+| `YYYY-MM-DDTHH:MM:SSZ` | ISO 8601 with explicit UTC. |
+| `YYYY-MM-DD HH:MM[:SS]` | Space-separated form, same semantics as `T`. |
+| `today` | Today at 00:00 UTC. |
+| `yesterday` | Yesterday at 00:00 UTC. |
+| `Nd` | N days ago at 00:00 UTC (e.g. `7d`, `30d`). |
+| `Nw` | N weeks ago at 00:00 UTC (e.g. `1w`, `2w`). |
+
+Both bounds are inclusive. Either or both may be combined. Entries whose `created_at` is unparseable are silently dropped when any bound is set.
+
+Errors (unparseable input) surface a clear message via `click.BadParameter` and exit with code 2.
 
 ---
 
@@ -532,13 +733,27 @@ devlog-cli/
 ├── devlog/
 │   ├── __init__.py
 │   ├── cli.py          ← Click entry point, all command definitions
+│   ├── ui.py           ← Rich rendering helpers (panels, tables, errors)
+│   ├── themes.py       ← Theme loader and role contract
 │   ├── storage.py      ← All file I/O, JSON read/write, atomic write logic
 │   └── models.py       ← Entry dataclass or TypedDict definition
 ├── tests/
 │   ├── test_add.py
 │   ├── test_list.py
 │   ├── test_search.py
-│   └── test_export.py
+│   ├── test_export.py
+│   ├── test_show.py
+│   ├── test_edit.py
+│   ├── test_delete.py
+│   ├── test_tags.py
+│   ├── test_today_tail_stats.py
+│   ├── test_rename_import_completions_tui.py
+│   ├── test_themes.py
+│   ├── test_ui.py
+│   ├── test_date_range.py
+│   ├── test_repair.py
+│   ├── test_backup_restore.py
+│   └── test_doctor.py
 ├── pyproject.toml
 └── README.md
 ```
@@ -549,17 +764,19 @@ devlog-cli/
 
 ### Color coding (consistent across all commands):
 
-| Element | Color |
-|---------|-------|
-| Success messages | Green |
-| Warnings | Yellow |
-| Errors | Red (on STDERR) |
-| Dates / timestamps | Cyan |
-| Updated-at timestamps | Yellow |
-| Tags | Magenta |
-| Entry IDs (full) | Dim white |
-| Highlighted search matches | Bold yellow |
-| Edited-entry accents | Blue |
+| Element | Color | Theme role |
+|---------|-------|------------|
+| Success messages | Green | `success_border` + `success_title` |
+| Warnings | Yellow | `warning_text` |
+| Errors | Red (on STDERR) | `error_border` + `error_text` |
+| Dates / timestamps | Cyan | `date` |
+| Updated-at timestamps | Yellow | `updated` |
+| Tags | Magenta | `tags` |
+| Entry IDs (full) | Dim white | `id_dim` |
+| Highlighted search matches | Bold yellow | `match_highlight` |
+| Edited-entry accents | Blue | `edit_border` |
+
+All colors above are configurable via `devlog theme` and the `theme.toml` file. See Command 8g for the role contract and full override mechanism. Box styles, icons, and layout are intentionally not themable.
 
 ### Icon set:
 
@@ -673,6 +890,6 @@ Claude C must produce a `README.md` containing the following sections in this or
 3. Installation — `pip install .` and `pipx install .` variants
 4. Quick Start — 5–8 lines showing the core daily workflow from first install to first export
 5. Command Reference — Full table for every command with every option, argument, type, default, and description. One section per command.
-6. Configuration — Document `DEVLOG_DATA_DIR` environment variable. Show example usage.
+6. Configuration — Document `DEVLOG_DATA_DIR` environment variable. Show example usage. Include the `Themes` subsection covering `theme.toml` location, format, the role list, and the `devlog theme list|show|set|path` subcommands.
 7. Development Setup — Clone, create venv, install in editable mode (`pip install -e .`), run tests (`pytest`)
 8. License — MIT

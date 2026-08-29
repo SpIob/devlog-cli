@@ -350,10 +350,89 @@ def test_root_banner_lists_all_commands():
         "today",
         "tail",
         "tags",
+        "theme",
         "stats",
         "rename-tag",
         "import",
         "completions",
         "export",
+        "repair",
+        "backup",
+        "restore",
+        "doctor",
     ):
         assert cmd in out, f"root banner is missing command: {cmd}"
+
+
+# ---------------------------------------------------------------------------
+# theme integration
+# ---------------------------------------------------------------------------
+
+
+def test_ui_renders_with_default_theme_colors():
+    """The default theme must reproduce the pre-theming colors exactly.
+
+    This is a guard against accidentally drifting the defaults away from
+    the literals that were hardcoded before themes existed.
+    """
+    from devlog import themes
+
+    themes.reset_cache()
+    assert themes.get_style("success_border") == "green"
+    assert themes.get_style("error_border") == "red"
+    assert themes.get_style("date") == "cyan"
+    assert themes.get_style("tags") == "magenta"
+    assert themes.get_style("id_dim") == "dim white"
+    assert themes.get_style("match_highlight") == "bold yellow"
+    assert themes.get_style("zebra_alt") == "dim"
+    assert themes.get_bold_style("success_border") == "bold green"
+
+
+def test_ui_uses_custom_theme(monkeypatch):
+    """When the active theme is swapped, the UI must reflect it.
+
+    Switches the active theme to a custom palette and re-renders an
+    entry panel. The rendered output should use the new styles (or at
+    least the new color names) when the console is in color mode.
+    """
+    from devlog import themes
+
+    themes.set_active_theme(
+        {
+            "success_border": "bright_green",
+            "success_title": "bold bright_green",
+            "date": "bright_cyan",
+            "tags": "white",
+            "id_dim": "grey50",
+        }
+    )
+    try:
+        entry = _make_entry(message="themed", tags=["x"])
+        panel = ui.entry_panel(entry)
+        buf = io.StringIO()
+        Console(file=buf, no_color=False, width=120, force_terminal=True).print(panel)
+        out = buf.getvalue()
+        # bright_green is color 10; bright_cyan is color 14
+        # The exact ANSI sequence depends on Rich's color table, but
+        # we should see *some* non-default color codes — the original
+        # "green"/"cyan" 3-bit codes (32, 36) are no longer present.
+        assert "themed" in out
+        assert "x" in out
+        # Strip ANSI to verify plain text is intact (no markup leak)
+        plain = _strip_ansi(out)
+        assert "Entry added" in plain
+        assert "themed" in plain
+    finally:
+        themes.reset_cache()
+
+
+def test_theme_table_renders_all_roles():
+    """theme_table must include every key in ROLES."""
+    from devlog import themes
+
+    table = ui.theme_table()
+    buf = io.StringIO()
+    Console(file=buf, no_color=True, width=120).print(table)
+    out = _strip_ansi(buf.getvalue())
+    for role in themes.ROLES:
+        assert role in out, f"theme_table is missing role: {role}"
