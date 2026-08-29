@@ -129,7 +129,271 @@ Empty results: Print `No entries matched "<query>".` Exit 0.
 
 ---
 
-### Command 4 — `export`
+### Command 5 — `show`
+
+**Purpose:** Display a single entry in full detail.  
+**Usage:**  
+`devlog show ID`
+
+| Element | Detail |
+|---------|--------|
+| `ID` | Positional, required, string. Exact id, full UUID, or a unique prefix. |
+| `--quiet` / `-q` | Flag. Output a single raw JSON line instead of the panel. |
+
+**Behaviour:**
+
+- Loads entries, finds the matching entry by exact id or unique prefix.
+- Renders a cyan-bordered Rich panel with the full id, `Date` (cyan), `Updtd` (yellow when set, dim `—` otherwise), `Tags` (magenta), and the full message text (no truncation).
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| Empty / missing id | STDERR: `Error: ID is required.` | 1 |
+| No match | STDERR: `Error: No entry found with id "<id>".` | 1 |
+| Ambiguous prefix | STDERR: `Error: ID prefix "<id>" matches multiple entries: <list>. Use a longer prefix.` | 1 |
+| Storage error | via `_handle_storage_error` | 2 |
+
+---
+
+### Command 6 — `edit`
+
+**Purpose:** Edit an entry's message and/or tags in place.  
+**Usage:**  
+`devlog edit ID [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--message` | `-m` | string | None | Replace the message. |
+| `--tag` | `-t` | string, multiple | None | Replace the tag set with this list. |
+| `--add-tag` | — | string, multiple | None | Append tags. |
+| `--remove-tag` | — | string, multiple | None | Remove tags. |
+| `--quiet` | `-q` | flag | False | Suppress the success panel. |
+
+**Behaviour:**
+
+- If no flag is passed, opens the current message in `$VISUAL` / `$EDITOR` (fallback to `nano`, then `vi`). Read back on save; abort on non-zero exit.
+- Tag operations combine: `--tag` runs first (replaces), then `--add-tag` appends (deduplicated), then `--remove-tag` removes.
+- New tag values are validated using the same rules as `add`.
+- `id` and `created_at` are preserved; `updated_at` is set to the current UTC time on every successful edit.
+- If the new state equals the old state, the command prints `No changes.` and exits 0 without writing.
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| Not found / ambiguous | same as `show` | 1 |
+| Invalid tag | STDERR: `Error: Tag "..." contains invalid characters.` | 1 |
+| Editor exits non-zero | STDERR: `Error: Editor exited abnormally; no changes saved.` | 2 |
+| Storage error | via `_handle_storage_error` | 2 |
+| No editor configured and no flags | STDERR: `Error: No editor configured. Set $VISUAL or $EDITOR, or use --message / --tag flags.` | 1 |
+
+---
+
+### Command 7 — `delete`
+
+**Purpose:** Delete an entry by id.  
+**Usage:**  
+`devlog delete ID [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--yes` | `-y` | flag | False | Skip the confirmation prompt. |
+| `--quiet` | `-q` | flag | False | Suppress the red success panel. |
+
+**Behaviour:**
+
+- By default, prompts with `Delete entry XXXXXXXX ("message snippet")? [y/N]`. Decline to abort (prints `Aborted.`, exit 0). Confirm to delete.
+- Renders a red-bordered panel with the deleted entry's id, date, tags, and struck-through message.
+- Uses the same atomic JSON write as every other write.
+
+**Failure cases:** same as `show`.
+
+---
+
+### Command 8 — `tags`
+
+**Purpose:** List all distinct tags with their usage count and last-used date.  
+**Usage:**  
+`devlog tags [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--sort` | — | choice | `count` | One of `count`, `name`, `recent`. |
+| `--limit` | `-n` | integer | 50 | Maximum tags to show. |
+| `--all` | — | flag | False | Override `--limit`. |
+| `--quiet` | `-q` | flag | False | Output `{tag, count, last_used}` JSON lines. |
+
+**Behaviour:**
+
+- Aggregates all entries. For each tag, counts occurrences and tracks the most recent timestamp as `max(created_at, updated_at)`.
+- Sorts by `--sort` (default: count descending, then tag name ascending).
+- Footer: `Across N entries.`
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| `--limit` not positive | STDERR: `Error: --limit must be a positive integer.` | 1 |
+| No tags | `No tags found.` | 0 |
+
+---
+
+### Command 8a — `today`
+
+**Purpose:** Show entries created today (UTC), newest first.  
+**Usage:**  
+`devlog today [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | `-n` | integer | 50 | Maximum entries to show. |
+| `--quiet` | `-q` | flag | False | Output raw JSON lines. |
+
+**Behaviour:** Filters entries whose `created_at` starts with today's UTC date (`YYYY-MM-DD`), sorts newest first, slices to `--limit`. Renders the same Rich table as `list` with a `Today · N entries` title and today's date as subtitle.
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| `--limit` not positive | STDERR: `Error: --limit must be a positive integer.` | 1 |
+| No entries today | `No entries yet today.` | 0 |
+
+---
+
+### Command 8b — `tail`
+
+**Purpose:** Show the N most recent entries (default 5), newest first.  
+**Usage:**  
+`devlog tail [N] [OPTIONS]`
+
+| Argument / Option | Short | Type | Default | Description |
+|-------------------|-------|------|---------|-------------|
+| `N` | — | integer | 5 | Number of entries to show. |
+| `--tag` | `-t` | string, multiple | None | Filter by tag (AND). |
+| `--quiet` | `-q` | flag | False | Output raw JSON lines. |
+
+**Behaviour:** Loads entries, applies tag filter (AND), sorts newest first, slices to `N`. Renders the same Rich table as `list` with a `Tail · last N of TOTAL` title.
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| `N` not positive | STDERR: `Error: N must be a positive integer.` | 1 |
+| No entries | `No entries found.` | 0 |
+
+---
+
+### Command 8c — `stats`
+
+**Purpose:** Summarize the journal: totals, date range, top 5 tags, last-30-days sparkline.  
+**Usage:**  
+`devlog stats [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--quiet` | `-q` | flag | False | Output a single JSON summary. |
+
+**Behaviour:** Loads all entries, computes:
+- `Total` — entry count.
+- `First` / `Last` — formatted timestamps of oldest/newest.
+- `Span` — number of days from first to last (inclusive, minimum 1).
+- `Avg/day` — `total / span_days`.
+- `Top 5 tags` — most-used tags by occurrence.
+- `Last 30 days` — ASCII sparkline (block characters `▁`–`█`) of entries per day for the last 30 UTC days, oldest left to newest right.
+
+JSON quiet output includes `total`, `first`, `last`, `top_tags` (array of `{tag, count}`), and `last_30_days` (array of `{date, count}`).
+
+**Failure cases:** No entries → `No entries to summarize.` Exit 0.
+
+---
+
+### Command 8d — `rename-tag`
+
+**Purpose:** Rename a tag across every entry in storage.  
+**Usage:**  
+`devlog rename-tag OLD NEW [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--dry-run` | — | flag | False | Show the count of affected entries without writing. |
+| `--quiet` | `-q` | flag | False | Suppress the success line. |
+
+**Behaviour:**
+
+- Validates `NEW` using the same rules as `add` (lowercase, `[a-z0-9-]`, ≤ 32 chars).
+- Loads all entries; for each entry containing `OLD`, replaces `OLD` with `NEW` and dedupes.
+- Sets `updated_at = now` on every affected entry.
+- Persists via the same atomic write as other commands.
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| Invalid `NEW` chars | `Error: Tag "..." contains invalid characters.` | 1 |
+| No entries with `OLD` | `No entries with tag "...".` | 0 |
+| `OLD == NEW` (after normalization) | `OLD and NEW are the same ("..."). No changes made.` | 0 |
+| Storage error | via `_handle_storage_error` | 2 |
+
+---
+
+### Command 8e — `import`
+
+**Purpose:** Import entries from a JSON or Markdown file.  
+**Usage:**  
+`devlog import PATH [OPTIONS]`
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--format` | `-f` | choice | `auto` | `auto`, `json`, or `markdown`. |
+| `--dry-run` | — | flag | False | Show what would be imported without writing. |
+| `--quiet` | `-q` | flag | False | Suppress the summary line. |
+
+**Behaviour:**
+
+- `auto` picks `json` for `*.json` and `markdown` for `*.md`/`.markdown`.
+- **JSON:** expects the native shape `{"entries": [...]}`. Each entry is re-parsed as an `Entry`; a new `id` is always minted to avoid collisions.
+- **Markdown:** parses the `devlog export` format. The heading `## YYYY-MM-DD HH:MM UTC — XXXXXXXX` provides `created_at` (UTC, second precision defaulted to `:00`) and a short id. The body is everything up to the `**Tags:**` line. Tags are split on `,`, lower-cased, stripped. `(none)` / `none` / empty → no tags.
+- **Idempotency:** a candidate is skipped if its `id` already exists, or if `(created_at, message)` already exists in storage.
+
+**Failure cases:**
+
+| Condition | Output | Exit Code |
+|-----------|--------|-----------|
+| `PATH` doesn't exist | Click `Path` error | 2 |
+| Auto-detect fails | `Error: Cannot auto-detect format for "<path>". Use --format=json or --format=markdown.` | 2 |
+| Malformed JSON | `Error: Invalid JSON in <path>: <reason>.` | 2 |
+| Unreadable file | `Error: Cannot read <path>: <reason>.` | 2 |
+| Storage error | via `_handle_storage_error` | 2 |
+
+---
+
+### Command 8f — `completions`
+
+**Purpose:** Print a shell completion script to STDOUT.  
+**Usage:**  
+`devlog completions {bash|zsh|fish}`
+
+**Behaviour:** Prints one of three statically-defined completion scripts. Unknown shell → Click's `UsageError` (exit 2).
+
+---
+
+### Command 8g — `--interactive` (REPL)
+
+**Purpose:** Launch an interactive REPL for browsing and adding entries without leaving the prompt.  
+**Usage:**  
+`devlog --interactive` or `DEVLOG_INTERACTIVE=1 devlog`
+
+**Behaviour:**
+
+- Requires a TTY. Outside a TTY, exits with code 1 and a clear message. (`DEVLOG_INTERACTIVE_FORCE=1` bypasses this for tests.)
+- Reads lines via Rich's `Prompt.ask` until the user types `q`, `quit`, `exit`, or hits `Ctrl-D`/`Ctrl-C`.
+- Each non-empty line is split with `shlex` and dispatched to the underlying `main` Click group in-process, so all subcommands work.
+- The REPL help screen lists every supported command.
+
+---
+
+### Command 9 — `export`
 
 **Purpose:** Export all entries (or a filtered subset) to a Markdown file.  
 **Usage:**  
@@ -182,7 +446,8 @@ Fixed the null pointer issue in the auth module.
   "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "message": "Fixed the null pointer issue in the auth module",
   "tags": ["backend", "auth"],
-  "created_at": "2025-05-11T10:22:00Z"
+  "created_at": "2025-05-11T10:22:00Z",
+  "updated_at": null
 }
 ```
 
@@ -192,6 +457,7 @@ Fixed the null pointer issue in the auth module.
 | `message` | string | Yes | The journal entry body. No length limit enforced, but display truncates at 60 chars. |
 | `tags` | array of strings | Yes (can be empty array) | Normalized lowercase tags. |
 | `created_at` | string | Yes | UTC timestamp in ISO 8601 format: `YYYY-MM-DDTHH:MM:SSZ`. |
+| `updated_at` | string or `null` | No | UTC timestamp in ISO 8601 format. Set by `devlog edit` whenever a successful edit changes the entry. `null` for entries that have never been edited. Backwards compatible — older files without this field load as `null`. |
 
 ### Storage File Structure
 
@@ -289,29 +555,112 @@ devlog-cli/
 | Warnings | Yellow |
 | Errors | Red (on STDERR) |
 | Dates / timestamps | Cyan |
+| Updated-at timestamps | Yellow |
 | Tags | Magenta |
-| Entry IDs | Dim white |
+| Entry IDs (full) | Dim white |
 | Highlighted search matches | Bold yellow |
+| Edited-entry accents | Blue |
+
+### Icon set:
+
+| Icon | Meaning | Where used |
+|------|---------|------------|
+| ✔ | Success | `add` confirmation, `edit` confirmation, `export` completion |
+| ✘ | Error / destructive | error panels, `delete` confirmation |
+| ⚠ | Warning | empty-state warnings (e.g. `export` with no entries) |
+| ℹ | Informational / empty | "No entries found", "No entries match your filters" |
+| ✎ | Edit | `edit` confirmation title |
+
+### `devlog` (no subcommand) output:
+
+A styled banner with a 2-column command table, replacing the default
+Click help block:
+
+```
+devlog  ·  a terminal-based developer journal
+──────────────────────────────────────────────────────────────────────
+  add         Add a new journal entry
+  show        Show a single entry by ID
+  edit        Edit an entry's message and/or tags
+  delete      Delete an entry by ID
+  list        List entries, newest first
+  search      Search entry messages
+  tags        List tags with usage counts
+  export      Export entries to a Markdown file
+
+Run `devlog <command> --help` for details on a specific command.
+```
+
+### `devlog --version` output:
+
+```
+devlog, version 1.0.0
+──────────────────────────────────────────────────────────────────────
+```
 
 ### `devlog add` success output:
 
-Rich panel with green border, checkmark, entry details laid out with labels.
+Green-bordered Rich panel with a `✔ Entry added` title (short ID in dim).
+Aligned rows for Date (cyan), Tags (magenta), Note. Dim italic footer
+hint pointing the user to `devlog list`.
 
 ### `devlog list` output:
 
-Rich table. Columns: ID (8-char truncated UUID), Date (cyan), Tags (magenta, comma-separated), Message (truncated at 60 chars with `…`). Footer line: `Showing N of M entries.`
+Rich table (rounded box, zebra row striping, bold header) with columns:
+ID (8-char UUID prefix, dim white) | Date (cyan) | Tags (magenta, may
+wrap) | Message (truncated to 60 chars with `…`). Table has a bold
+title (`Journal · N entries`) and a bold footer (`Showing N of M
+entries.`). Column widths are computed from the terminal width so the
+table fits between 60 and 160 columns; on narrow terminals the Tags
+column shrinks before the Message column does.
+
+Empty state: dim `ℹ No entries found.` (or `ℹ No entries match your
+filters.` if filters were applied). Exit 0.
 
 ### `devlog search` output:
 
-Same table as `list`. Matching substring in the Message column is wrapped in Rich's `[bold yellow]...[/bold yellow]` markup.
+Same table shape as `list`, with two additions:
+- Title is `Journal · N match` / `Journal · N matches`.
+- Caption (subtitle) is `Query: "<query>"` rendered in dim.
+- The Message cell is **smart-truncated** around the first match: if
+  the matched substring is within 60 visible characters it is
+  highlighted with `[bold yellow]…[/bold yellow]` markup; if it would
+  fall past the truncation point, the cell is built as
+  `prefix…[bold yellow]match[/bold yellow]…suffix` so the hit is
+  always visible.
+
+Empty state: dim `ℹ No entries matched "<query>".`. Exit 0.
 
 ### `devlog export` output:
 
-Rich progress bar on STDERR during write. On completion: green checkmark + output file path. Suppressible with `--quiet`.
+Rich progress bar on STDERR during write (description + bar +
+`completed/total` + elapsed). On completion, a green `✔ Exported N
+entries to <path>` confirmation line. Suppressible with `--quiet`
+(only the path is printed to STDOUT).
+
+### Error output:
+
+Errors are rendered as red-bordered Rich panels titled `Error` with a
+bold red `✘` icon and red body text, written to STDERR.
+
+### Color disable:
+
+Color is automatically disabled when:
+- The `NO_COLOR` environment variable is set (any value) — see
+  https://no-color.org.
+- The output stream (STDOUT or STDERR) is not a TTY (e.g. when piped
+  to `less`, a file, or another process).
+
+This means scripts and CI logs that capture devlog output will receive
+plain text without ANSI escape codes, while interactive terminal use
+gets full styling.
 
 ### 80-character compatibility:
 
-All table layouts must be tested at 80-char width. No column may force horizontal scroll at this width. Truncation is preferred over wrapping.
+All table layouts must render without horizontal scroll at 80 columns.
+Long messages wrap inside the Message column rather than overflowing
+the table. Truncation with `…` is applied within the cell, not at the
+column edge, so the table box never widens beyond the terminal.
 
 ---
 

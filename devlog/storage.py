@@ -140,3 +140,80 @@ def add_entry(new_entry: Entry) -> None:
     entries = load_entries()
     entries.append(new_entry)
     save_entries(entries)
+
+
+def find_entry_by_id(entries: List[Entry], id_prefix: str) -> Entry | None:
+    """Find an entry by exact id or unique short-id prefix.
+
+    Search order:
+        1. Exact full id match.
+        2. Unique prefix match (case-insensitive, must be unique among all entries).
+
+    Args:
+        entries:   list of Entry objects to search.
+        id_prefix: the id or prefix provided by the user.
+
+    Returns:
+        The matching Entry, or ``None`` if no match / ambiguous.
+    """
+    if not id_prefix:
+        return None
+
+    needle = id_prefix.lower()
+    exact = [e for e in entries if e.id.lower() == needle]
+    if exact:
+        return exact[0]
+
+    matches = [e for e in entries if e.id.lower().startswith(needle)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def find_entry_id_prefix_matches(entries: List[Entry], id_prefix: str) -> List[Entry]:
+    """Return all entries whose id starts with the given prefix (case-insensitive)."""
+    if not id_prefix:
+        return []
+    needle = id_prefix.lower()
+    return [e for e in entries if e.id.lower().startswith(needle)]
+
+
+def update_entry(updated: Entry) -> bool:
+    """Replace an entry in storage by id, preserving insertion order.
+
+    Args:
+        updated: the new Entry state. Must have the same id as the existing entry.
+
+    Returns:
+        True if a matching entry was found and updated; False otherwise.
+
+    Raises:
+        StoragePermissionError: if the file cannot be written.
+    """
+    entries = load_entries()
+    for i, e in enumerate(entries):
+        if e.id == updated.id:
+            entries[i] = updated
+            save_entries(entries)
+            return True
+    return False
+
+
+def delete_entry(entry_id: str) -> bool:
+    """Remove an entry from storage by id.
+
+    Args:
+        entry_id: the full id of the entry to delete.
+
+    Returns:
+        True if an entry was removed; False if not found.
+
+    Raises:
+        StoragePermissionError: if the file cannot be written.
+    """
+    entries = load_entries()
+    new_entries = [e for e in entries if e.id != entry_id]
+    if len(new_entries) == len(entries):
+        return False
+    save_entries(new_entries)
+    return True
