@@ -3,7 +3,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date as _date, datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -483,7 +483,6 @@ def default_backup_filename(now: Optional[datetime] = None) -> str:
     Args:
         now: optional datetime to use; defaults to ``datetime.now(UTC)``.
     """
-    from datetime import timezone
     if now is None:
         now = datetime.now(tz=timezone.utc)
     elif now.tzinfo is None:
@@ -514,17 +513,14 @@ def local_date_for(iso: str, tz) -> "date":
         exists for the *read* side, where we'd rather show a row in a
         wrong bucket than crash.
     """
-    import datetime as _dt
-    from datetime import timezone as _tz
-
     if not iso:
-        return _dt.date(1970, 1, 1)
+        return _date(1970, 1, 1)
     try:
-        dt = _dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     except (ValueError, TypeError, AttributeError):
-        return _dt.date(1970, 1, 1)
+        return _date(1970, 1, 1)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=_tz.utc)
+        dt = dt.replace(tzinfo=timezone.utc)
     if tz is not None:
         dt = dt.astimezone(tz)
     return dt.date()
@@ -553,3 +549,12 @@ def _resolve_zoneinfo(tz_name: str):
         return ZoneInfo(tz_name)
     except ZoneInfoNotFoundError as exc:
         raise ValueError(str(exc)) from exc
+
+
+def utc_now_iso() -> str:
+    """Return the current UTC time as a ``YYYY-MM-DDTHH:MM:SSZ`` string.
+
+    Centralised so every "stamp an entry updated_at" call site produces
+    the same format and the on-disk contract has one definition.
+    """
+    return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

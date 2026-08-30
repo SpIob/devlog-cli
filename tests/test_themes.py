@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 import tomllib
+from click.testing import CliRunner
 
 from devlog import themes
+from devlog.cli import main
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +31,16 @@ def _clean_theme_cache(tmp_path, monkeypatch):
     themes.reset_cache()
 
 
+@pytest.fixture()
+def theme_runner() -> CliRunner:
+    """A ``CliRunner`` ready to invoke ``main`` for theme CLI tests.
+
+    Returns a fresh instance per test so ``runner.invoke`` results are
+    not shared across tests.
+    """
+    return CliRunner()
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -46,7 +58,13 @@ def test_default_theme_covers_every_role():
 
 
 def test_default_theme_values_match_pre_theming_strings():
-    """Defaults must reproduce the previously hardcoded colors verbatim."""
+    """Defaults must reproduce the previously hardcoded colors verbatim.
+
+    The keys in this dict are the original pre-theming roles — any new
+    roles added later (see :data:`themes.ROLES`) are tested separately
+    in :func:`test_default_theme_new_roles_have_defaults` so this
+    guard stays a stable byte-for-byte check.
+    """
     expected = {
         "error_border": "red",
         "error_text": "red",
@@ -71,7 +89,29 @@ def test_default_theme_values_match_pre_theming_strings():
         "heatmap_l3": "color(40)",
         "heatmap_l4": "color(46)",
     }
-    assert themes.DEFAULT_THEME == expected
+    for role, value in expected.items():
+        assert themes.DEFAULT_THEME[role] == value, (
+            f"default for {role!r} drifted from {value!r} to "
+            f"{themes.DEFAULT_THEME[role]!r}"
+        )
+
+
+def test_default_theme_new_roles_have_defaults():
+    """Roles added after the original theme was frozen must still have
+    a non-empty default. Guards against accidentally dropping a new
+    role from :data:`themes.DEFAULT_THEME` while editing the module.
+    """
+    new_roles = (
+        "success_text",
+        "prompt_border",
+        "table_caption",
+        "table_footer",
+        "sparkline",
+        "heatmap_base",
+    )
+    for role in new_roles:
+        assert role in themes.DEFAULT_THEME, f"new role {role!r} missing default"
+        assert themes.DEFAULT_THEME[role], f"new role {role!r} has empty default"
 
 
 # ---------------------------------------------------------------------------
@@ -320,68 +360,35 @@ def test_write_default_theme_creates_parent_directories(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_theme_cli_list(monkeypatch, tmp_path):
-    from click.testing import CliRunner
-
-    from devlog.cli import main
-
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    themes.reset_cache()
-    runner = CliRunner()
-    result = runner.invoke(main, ["theme", "list"])
+def test_theme_cli_list(theme_runner):
+    result = theme_runner.invoke(main, ["theme", "list"])
     assert result.exit_code == 0
     assert "Active theme" in result.output
     for role in ("date", "tags", "success_border"):
         assert role in result.output
 
 
-def test_theme_cli_path(monkeypatch, tmp_path):
-    from click.testing import CliRunner
-
-    from devlog.cli import main
-
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    runner = CliRunner()
-    result = runner.invoke(main, ["theme", "path"])
+def test_theme_cli_path(theme_runner, tmp_path):
+    result = theme_runner.invoke(main, ["theme", "path"])
     assert result.exit_code == 0
     assert "theme.toml" in result.output
-    assert str(tmp_path / "d") in result.output
+    assert str(tmp_path / "devlog_data") in result.output
 
 
-def test_theme_cli_show_default(monkeypatch, tmp_path):
-    from click.testing import CliRunner
-
-    from devlog.cli import main
-
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    themes.reset_cache()
-    runner = CliRunner()
-    result = runner.invoke(main, ["theme", "show", "date"])
+def test_theme_cli_show_default(theme_runner):
+    result = theme_runner.invoke(main, ["theme", "show", "date"])
     assert result.exit_code == 0
     assert result.output.strip() == "cyan"
 
 
-def test_theme_cli_show_unknown_role(monkeypatch, tmp_path):
-    from click.testing import CliRunner
-
-    from devlog.cli import main
-
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    runner = CliRunner()
-    result = runner.invoke(main, ["theme", "show", "not_a_real_role"])
+def test_theme_cli_show_unknown_role(theme_runner):
+    result = theme_runner.invoke(main, ["theme", "show", "not_a_real_role"])
     assert result.exit_code == 1
     assert "Unknown role" in result.output
 
 
-def test_theme_cli_show_full_palette_is_starter_toml(monkeypatch, tmp_path):
-    from click.testing import CliRunner
-
-    from devlog.cli import main
-
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    themes.reset_cache()
-    runner = CliRunner()
-    result = runner.invoke(main, ["theme", "show"])
+def test_theme_cli_show_full_palette_is_starter_toml(theme_runner):
+    result = theme_runner.invoke(main, ["theme", "show"])
     assert result.exit_code == 0
     # The full dump is a TOML template — the [palette] header must be
     # present and every role must be mentioned (commented or otherwise).
@@ -390,17 +397,10 @@ def test_theme_cli_show_full_palette_is_starter_toml(monkeypatch, tmp_path):
         assert role in result.output
 
 
-def test_theme_cli_set_installs_file(monkeypatch, tmp_path):
-    from click.testing import CliRunner
-
-    from devlog.cli import main
-
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    themes.reset_cache()
+def test_theme_cli_set_installs_file(theme_runner, tmp_path):
     src = tmp_path / "my-theme.toml"
     src.write_text('[palette]\ndate = "red"\n', encoding="utf-8")
-    runner = CliRunner()
-    result = runner.invoke(main, ["theme", "set", str(src)])
+    result = theme_runner.invoke(main, ["theme", "set", str(src)])
     assert result.exit_code == 0
     assert "installed" in result.output.lower()
 
@@ -411,34 +411,20 @@ def test_theme_cli_set_installs_file(monkeypatch, tmp_path):
     assert themes.get_active_theme()["date"] == "red"
 
 
-def test_theme_cli_set_rejects_bad_toml(monkeypatch, tmp_path):
-    from click.testing import CliRunner
-
-    from devlog.cli import main
-
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    themes.reset_cache()
+def test_theme_cli_set_rejects_bad_toml(theme_runner, tmp_path):
     src = tmp_path / "bad.toml"
     src.write_text("this is not toml [[[", encoding="utf-8")
-    runner = CliRunner()
-    result = runner.invoke(main, ["theme", "set", str(src)])
+    result = theme_runner.invoke(main, ["theme", "set", str(src)])
     assert result.exit_code == 1
     assert "invalid" in result.output.lower() or "error" in result.output.lower()
 
 
-def test_theme_cli_set_warns_on_unknown_roles(monkeypatch, tmp_path):
-    from click.testing import CliRunner
-
-    from devlog.cli import main
-
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    themes.reset_cache()
+def test_theme_cli_set_warns_on_unknown_roles(theme_runner, tmp_path):
     src = tmp_path / "mixed.toml"
     src.write_text(
         '[palette]\ndate = "red"\nmade_up = "blue"\n', encoding="utf-8"
     )
-    runner = CliRunner()
-    result = runner.invoke(main, ["theme", "set", str(src)])
+    result = theme_runner.invoke(main, ["theme", "set", str(src)])
     assert result.exit_code == 0
     assert "made_up" in result.output
     # And the unknown key was not actually installed

@@ -148,7 +148,7 @@ Empty results: Print `No entries matched "<query>".` Exit 0.
 **Behaviour:**
 
 - Loads entries, finds the matching entry by exact id or unique prefix.
-- Renders a cyan-bordered Rich panel with the full id, `Date` (cyan), `Updtd` (yellow when set, dim `—` otherwise), `Tags` (magenta), and the full message text (no truncation).
+- Renders a cyan-bordered Rich panel with the full id, `Date` (cyan), `Updated` (yellow when set, dim `—` otherwise), `Tags` (magenta), and the full message text (no truncation).
 
 **Failure cases:**
 
@@ -555,7 +555,7 @@ The active theme is a flat mapping of *role* names (each one a UI element) to Ri
 | `delete_border` | red border + ✘ on `delete` | `red` |
 | `edit_border` | blue border + ✎ on `edit` | `blue` |
 | `date` | cyan date cells in tables and panels | `cyan` |
-| `updated` | yellow "Updtd" cells | `yellow` |
+| `updated` | yellow "Updated" cells | `yellow` |
 | `tags` | magenta tag cells | `magenta` |
 | `id_dim` | dim short-id cells | `dim white` |
 | `match_highlight` | yellow search-match highlight | `bold yellow` |

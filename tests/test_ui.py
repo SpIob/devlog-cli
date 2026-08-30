@@ -82,7 +82,6 @@ def test_print_info_uses_dim_info_icon():
 def test_entry_panel_contains_key_fields():
     entry = _make_entry(message="Fixed auth bug", tags=["backend", "security"])
     panel = ui.entry_panel(entry)
-    rendered = _capture(console := Console(file=io.StringIO(), no_color=True, width=120).print, panel) if False else None
 
     # Render the panel via the standard helper but capture into a fresh console.
     buf = io.StringIO()
@@ -532,3 +531,52 @@ def test_theme_table_renders_all_roles():
     out = _strip_ansi(buf.getvalue())
     for role in themes.ROLES:
         assert role in out, f"theme_table is missing role: {role}"
+
+
+# ---------------------------------------------------------------------------
+# success_line / destructive_line / dry_run_line
+# ---------------------------------------------------------------------------
+
+
+def test_success_line_includes_check_icon():
+    line = ui.success_line("Did the thing.")
+    assert "✔" in line.plain
+    assert "Did the thing." in line.plain
+
+
+def test_destructive_line_includes_cross_icon():
+    line = ui.destructive_line("Removed the thing.")
+    assert "✘" in line.plain
+    assert "Removed the thing." in line.plain
+
+
+def test_dry_run_line_starts_with_dry_run():
+    line = ui.dry_run_line("would skip 3 entries.")
+    assert "DRY RUN" in line.plain
+    assert "would skip 3 entries." in line.plain
+
+
+def test_success_line_appends_styled_segments():
+    """The helper returns a Text that callers can extend with extra
+    segments (e.g. a bold path), and the appended segment survives."""
+    line = ui.success_line("Backed up 3 entries to ")
+    line.append("/tmp/backup.json", style="bold")
+    out = line.plain
+    assert "Backed up 3 entries to" in out
+    assert "/tmp/backup.json" in out
+
+
+def test_success_line_uses_bold_icon_and_border_text():
+    """The icon is the bold variant of success_title; the body uses
+    success_border. This keeps the typography consistent with the
+    delete/edit panels, where the icon style and the border style are
+    distinct roles."""
+    line = ui.success_line("Done.")
+    # The icon segment is index 0; the text segment is index 1.
+    icon_style = line.spans[0].style
+    text_style = line.spans[1].style if len(line.spans) > 1 else None
+    assert icon_style is not None
+    assert "bold" in icon_style
+    # The body is the non-bold variant.
+    assert text_style is not None
+    assert "bold" not in text_style

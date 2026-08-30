@@ -39,6 +39,41 @@ TAG_RE = re.compile(r"^[a-z0-9\-]+$")
 MAX_TAG_LENGTH = 32
 MAX_TAGS = 10
 
+# Single source of truth for the command list. Drives:
+#   * `devlog root_banner` (printed when no subcommand is given)
+#   * the bash / zsh / fish completion scripts (printed by
+#     `devlog completions <shell>`)
+# Each tuple is (name, one-line description) in display order.
+# Subcommands of grouped commands (e.g. `theme list`, `theme show`)
+# are listed as the parent name only; completion for the children
+# is handled in the per-shell snippets.
+COMMANDS: list[tuple[str, str]] = [
+    ("add", "Add a new journal entry"),
+    ("show", "Show a single entry by ID"),
+    ("edit", "Edit an entry's message and/or tags"),
+    ("delete", "Delete an entry by ID"),
+    ("list", "List entries, newest first"),
+    ("search", "Search entry messages"),
+    ("today", "Show today's entries"),
+    ("yesterday", "Show yesterday's entries"),
+    ("week", "Show the last 7 days"),
+    ("tail", "Show the N most recent entries"),
+    ("tags", "List tags with usage counts"),
+    ("tag", "Show or delete entries with a tag"),
+    ("merge-tag", "Merge two tags across all entries"),
+    ("rename-tag", "Rename a tag across all entries"),
+    ("theme", "View or change the active color theme"),
+    ("stats", "Summarize the journal"),
+    ("calendar", "Show a year-grid heatmap of activity"),
+    ("import", "Import entries from a JSON or Markdown file"),
+    ("export", "Export entries to a Markdown or JSON file"),
+    ("completions", "Print a shell completion script"),
+    ("repair", "Inspect and repair the on-disk journal store"),
+    ("backup", "Write a timestamped copy of the journal"),
+    ("restore", "Restore the journal from a backup file"),
+    ("doctor", "Check the journal store for corruption"),
+]
+
 console = ui.console
 err_console = ui.err_console
 
@@ -128,10 +163,11 @@ def _resolve_local_tz():
           fallback to UTC after a typo would mask the real configuration
           problem.
 
-    The function imports :mod:`zoneinfo` lazily so that environments
-    without it (theoretical; py3.9+ has it) don't pay the import cost.
-    The ``tzdata`` package is a small dependency that provides IANA
-    data on Windows and as a fallback elsewhere.
+    The function delegates the actual IANA-name → ``ZoneInfo``
+    resolution to :func:`devlog.storage._resolve_zoneinfo` so the
+    lazy import lives in one place. The ``tzdata`` package is a
+    small dependency that provides IANA data on Windows and as a
+    fallback elsewhere.
     """
     raw = os.environ.get("DEVLOG_TZ")
     if not raw:
@@ -382,6 +418,199 @@ def _handle_storage_error(exc: StorageError) -> None:
     sys.exit(2)
 
 
+def _resolve_entry_by_id_or_exit(all_entries: list[Entry], entry_id: str) -> Entry:
+    """Resolve an id (full or unique short prefix) to an Entry or exit with code 1.
+
+    Prints a user-facing error and calls ``sys.exit(1)`` when no entry
+    matches or the prefix is ambiguous. Centralises the exact same
+    resolution dance that ``show``, ``edit`` and ``delete`` previously
+    inlined three times.
+    """
+    match = storage.find_entry_by_id(all_entries, entry_id)
+    if match is not None:
+        return match
+    # Distinguish "not found" from "ambiguous"
+    candidates = storage.find_entry_id_prefix_matches(all_entries, entry_id)
+    if len(candidates) > 1:
+        short_ids = ", ".join(e.short_id for e in candidates)
+        ui.print_error(
+            f'ID prefix "{entry_id}" matches multiple entries: {short_ids}. '
+            "Use a longer prefix."
+        )
+    else:
+        ui.print_error(f'No entry found with id "{entry_id}".')
+    sys.exit(1)
+
+
+def _parse_since_until(
+    since: str | None, until: str | None
+) -> tuple[datetime.datetime | None, datetime.datetime | None]:
+    """Parse a ``(since, until)`` CLI pair into UTC datetimes.
+
+    Both bounds default to ``None`` (no bound). The local-zone handling
+    mirrors :func:`_parse_date_bound` — when ``DEVLOG_TZ`` is set, naive
+    date inputs are interpreted in that zone.
+    """
+    tz = _resolve_local_tz()
+    since_dt = _parse_date_bound(since, tz=tz) if since else None
+    until_dt = _parse_date_bound(until, is_upper=True, tz=tz) if until else None
+    return since_dt, until_dt
+
+
+def _print_jsonl(entries) -> None:
+    """Print *entries* as one JSON object per line (the ``--quiet`` contract)."""
+    for entry in entries:
+        print(json.dumps(dataclasses.asdict(entry), ensure_ascii=False))
+
+
+def _require_positive_int(name: str, value: int) -> None:
+    """Validate a positive-int CLI option; exit 1 with the same message CLI users already see.
+
+    The default message is ``f"{name} must be a positive integer."`` which
+    preserves the contract tests assert against (e.g. ``"--limit must be
+    a positive integer."``).
+    """
+    if value <= 0:
+        ui.print_error(f"{name} must be a positive integer.")
+        sys.exit(1)
+
+
+def _filter_by_local_window(
+    entries: list[Entry],
+    end_date: "datetime.date",
+    days: int,
+    tz,
+) -> list[Entry]:
+    """Return entries whose *local* date falls in ``[end_date - days, end_date]``.
+
+    Centralises the tz-vs-UTC fork that ``today`` / ``yesterday`` /
+    ``week`` previously inlined three times. When ``tz`` is set, the
+    local-date bucketing uses ``storage.local_date_for``; otherwise it
+    falls back to the UTC date derived from ``created_at``.
+    """
+    import datetime as _dt
+
+    start_date = end_date - _dt.timedelta(days=days)
+    out = []
+    for entry in entries:
+        if tz is not None:
+            local_d = storage.local_date_for(entry.created_at, tz)
+        else:
+            # UTC fallback — inline the same epoch-on-failure contract
+            # as ``storage.local_date_for`` so unreadable timestamps
+            # silently land in 1970-01-01 (and thus never match a recent
+            # window) rather than crashing the command.
+            try:
+                dt = datetime.datetime.fromisoformat(
+                    entry.created_at.replace("Z", "+00:00")
+                )
+                local_d = dt.date()
+            except (ValueError, TypeError, AttributeError):
+                local_d = datetime.date(1970, 1, 1)
+        if start_date <= local_d <= end_date:
+            out.append(entry)
+    return out
+
+
+def _validate_new_tag(raw: str) -> str:
+    """Validate a user-supplied NEW tag and return its normalised form.
+
+    Runs the same rules as :func:`_validate_tags` (a single-tag tuple)
+    but with the more specific error messages the ``rename-tag`` /
+    ``merge-tag`` commands have always emitted. Used by both commands so
+    a bad NEW value fails fast with a clear error, before any storage
+    I/O happens.
+
+    Args:
+        raw: the raw tag string as the user typed it.
+
+    Returns:
+        The normalised (stripped, lowercased) tag.
+
+    Raises:
+        click.UsageError: on empty / invalid-chars / over-length input.
+    """
+    if not raw or not raw.strip():
+        raise click.UsageError("NEW tag cannot be empty.")
+    # Pre-validate the *raw* (un-normalised) string so an invalid tag
+    # like ``INFRA`` (uppercase) is rejected with a clear error rather
+    # than silently normalised to ``infra`` and then triggering the
+    # "OLD and NEW are the same" no-op path when the user actually
+    # meant a different value. ``_validate_tags`` lowercases before
+    # matching, so the regex check there would never see the
+    # uppercase letters and would happily return ``infra``.
+    if not TAG_RE.fullmatch(raw.strip()):
+        raise click.UsageError(
+            f'Tag "{raw}" contains invalid characters. '
+            "Use lowercase letters, numbers, and hyphens only."
+        )
+    if len(raw.strip()) > MAX_TAG_LENGTH:
+        raise click.UsageError(
+            f'Tag "{raw}" exceeds maximum length of {MAX_TAG_LENGTH} characters.'
+        )
+    norm = _validate_tags((raw,))
+    return norm[0]
+
+
+def _rewrite_tag_in_entry(entry: Entry, old: str, new: str) -> None:
+    """Replace every occurrence of ``old`` with ``new`` in ``entry.tags``.
+
+    Handles dedup: if ``entry.tags`` already contains ``new``, a
+    duplicate is never inserted (i.e. ``rename`` is idempotent and
+    ``merge`` does not double-tag entries that already carry ``new``).
+    Stamps ``entry.updated_at`` so the change is visible in ``tags``
+    and ``stats``.
+    """
+    new_tags: list[str] = []
+    for t in entry.tags:
+        if t == old or t == new:
+            if new not in new_tags:
+                new_tags.append(new)
+        else:
+            new_tags.append(t)
+    entry.tags = new_tags
+    entry.updated_at = storage.utc_now_iso()
+
+
+def _print_tag_op_dry_run(text: str) -> None:
+    """Print a yellow DRY RUN preview line for tag-mutation commands."""
+    console.print(ui.dry_run_line(text))
+
+
+def _print_tag_op_success(text: str) -> None:
+    """Print a green ✔ confirmation line for tag-mutation commands."""
+    console.print(ui.success_line(text))
+    """Return entries whose *local* date falls in ``[end_date - days, end_date]``.
+
+    Centralises the tz-vs-UTC fork that ``today`` / ``yesterday`` /
+    ``week`` previously inlined three times. When ``tz`` is set, the
+    local-date bucketing uses ``storage.local_date_for``; otherwise it
+    falls back to the UTC date derived from ``created_at``.
+    """
+    import datetime as _dt
+
+    start_date = end_date - _dt.timedelta(days=days)
+    out = []
+    for entry in entries:
+        if tz is not None:
+            local_d = storage.local_date_for(entry.created_at, tz)
+        else:
+            # UTC fallback — inline the same epoch-on-failure contract
+            # as ``storage.local_date_for`` so unreadable timestamps
+            # silently land in 1970-01-01 (and thus never match a recent
+            # window) rather than crashing the command.
+            try:
+                dt = datetime.datetime.fromisoformat(
+                    entry.created_at.replace("Z", "+00:00")
+                )
+                local_d = dt.date()
+            except (ValueError, TypeError, AttributeError):
+                local_d = datetime.date(1970, 1, 1)
+        if start_date <= local_d <= end_date:
+            out.append(entry)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -451,7 +680,7 @@ def _interactive_repl() -> None:
     while True:
         try:
             line = Prompt.ask(
-                f"[{ui._s('tags')}]devlog>[/{ui._s('tags')}]"
+                f"[{ui._s('prompt_border')}]devlog>[/{ui._s('prompt_border')}]"
             ).strip()
         except (EOFError, KeyboardInterrupt):
             console.print()  # newline
@@ -617,9 +846,8 @@ def list_entries(
     quiet: bool,
 ) -> None:
     """List journal entries, newest first."""
-    if not show_all and limit <= 0:
-        ui.print_error("--limit must be a positive integer.")
-        sys.exit(1)
+    if not show_all:
+        _require_positive_int("--limit", limit)
 
     try:
         all_entries = storage.load_entries()
@@ -628,9 +856,7 @@ def list_entries(
         return  # unreachable; silences type-checker
 
     filtered = _filter_by_tags(all_entries, tags)
-    tz = _resolve_local_tz()
-    since_dt = _parse_date_bound(since, tz=tz) if since else None
-    until_dt = _parse_date_bound(until, is_upper=True, tz=tz) if until else None
+    since_dt, until_dt = _parse_since_until(since, until)
     filtered = _filter_by_date(filtered, since_dt, until_dt)
     filtered.sort(key=lambda e: e.created_at, reverse=True)
 
@@ -638,10 +864,7 @@ def list_entries(
     shown = filtered if show_all else filtered[:limit]
 
     if quiet:
-        import dataclasses
-
-        for entry in shown:
-            print(json.dumps(dataclasses.asdict(entry), ensure_ascii=False))
+        _print_jsonl(shown)
         return
 
     if total == 0:
@@ -687,9 +910,7 @@ def search(
         ui.print_error("QUERY cannot be empty.")
         sys.exit(1)
 
-    if limit <= 0:
-        ui.print_error("--limit must be a positive integer.")
-        sys.exit(1)
+    _require_positive_int("--limit", limit)
 
     try:
         all_entries = storage.load_entries()
@@ -698,9 +919,7 @@ def search(
         return
 
     filtered = _filter_by_tags(all_entries, tags)
-    tz = _resolve_local_tz()
-    since_dt = _parse_date_bound(since, tz=tz) if since else None
-    until_dt = _parse_date_bound(until, is_upper=True, tz=tz) if until else None
+    since_dt, until_dt = _parse_since_until(since, until)
     filtered = _filter_by_date(filtered, since_dt, until_dt)
     matched = [e for e in filtered if query.lower() in e.message.lower()]
     matched.sort(key=lambda e: e.created_at, reverse=True)
@@ -709,10 +928,7 @@ def search(
     shown = matched[:limit]
 
     if quiet:
-        import dataclasses
-
-        for entry in shown:
-            print(json.dumps(dataclasses.asdict(entry), ensure_ascii=False))
+        _print_jsonl(shown)
         return
 
     if total == 0:
@@ -748,23 +964,9 @@ def show(id: str, quiet: bool) -> None:
         _handle_storage_error(exc)
         return
 
-    match = storage.find_entry_by_id(all_entries, id)
-    if match is None:
-        # Distinguish "not found" from "ambiguous"
-        candidates = storage.find_entry_id_prefix_matches(all_entries, id)
-        if len(candidates) > 1:
-            short_ids = ", ".join(e.id[: ui.ID_DISPLAY_LEN] for e in candidates)
-            ui.print_error(
-                f'ID prefix "{id}" matches multiple entries: {short_ids}. '
-                "Use a longer prefix."
-            )
-        else:
-            ui.print_error(f'No entry found with id "{id}".')
-        sys.exit(1)
+    match = _resolve_entry_by_id_or_exit(all_entries, id)
 
     if quiet:
-        import dataclasses
-
         print(json.dumps(dataclasses.asdict(match), ensure_ascii=False))
         return
 
@@ -774,6 +976,88 @@ def show(id: str, quiet: bool) -> None:
 # ---------------------------------------------------------------------------
 # edit
 # ---------------------------------------------------------------------------
+
+
+def _edit_compute_tags(
+    current: list[str],
+    set_tags: Tuple[str, ...],
+    add_tags: Tuple[str, ...],
+    remove_tags: Tuple[str, ...],
+) -> list[str]:
+    """Compute the new tag list from ``current`` plus the three merge ops.
+
+    Order: ``--tag`` (set) replaces, then ``--add-tag`` unions, then
+    ``--remove-tag`` subtracts. Tag-validation errors propagate to the
+    caller as :class:`click.UsageError`.
+    """
+    out = list(current)
+    if set_tags:
+        try:
+            out = _validate_tags(set_tags)
+        except click.UsageError as exc:
+            ui.print_error(str(exc))
+            sys.exit(1)
+    if add_tags:
+        try:
+            additions = _validate_tags(add_tags)
+        except click.UsageError as exc:
+            ui.print_error(str(exc))
+            sys.exit(1)
+        for t in additions:
+            if t not in out:
+                out.append(t)
+    if remove_tags:
+        to_remove = {t.strip().lower() for t in remove_tags}
+        out = [t for t in out if t not in to_remove]
+    return out
+
+
+def _edit_resolve_at(
+    match: Entry, at: str | None, *, yes: bool
+) -> str:
+    """Return the new ``created_at`` string after applying ``--at`` (if any).
+
+    Prompts the user for confirmation when ``--at`` would change the
+    timestamp; aborts (returns ``match.created_at`` unchanged) on "no"
+    or when ``at`` is ``None``. On bad input, prints an error and
+    exits with code 2.
+    """
+    if at is None:
+        return match.created_at
+    try:
+        parsed = _parse_timestamp(at, tz=_resolve_local_tz())
+    except click.BadParameter as exc:
+        ui.print_error(str(exc))
+        sys.exit(2)
+    new_created_at = parsed.astimezone(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+    if new_created_at != match.created_at and not yes:
+        old_h = ui._format_dt(match.created_at)
+        new_h = ui._format_dt(new_created_at)
+        if not click.confirm(
+            f"Change created_at of {match.short_id} from {old_h} to {new_h}?",
+            default=False,
+        ):
+            ui.print_info("Aborted.")
+            return match.created_at
+    return new_created_at
+
+
+def _edit_resolve_message(
+    match: Entry, new_message: str | None, *, from_flag: bool
+) -> str | None:
+    """Pick the final message body for the edit, validating it.
+
+    Returns the message to persist, or ``None`` to signal "the user
+    asked for an empty body via the flag, which is rejected". The
+    editor path is allowed to produce an empty body (the user might
+    be saving a blank note on purpose); the flag path is not.
+    """
+    if from_flag and new_message is not None and not new_message.strip():
+        ui.print_error("MESSAGE cannot be empty.")
+        sys.exit(1)
+    return new_message if new_message is not None else match.message
 
 
 @main.command()
@@ -821,18 +1105,7 @@ def edit(
         _handle_storage_error(exc)
         return
 
-    match = storage.find_entry_by_id(all_entries, id)
-    if match is None:
-        candidates = storage.find_entry_id_prefix_matches(all_entries, id)
-        if len(candidates) > 1:
-            short_ids = ", ".join(e.id[: ui.ID_DISPLAY_LEN] for e in candidates)
-            ui.print_error(
-                f'ID prefix "{id}" matches multiple entries: {short_ids}. '
-                "Use a longer prefix."
-            )
-        else:
-            ui.print_error(f'No entry found with id "{id}".')
-        sys.exit(1)
+    match = _resolve_entry_by_id_or_exit(all_entries, id)
 
     has_flags = (
         new_message is not None
@@ -868,57 +1141,9 @@ def edit(
     else:
         message_from_flag = new_message is not None
 
-    # Parse --at up front. If the user passed it, prompt before any
-    # other change is applied — the timestamp is the most "destructive"
-    # field on the entry (it changes the *when*, not the *what*).
-    new_created_at = match.created_at
-    if at is not None:
-        try:
-            parsed = _parse_timestamp(at, tz=_resolve_local_tz())
-        except click.BadParameter as exc:
-            ui.print_error(str(exc))
-            sys.exit(2)
-        new_created_at = parsed.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        if new_created_at != match.created_at and not yes:
-            short = match.id[: ui.ID_DISPLAY_LEN]
-            old_h = ui._format_dt(match.created_at)
-            new_h = ui._format_dt(new_created_at)
-            if not click.confirm(
-                f"Change created_at of {short} from {old_h} to {new_h}?",
-                default=False,
-            ):
-                ui.print_info("Aborted.")
-                return
-
-    # Compute new tags
-    current_tags = list(match.tags)
-    if set_tags:
-        # Validate set_tags (replaces the set entirely)
-        try:
-            current_tags = _validate_tags(set_tags)
-        except click.UsageError as exc:
-            ui.print_error(str(exc))
-            sys.exit(1)
-    if add_tags:
-        try:
-            additions = _validate_tags(add_tags)
-        except click.UsageError as exc:
-            ui.print_error(str(exc))
-            sys.exit(1)
-        for t in additions:
-            if t not in current_tags:
-                current_tags.append(t)
-    if remove_tags:
-        to_remove = {t.strip().lower() for t in remove_tags}
-        current_tags = [t for t in current_tags if t not in to_remove]
-
-    # Determine the final message. If the user explicitly passed -m ""
-    # via the CLI, reject it; the editor path is allowed to produce an
-    # empty body (the user might be saving a blank note on purpose).
-    if message_from_flag and new_message is not None and not new_message.strip():
-        ui.print_error("MESSAGE cannot be empty.")
-        sys.exit(1)
-    final_message = new_message if new_message is not None else match.message
+    new_created_at = _edit_resolve_at(match, at, yes=yes)
+    current_tags = _edit_compute_tags(list(match.tags), set_tags, add_tags, remove_tags)
+    final_message = _edit_resolve_message(match, new_message, from_flag=message_from_flag)
 
     # No-op detection. A change to created_at counts as a real change,
     # so it forces the write through even when message + tags are equal.
@@ -936,9 +1161,7 @@ def edit(
         message=final_message,
         tags=current_tags,
         created_at=new_created_at,
-        updated_at=datetime.datetime.now(tz=datetime.timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        ),
+        updated_at=storage.utc_now_iso(),
     )
 
     try:
@@ -1029,21 +1252,10 @@ def delete(id: str, yes: bool, quiet: bool) -> None:
         _handle_storage_error(exc)
         return
 
-    match = storage.find_entry_by_id(all_entries, id)
-    if match is None:
-        candidates = storage.find_entry_id_prefix_matches(all_entries, id)
-        if len(candidates) > 1:
-            short_ids = ", ".join(e.id[: ui.ID_DISPLAY_LEN] for e in candidates)
-            ui.print_error(
-                f'ID prefix "{id}" matches multiple entries: {short_ids}. '
-                "Use a longer prefix."
-            )
-        else:
-            ui.print_error(f'No entry found with id "{id}".')
-        sys.exit(1)
+    match = _resolve_entry_by_id_or_exit(all_entries, id)
 
     if not yes:
-        short = match.id[: ui.ID_DISPLAY_LEN]
+        short = match.short_id
         snippet = match.message[:40] + ("…" if len(match.message) > 40 else "")
         # Build a prompt that survives messages containing their own
         # double-quote characters. Wrapping the snippet in another pair
@@ -1089,9 +1301,8 @@ def delete(id: str, yes: bool, quiet: bool) -> None:
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
 def tags(sort: str, limit: int, show_all: bool, quiet: bool) -> None:
     """List all tags with usage count and last-used date."""
-    if not show_all and limit <= 0:
-        ui.print_error("--limit must be a positive integer.")
-        sys.exit(1)
+    if not show_all:
+        _require_positive_int("--limit", limit)
 
     try:
         all_entries = storage.load_entries()
@@ -1203,9 +1414,8 @@ def tag(
         ui.print_error(str(exc))
         sys.exit(1)
 
-    if not show_all and limit <= 0:
-        ui.print_error("--limit must be a positive integer.")
-        sys.exit(1)
+    if not show_all:
+        _require_positive_int("--limit", limit)
 
     try:
         all_entries = storage.load_entries()
@@ -1214,55 +1424,67 @@ def tag(
         return
 
     if delete_tag:
-        # Tag-removal path. Mirrors the structure of `rename-tag` /
-        # `merge-tag`: count, dry-run print, atomic save, success line.
-        affected: list[Entry] = []
-        for entry in all_entries:
-            if norm_tag in entry.tags:
-                affected.append(entry)
-
-        if not affected:
-            if not quiet:
-                ui.print_info(f'No entries with tag "{norm_tag}".')
-            return
-
-        if dry_run:
-            if not quiet:
-                line = Text()
-                line.append("DRY RUN: ", style=ui._bold("warning_text"))
-                line.append(
-                    f"would remove tag \"{norm_tag}\" from {len(affected)} "
-                    f"{ui._plural_noun(len(affected), 'entry')}.",
-                    style=ui._s("warning_text"),
-                )
-                console.print(line)
-            return
-
-        now_iso = datetime.datetime.now(tz=datetime.timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        )
-        for entry in affected:
-            entry.tags = [t for t in entry.tags if t != norm_tag]
-            entry.updated_at = now_iso
-
-        try:
-            storage.save_entries(all_entries)
-        except StorageError as exc:
-            _handle_storage_error(exc)
-            return
-
-        if not quiet:
-            line = Text()
-            line.append("✔ ", style=ui._bold("success_title"))
-            line.append(
-                f"Removed tag \"{norm_tag}\" from {len(affected)} "
-                f"{ui._plural_noun(len(affected), 'entry')}.",
-                style=ui._s("success_border"),
-            )
-            console.print(line)
+        _tag_delete_impl(all_entries, norm_tag, dry_run=dry_run, quiet=quiet)
         return
 
-    # Show mode: filter to entries carrying the tag.
+    _tag_show_impl(
+        all_entries, norm_tag, limit=limit, show_all=show_all, quiet=quiet
+    )
+
+
+def _tag_delete_impl(
+    all_entries: list[Entry], norm_tag: str, *, dry_run: bool, quiet: bool
+) -> None:
+    """Implement ``devlog tag NAME --delete``.
+
+    The mode flag lives on the parent ``tag`` command; this helper
+    holds the body so the parent stays a thin dispatcher.
+    """
+    affected = [e for e in all_entries if norm_tag in e.tags]
+
+    if not affected:
+        if not quiet:
+            ui.print_info(f'No entries with tag "{norm_tag}".')
+        return
+
+    if dry_run:
+        if not quiet:
+            console.print(
+                ui.dry_run_line(
+                    f"would remove tag \"{norm_tag}\" from {len(affected)} "
+                    f"{ui._plural_noun(len(affected), 'entry')}."
+                )
+            )
+        return
+
+    for entry in affected:
+        entry.tags = [t for t in entry.tags if t != norm_tag]
+        entry.updated_at = storage.utc_now_iso()
+
+    try:
+        storage.save_entries(all_entries)
+    except StorageError as exc:
+        _handle_storage_error(exc)
+        return
+
+    if not quiet:
+        console.print(
+            ui.success_line(
+                f"Removed tag \"{norm_tag}\" from {len(affected)} "
+                f"{ui._plural_noun(len(affected), 'entry')}."
+            )
+        )
+
+
+def _tag_show_impl(
+    all_entries: list[Entry],
+    norm_tag: str,
+    *,
+    limit: int,
+    show_all: bool,
+    quiet: bool,
+) -> None:
+    """Implement ``devlog tag NAME`` (show mode)."""
     matching = [e for e in all_entries if norm_tag in e.tags]
     matching.sort(key=lambda e: e.created_at, reverse=True)
 
@@ -1270,9 +1492,7 @@ def tag(
     shown = matching if show_all else matching[:limit]
 
     if quiet:
-        import dataclasses
-        for entry in shown:
-            print(json.dumps(dataclasses.asdict(entry), ensure_ascii=False))
+        _print_jsonl(shown)
         return
 
     if total == 0:
@@ -1385,9 +1605,7 @@ def today(limit: int, quiet: bool) -> None:
     set, otherwise UTC. This matches how the rest of the CLI handles
     the env var.
     """
-    if limit <= 0:
-        ui.print_error("--limit must be a positive integer.")
-        sys.exit(1)
+    _require_positive_int("--limit", limit)
 
     try:
         all_entries = storage.load_entries()
@@ -1398,14 +1616,10 @@ def today(limit: int, quiet: bool) -> None:
     tz = _resolve_local_tz()
     if tz is not None:
         local_today = datetime.datetime.now(tz=tz).date()
-        today_entries = [
-            e for e in all_entries if storage.local_date_for(e.created_at, tz) == local_today
-        ]
-        subtitle = local_today.strftime("%Y-%m-%d")
     else:
-        today_iso_date = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y-%m-%d")
-        today_entries = [e for e in all_entries if e.created_at.startswith(today_iso_date)]
-        subtitle = today_iso_date
+        local_today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+    today_entries = _filter_by_local_window(all_entries, end_date=local_today, days=0, tz=tz)
+    subtitle = local_today.strftime("%Y-%m-%d")
 
     today_entries.sort(key=lambda e: e.created_at, reverse=True)
 
@@ -1413,9 +1627,7 @@ def today(limit: int, quiet: bool) -> None:
     shown = today_entries[:limit]
 
     if quiet:
-        import dataclasses
-        for entry in shown:
-            print(json.dumps(dataclasses.asdict(entry), ensure_ascii=False))
+        _print_jsonl(shown)
         return
 
     if total == 0:
@@ -1443,9 +1655,7 @@ def yesterday(limit: int, quiet: bool) -> None:
     Like ``today``, the bucket is computed in the ``DEVLOG_TZ`` zone
     when set, otherwise UTC.
     """
-    if limit <= 0:
-        ui.print_error("--limit must be a positive integer.")
-        sys.exit(1)
+    _require_positive_int("--limit", limit)
 
     try:
         all_entries = storage.load_entries()
@@ -1456,29 +1666,20 @@ def yesterday(limit: int, quiet: bool) -> None:
     tz = _resolve_local_tz()
     if tz is not None:
         local_today = datetime.datetime.now(tz=tz).date()
-        local_yesterday = local_today - datetime.timedelta(days=1)
-        yesterday_entries = [
-            e for e in all_entries
-            if storage.local_date_for(e.created_at, tz) == local_yesterday
-        ]
-        subtitle = local_yesterday.strftime("%Y-%m-%d")
     else:
-        today_utc = datetime.datetime.now(tz=datetime.timezone.utc).date()
-        yesterday_utc = today_utc - datetime.timedelta(days=1)
-        yesterday_iso = yesterday_utc.strftime("%Y-%m-%d")
-        yesterday_entries = [
-            e for e in all_entries if e.created_at.startswith(yesterday_iso)
-        ]
-        subtitle = yesterday_iso
+        local_today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+    local_yesterday = local_today - datetime.timedelta(days=1)
+    yesterday_entries = _filter_by_local_window(
+        all_entries, end_date=local_yesterday, days=0, tz=tz
+    )
+    subtitle = local_yesterday.strftime("%Y-%m-%d")
 
     yesterday_entries.sort(key=lambda e: e.created_at, reverse=True)
     total = len(yesterday_entries)
     shown = yesterday_entries[:limit]
 
     if quiet:
-        import dataclasses
-        for entry in shown:
-            print(json.dumps(dataclasses.asdict(entry), ensure_ascii=False))
+        _print_jsonl(shown)
         return
 
     if total == 0:
@@ -1514,9 +1715,7 @@ def yesterday(limit: int, quiet: bool) -> None:
 )
 def week(limit: int, quiet: bool, anchor: str | None) -> None:
     """Show entries from the last 7 days, newest first."""
-    if limit <= 0:
-        ui.print_error("--limit must be a positive integer.")
-        sys.exit(1)
+    _require_positive_int("--limit", limit)
 
     try:
         all_entries = storage.load_entries()
@@ -1540,22 +1739,15 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
     else:
         end_date = datetime.datetime.now(tz=datetime.timezone.utc).date()
 
+    week_entries = _filter_by_local_window(all_entries, end_date=end_date, days=6, tz=tz)
     start_date = end_date - datetime.timedelta(days=6)
-
-    week_entries = []
-    for entry in all_entries:
-        local_d = storage.local_date_for(entry.created_at, tz) if tz is not None else _utc_date_from_iso(entry.created_at)
-        if start_date <= local_d <= end_date:
-            week_entries.append(entry)
     week_entries.sort(key=lambda e: e.created_at, reverse=True)
 
     total = len(week_entries)
     shown = week_entries[:limit]
 
     if quiet:
-        import dataclasses
-        for entry in shown:
-            print(json.dumps(dataclasses.asdict(entry), ensure_ascii=False))
+        _print_jsonl(shown)
         return
 
     if total == 0:
@@ -1648,9 +1840,7 @@ def calendar(year: int | None, quiet: bool) -> None:
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
 def tail(n: int, tags: Tuple[str, ...], quiet: bool) -> None:
     """Show the N most recent entries (default: 5)."""
-    if n <= 0:
-        ui.print_error("N must be a positive integer.")
-        sys.exit(1)
+    _require_positive_int("N", n)
 
     try:
         all_entries = storage.load_entries()
@@ -1664,9 +1854,7 @@ def tail(n: int, tags: Tuple[str, ...], quiet: bool) -> None:
     total = len(filtered)
 
     if quiet:
-        import dataclasses
-        for entry in shown:
-            print(json.dumps(dataclasses.asdict(entry), ensure_ascii=False))
+        _print_jsonl(shown)
         return
 
     if total == 0:
@@ -1695,9 +1883,7 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
         _handle_storage_error(exc)
         return
 
-    tz = _resolve_local_tz()
-    since_dt = _parse_date_bound(since, tz=tz) if since else None
-    until_dt = _parse_date_bound(until, is_upper=True, tz=tz) if until else None
+    since_dt, until_dt = _parse_since_until(since, until)
     all_entries = _filter_by_date(all_entries, since_dt, until_dt)
     # Also drop entries whose created_at cannot be parsed at all, so
     # downstream formatting (which assumes a valid ISO timestamp) never
@@ -1711,6 +1897,7 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
         return
 
     # Total & date range
+    tz = _resolve_local_tz()
     total = len(all_entries)
     sorted_by_date = sorted(all_entries, key=lambda e: e.created_at)
     first_iso = sorted_by_date[0].created_at
@@ -1788,33 +1975,12 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
 @click.option("--quiet", "-q", is_flag=True, help="Suppress the preview output.")
 def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
     """Rename a tag across all entries (OLD → NEW)."""
-    # Pre-validate NEW *as supplied* so an invalid tag (uppercase
-    # letters, spaces, oversize) is rejected with a clear error rather
-    # than silently collapsing to the same value as OLD and triggering
-    # the "OLD and NEW are the same" no-op path. We deliberately check
-    # the raw input here, not a normalised version: tags are stored
-    # lowercased but the user's input is what we're validating.
-    new_stripped = new.strip()
-    if not new_stripped:
-        ui.print_error("NEW tag cannot be empty.")
-        sys.exit(1)
     try:
-        if not TAG_RE.fullmatch(new_stripped):
-            raise click.UsageError(
-                f'Tag "{new}" contains invalid characters. '
-                "Use lowercase letters, numbers, and hyphens only."
-            )
-        if len(new_stripped) > MAX_TAG_LENGTH:
-            raise click.UsageError(
-                f'Tag "{new}" exceeds maximum length of {MAX_TAG_LENGTH} characters.'
-            )
+        new_tag = _validate_new_tag(new)
     except click.UsageError as exc:
         ui.print_error(str(exc))
         sys.exit(1)
 
-    # Now normalise through the shared validator (handles dedup etc.)
-    new_normalized = _validate_tags((new,))
-    new_tag = new_normalized[0]
     old_normalized = old.strip().lower()
     if not old_normalized:
         ui.print_error("OLD tag cannot be empty.")
@@ -1830,10 +1996,7 @@ def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
         _handle_storage_error(exc)
         return
 
-    affected: list[Entry] = []
-    for entry in all_entries:
-        if old_normalized in entry.tags:
-            affected.append(entry)
+    affected = [e for e in all_entries if old_normalized in e.tags]
 
     if not affected:
         if not quiet:
@@ -1842,35 +2005,15 @@ def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
 
     if dry_run:
         if not quiet:
-            line = Text()
-            line.append("DRY RUN: ", style=ui._bold("warning_text"))
-            line.append(
-                f"would update {len(affected)} {ui._plural_noun(len(affected), 'entry')}: ",
-                style=ui._s("warning_text"),
+            line = ui.dry_run_line(
+                f"would update {len(affected)} {ui._plural_noun(len(affected), 'entry')}: "
             )
             line.append(f"{old_normalized} → {new_tag}", style="bold")
             console.print(line)
         return
 
-    # Apply in-memory and persist
-    now_iso = datetime.datetime.now(tz=datetime.timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
     for entry in affected:
-        new_tags: list[str] = []
-        for t in entry.tags:
-            if t == old_normalized:
-                # Replace with new_tag (dedup against any existing new_tag)
-                if new_tag not in new_tags:
-                    new_tags.append(new_tag)
-            elif t == new_tag:
-                # Keep an existing new_tag, dedup if we've already added it
-                if new_tag not in new_tags:
-                    new_tags.append(new_tag)
-            else:
-                new_tags.append(t)
-        entry.tags = new_tags
-        entry.updated_at = now_iso
+        _rewrite_tag_in_entry(entry, old_normalized, new_tag)
 
     try:
         storage.save_entries(all_entries)
@@ -1879,13 +2022,11 @@ def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
         return
 
     if not quiet:
-        line = Text()
-        line.append("✔ ", style=ui._bold("success_title"))
-        line.append(
-            f"Renamed {old_normalized} → {new_tag} in {len(affected)} {ui._plural_noun(len(affected), 'entry')}.",
-            style=ui._s("success_border"),
+        console.print(
+            ui.success_line(
+                f"Renamed {old_normalized} → {new_tag} in {len(affected)} {ui._plural_noun(len(affected), 'entry')}."
+            )
         )
-        console.print(line)
 
 
 # ---------------------------------------------------------------------------
@@ -1905,25 +2046,12 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
     removed. Entries that already carry NEW are still de-tagged with
     OLD but not double-tagged with NEW. Use ``--dry-run`` to preview.
     """
-    new_stripped = new.strip()
-    if not new_stripped:
-        ui.print_error("NEW tag cannot be empty.")
-        sys.exit(1)
     try:
-        if not TAG_RE.fullmatch(new_stripped):
-            raise click.UsageError(
-                f'Tag "{new}" contains invalid characters. '
-                "Use lowercase letters, numbers, and hyphens only."
-            )
-        if len(new_stripped) > MAX_TAG_LENGTH:
-            raise click.UsageError(
-                f'Tag "{new}" exceeds maximum length of {MAX_TAG_LENGTH} characters.'
-            )
+        new_tag = _validate_new_tag(new)
     except click.UsageError as exc:
         ui.print_error(str(exc))
         sys.exit(1)
 
-    new_tag = _validate_tags((new,))[0]
     old_normalized = old.strip().lower()
     if not old_normalized:
         ui.print_error("OLD tag cannot be empty.")
@@ -1958,13 +2086,10 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
     if dry_run:
         added = len(touched) - already_had_new
         if not quiet:
-            line = Text()
-            line.append("DRY RUN: ", style=ui._bold("warning_text"))
-            line.append(
+            line = ui.dry_run_line(
                 f"would add {new_tag} to {added} {ui._plural_noun(added, 'entry')}, "
                 f"remove {old_normalized} from {len(touched)} "
-                f"{ui._plural_noun(len(touched), 'entry')}. ",
-                style=ui._s("warning_text"),
+                f"{ui._plural_noun(len(touched), 'entry')}. "
             )
             if already_had_new:
                 line.append(
@@ -1974,25 +2099,8 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
             console.print(line)
         return
 
-    now_iso = datetime.datetime.now(tz=datetime.timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
     for entry in touched:
-        new_tags: list[str] = []
-        for t in entry.tags:
-            if t == old_normalized:
-                # Replace OLD with NEW, but only if NEW isn't already
-                # in the set (handles "already had NEW" case).
-                if new_tag not in new_tags:
-                    new_tags.append(new_tag)
-            elif t == new_tag:
-                # Keep an existing NEW once (preserves order).
-                if new_tag not in new_tags:
-                    new_tags.append(new_tag)
-            else:
-                new_tags.append(t)
-        entry.tags = new_tags
-        entry.updated_at = now_iso
+        _rewrite_tag_in_entry(entry, old_normalized, new_tag)
 
     try:
         storage.save_entries(all_entries)
@@ -2002,25 +2110,161 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
 
     if not quiet:
         added = len(touched) - already_had_new
-        line = Text()
-        line.append("✔ ", style=ui._bold("success_title"))
-        line.append(
+        line = ui.success_line(
             f"Merged \"{old_normalized}\" into \"{new_tag}\" across "
-            f"{len(touched)} {ui._plural_noun(len(touched), 'entry')}",
-            style=ui._s("success_border"),
+            f"{len(touched)} {ui._plural_noun(len(touched), 'entry')}"
         )
         if already_had_new:
             line.append(
                 f" ({already_had_new} already had {new_tag}; skipped)",
-                style=ui._s("success_border"),
+                style=ui._s("success_text"),
             )
-        line.append(".", style=ui._s("success_border"))
+        line.append(".", style=ui._s("success_text"))
         console.print(line)
 
 
 # ---------------------------------------------------------------------------
 # import
 # ---------------------------------------------------------------------------
+
+
+def _sniff_import_format(path: str) -> str:
+    """Detect ``"json"`` or ``"markdown"`` for an ``import`` file.
+
+    The detection order matches the user-facing contract:
+
+    1. File extension (``.json`` / ``.md`` / ``.markdown``).
+    2. First non-blank byte of the file (``{`` → json, ``#`` → md).
+    3. Failure → print a user-facing error and ``sys.exit(2)``.
+
+    Args:
+        path: the user-supplied path to the file to import.
+
+    Returns:
+        ``"json"`` or ``"markdown"``.
+    """
+    lower = path.lower()
+    if lower.endswith(".json"):
+        return "json"
+    if lower.endswith(".md") or lower.endswith(".markdown"):
+        return "markdown"
+    # Try to sniff format from the first non-blank character so users
+    # can pipe from stdin or import extensionless files.
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            sniff = fh.read(64)
+    except OSError:
+        sniff = ""
+    stripped = sniff.lstrip()
+    if stripped.startswith("{"):
+        return "json"
+    if stripped.startswith("#"):
+        return "markdown"
+    ui.print_error(
+        f'Cannot auto-detect format for "{path}". '
+        "Use --format=json or --format=markdown."
+    )
+    sys.exit(2)
+
+
+def _read_import_payload(path: str, fmt: str) -> tuple[list[Entry], int]:
+    """Parse a JSON or Markdown import file into ``(candidates, unreadable)``.
+
+    Args:
+        path: file to read.
+        fmt:  ``"json"`` or ``"markdown"``.
+
+    Returns:
+        A 2-tuple ``(candidates, unreadable_rows)``. The JSON branch
+        counts rows it could not coerce; the markdown parser either
+        succeeds or returns zero (it does not surface partial failures).
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+    except (PermissionError, OSError) as exc:
+        ui.print_error(f"Cannot read {path}: {exc}")
+        sys.exit(2)
+
+    if fmt == "json":
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError as exc:
+            ui.print_error(f"Invalid JSON in {path}: {exc}")
+            sys.exit(2)
+        raw_entries = payload.get("entries", [])
+        candidates: list[Entry] = []
+        unreadable = 0
+        for item in raw_entries:
+            if not isinstance(item, dict):
+                unreadable += 1
+                continue
+            # Mint a uuid up front when the source row is missing one.
+            # This both preserves stable ids when present AND lets
+            # `Entry(**item)` succeed on rows that omit `id`, instead
+            # of silently dropping them as "unreadable".
+            if "id" not in item or not item["id"]:
+                item = {**item, "id": str(uuid.uuid4())}
+            try:
+                e = Entry(**item)
+            except (TypeError, ValueError):
+                unreadable += 1
+                continue
+            candidates.append(e)
+        return candidates, unreadable
+
+    return _parse_markdown_export(content), 0
+
+
+def _dedup_against_existing(
+    candidates: list[Entry], existing: list[Entry]
+) -> tuple[list[Entry], int]:
+    """Return ``(to_add, skipped)`` after removing entries already present.
+
+    Idempotency: an entry is considered "already present" if either
+    the id *or* the ``(created_at, message)`` fingerprint matches an
+    existing entry. This makes re-imports and backup → restore → import
+    round-trips no-ops at the row level.
+    """
+    seen_ids = {e.id for e in existing}
+    seen_fps = {e.fingerprint for e in existing}
+    to_add: list[Entry] = []
+    skipped = 0
+    for cand in candidates:
+        if cand.id in seen_ids or cand.fingerprint in seen_fps:
+            skipped += 1
+            continue
+        # Preserve a stable id from the source when present. Only mint
+        # a fresh uuid if the source row is missing one.
+        if not cand.id:
+            cand.id = str(uuid.uuid4())
+        to_add.append(cand)
+        seen_ids.add(cand.id)
+        seen_fps.add(cand.fingerprint)
+    return to_add, skipped
+
+
+def _emit_import_summary(
+    to_add: int, skipped: int, unreadable: int, *, dry_run: bool
+) -> None:
+    """Print the import dry-run / success headline to the user.
+
+    Both branches (dry-run yellow, success green) build the same
+    ``"<verb> N entries, skip M duplicates"`` sentence with an optional
+    trailing ``"Ignored K unreadable rows."`` segment, so the helper
+    keeps the wording consistent across the two outputs.
+    """
+    verb = "would import" if dry_run else "Imported"
+    line_factory = ui.dry_run_line if dry_run else ui.success_line
+    parts = [
+        f"{verb} {to_add} {ui._plural_noun(to_add, 'entry')}, "
+        f"skip {skipped} duplicate{ui.plural_s(skipped)}."
+    ]
+    if unreadable:
+        parts.append(
+            f" Ignored {unreadable} unreadable row{ui.plural_s(unreadable)}."
+        )
+    console.print(line_factory("".join(parts)))
 
 
 @main.command()
@@ -2039,66 +2283,9 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
 def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
     """Import entries from a JSON or Markdown export file."""
     if fmt == "auto":
-        lower = path.lower()
-        if lower.endswith(".json"):
-            fmt = "json"
-        elif lower.endswith(".md") or lower.endswith(".markdown"):
-            fmt = "markdown"
-        else:
-            # Try to sniff format from the first non-blank character so
-            # users can pipe from stdin or import extensionless files.
-            try:
-                with open(path, "r", encoding="utf-8") as fh:
-                    sniff = fh.read(64)
-            except OSError:
-                sniff = ""
-            stripped = sniff.lstrip()
-            if stripped.startswith("{"):
-                fmt = "json"
-            elif stripped.startswith("#"):
-                fmt = "markdown"
-            else:
-                ui.print_error(
-                    f'Cannot auto-detect format for "{path}". '
-                    "Use --format=json or --format=markdown."
-                )
-                sys.exit(2)
+        fmt = _sniff_import_format(path)
 
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            content = fh.read()
-    except (PermissionError, OSError) as exc:
-        ui.print_error(f"Cannot read {path}: {exc}")
-        sys.exit(2)
-
-    if fmt == "json":
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError as exc:
-            ui.print_error(f"Invalid JSON in {path}: {exc}")
-            sys.exit(2)
-        raw_entries = payload.get("entries", [])
-        candidates: list[Entry] = []
-        unreadable_rows = 0
-        for item in raw_entries:
-            if not isinstance(item, dict):
-                unreadable_rows += 1
-                continue
-            # Mint a uuid up front when the source row is missing one.
-            # This both preserves stable ids when present AND lets
-            # `Entry(**item)` succeed on rows that omit `id`, instead
-            # of silently dropping them as "unreadable".
-            if "id" not in item or not item["id"]:
-                item = {**item, "id": str(uuid.uuid4())}
-            try:
-                e = Entry(**item)
-            except (TypeError, ValueError):
-                unreadable_rows += 1
-                continue
-            candidates.append(e)
-    else:
-        candidates = _parse_markdown_export(content)
-        unreadable_rows = 0  # markdown parser returns only valid entries
+    candidates, unreadable_rows = _read_import_payload(path, fmt)
 
     try:
         existing = storage.load_entries()
@@ -2106,47 +2293,13 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
         _handle_storage_error(exc)
         return
 
-    # Idempotency: skip entries that already exist (by id, or by created_at+message fingerprint)
-    existing_ids = {e.id for e in existing}
-    existing_fps = {(e.created_at, e.message) for e in existing}
-
-    to_add: list[Entry] = []
-    skipped = 0
-    for cand in candidates:
-        if cand.id in existing_ids:
-            skipped += 1
-            continue
-        if (cand.created_at, cand.message) in existing_fps:
-            skipped += 1
-            continue
-        # Preserve a stable id from the source when present. Only mint
-        # a fresh uuid if the source row is missing one. This makes
-        # re-imports and backup → restore → import round-trips
-        # idempotent at the id level, so users can cross-reference
-        # entries by short id.
-        if not cand.id:
-            cand.id = str(uuid.uuid4())
-        to_add.append(cand)
-        existing_ids.add(cand.id)
-        existing_fps.add((cand.created_at, cand.message))
+    to_add, skipped = _dedup_against_existing(candidates, existing)
 
     if dry_run:
         if not quiet:
-            line = Text()
-            line.append("DRY RUN: ", style=ui._bold("warning_text"))
-            line.append(
-                f"would import {len(to_add)} {ui._plural_noun(len(to_add), 'entry')}, "
-                f"skip {skipped} duplicate{ui.plural_s(skipped)}. "
-                if to_add or skipped
-                else "would import 0 entries, skip 0 duplicates. ",
-                style=ui._s("warning_text"),
+            _emit_import_summary(
+                len(to_add), skipped, unreadable_rows, dry_run=True
             )
-            if unreadable_rows:
-                line.append(
-                    f"Ignored {unreadable_rows} unreadable row{ui.plural_s(unreadable_rows)}.",
-                    style=ui._s("warning_text"),
-                )
-            console.print(line)
         return
 
     if to_add:
@@ -2159,21 +2312,12 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
 
     if not quiet:
         if to_add:
-            line = Text()
-            line.append("✔ ", style=ui._bold("success_title"))
-            line.append(
-                f"Imported {len(to_add)} {ui._plural_noun(len(to_add), 'entry')}, "
-                f"skipped {skipped} duplicate{ui.plural_s(skipped)}. ",
-                style=ui._s("success_border"),
+            _emit_import_summary(
+                len(to_add), skipped, unreadable_rows, dry_run=False
             )
-            if unreadable_rows:
-                line.append(
-                    f"Ignored {unreadable_rows} unreadable row{ui.plural_s(unreadable_rows)}.",
-                    style=ui._s("success_border"),
-                )
-            console.print(line)
         else:
-            # No new imports — surface the skip count so the user knows it was a no-op, not a bug.
+            # No new imports — surface the skip count so the user knows
+            # it was a no-op, not a bug.
             if skipped or unreadable_rows:
                 parts = []
                 if skipped:
@@ -2272,19 +2416,17 @@ def _read_raw_entries() -> object:
         storage.CorruptedStorageError: when the file contains invalid JSON.
         storage.StoragePermissionError: when the file is unreadable.
     """
-    import json as _json
-
     path = storage.get_storage_path()
     if not path.exists():
         raise FileNotFoundError(path)
     try:
         with path.open("r", encoding="utf-8") as fh:
-            return _json.load(fh)
+            return json.load(fh)
     except PermissionError as exc:
         raise storage.StoragePermissionError(path, "read") from exc
     except OSError as exc:
         raise storage.StoragePermissionError(path, "read") from exc
-    except _json.JSONDecodeError as exc:
+    except json.JSONDecodeError as exc:
         raise storage.CorruptedStorageError(path) from exc
 
 
@@ -2449,10 +2591,9 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
             backups_dir.mkdir(parents=True, exist_ok=True)
             backup_filename = storage.default_backup_filename()
             backup_path = str(backups_dir / backup_filename)
-            import json as _json
 
             with open(backup_path, "w", encoding="utf-8") as fh:
-                _json.dump(raw, fh, indent=2, ensure_ascii=False)
+                json.dump(raw, fh, indent=2, ensure_ascii=False)
         except (OSError, PermissionError) as exc:
             ui.print_error(f"Could not write backup: {exc}")
             sys.exit(2)
@@ -2513,11 +2654,9 @@ def backup(output_path: str | None, quiet: bool) -> None:
         backups_dir.mkdir(parents=True, exist_ok=True)
         destination = backups_dir / storage.default_backup_filename()
 
-    import json as _json
-
     try:
         with destination.open("w", encoding="utf-8") as fh:
-            _json.dump(
+            json.dump(
                 {"entries": [dataclasses.asdict(e) for e in entries]},
                 fh,
                 indent=2,
@@ -2548,15 +2687,13 @@ def backup(output_path: str | None, quiet: bool) -> None:
 @click.option("--quiet", "-q", is_flag=True, help="Suppress the summary output.")
 def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
     """Restore the journal from a backup file produced by `devlog backup`."""
-    import json as _json
-
     try:
         with open(path, "r", encoding="utf-8") as fh:
-            data = _json.load(fh)
+            data = json.load(fh)
     except (OSError, PermissionError) as exc:
         ui.print_error(f"Cannot read {path}: {exc}")
         sys.exit(2)
-    except _json.JSONDecodeError as exc:
+    except json.JSONDecodeError as exc:
         ui.print_error(f"Backup file is not valid JSON: {exc}")
         sys.exit(2)
 
@@ -2611,23 +2748,90 @@ def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
         return
 
     if not quiet:
-        line = Text()
-        line.append("✔ ", style=ui._bold("success_title"))
-        line.append(
-            f"Restored {len(new_entries)} {ui._plural_noun(len(new_entries), 'entry')} from ",
-            style=ui._s("success_border"),
+        line = ui.success_line(
+            f"Restored {len(new_entries)} {ui._plural_noun(len(new_entries), 'entry')} from "
         )
         line.append(path, style="bold")
         console.print(line)
+
+
+def _doctor_probe_writable(path: Path) -> tuple[bool, bool]:
+    """Test whether the data directory is writable.
+
+    Returns ``(writable, ok)`` — the second flag is ``False`` when the
+    directory is *not* writable, so the report can fail overall.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        probe = path.parent / ".devlog-doctor-probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return True, True
+    except (OSError, PermissionError):
+        return False, False
+
+
+def _doctor_probe_size(path: Path) -> int:
+    """Return the size of the entries file, or 0 on stat error."""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _doctor_collect_issues(raw: object) -> tuple[list[dict], list[Entry], bool]:
+    """Validate *raw* and turn the result into the JSON shape the report uses.
+
+    Returns ``(issue_dicts, valid_entries, ok)``.
+    """
+    issues = storage.validate_entries(raw)
+    issue_dicts = [
+        {"kind": i.kind, "message": i.message, "entry_id": i.entry_id}
+        for i in issues
+    ]
+
+    valid_entries: list[Entry] = []
+    if isinstance(raw, dict) and isinstance(raw.get("entries"), list):
+        for item in raw["entries"]:
+            entry = _coerce_entry(item) if isinstance(item, dict) else None
+            if entry is not None and _is_valid_iso(entry.created_at):
+                valid_entries.append(entry)
+
+    return issue_dicts, valid_entries, not bool(issues)
+
+
+def _doctor_days_since_last(entries: list[Entry]) -> int | None:
+    """Return the number of days since the most recent entry, or ``None``."""
+    if not entries:
+        return None
+    most_recent = max(entries, key=lambda e: e.created_at)
+    try:
+        from datetime import datetime, timezone
+
+        dt = datetime.fromisoformat(most_recent.created_at.replace("Z", "+00:00"))
+        return (datetime.now(tz=timezone.utc).date() - dt.date()).days
+    except (ValueError, TypeError):
+        return None
+
+
+def _doctor_top_messages(entries: list[Entry]) -> list[tuple[str, int]]:
+    """Return the 3 longest messages as ``(short_id, length)`` tuples."""
+    by_length = sorted(entries, key=lambda e: len(e.message), reverse=True)[:3]
+    return [(e.short_id + "…", len(e.message)) for e in by_length]
+
+
+def _emit_doctor_report(report: dict, *, quiet: bool) -> None:
+    """Print the doctor report as either a JSON line or a Rich panel."""
+    if quiet:
+        print(json.dumps(report, default=str))
+    else:
+        console.print(ui.doctor_report(report))
 
 
 @main.command()
 @click.option("--quiet", "-q", is_flag=True, help="Output a single JSON health summary.")
 def doctor(quiet: bool) -> None:
     """Check the journal store for corruption and report basic health stats."""
-    import json as _json
-    from datetime import datetime, timezone
-
     path = storage.get_storage_path()
     report: dict = {
         "ok": True,
@@ -2641,33 +2845,18 @@ def doctor(quiet: bool) -> None:
         "top_messages": [],
     }
 
-    # Writable check: can we create the parent dir?
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # Try a tiny temp file inside the dir to confirm write access
-        probe = path.parent / ".devlog-doctor-probe"
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink()
-        report["writable"] = True
-    except (OSError, PermissionError):
-        report["writable"] = False
-        report["ok"] = False
+    writable, ok = _doctor_probe_writable(path)
+    report["writable"] = writable
+    report["ok"] = report["ok"] and ok
 
     if not path.exists():
-        if quiet:
-            print(_json.dumps(report))
-        else:
-            report["issues"] = []
-            console.print(ui.doctor_report(report))
-        if not report["ok"]:
+        if not ok:
             sys.exit(2)
+        _emit_doctor_report(report, quiet=quiet)
         return
 
     report["exists"] = True
-    try:
-        report["size_bytes"] = path.stat().st_size
-    except OSError:
-        report["size_bytes"] = 0
+    report["size_bytes"] = _doctor_probe_size(path)
 
     try:
         raw = _read_raw_entries()
@@ -2680,53 +2869,24 @@ def doctor(quiet: bool) -> None:
                 "entry_id": None,
             }
         ]
-        if quiet:
-            print(_json.dumps(report))
-        else:
-            console.print(ui.doctor_report(report))
+        _emit_doctor_report(report, quiet=quiet)
         sys.exit(2)
         return  # unreachable
     except storage.StoragePermissionError as exc:
         _handle_storage_error(exc)
         return
 
-    issues = storage.validate_entries(raw)
-    report["issues"] = [
-        {"kind": i.kind, "message": i.message, "entry_id": i.entry_id}
-        for i in issues
-    ]
-    if issues:
+    issue_dicts, valid_entries, issues_ok = _doctor_collect_issues(raw)
+    report["issues"] = issue_dicts
+    report["entry_count"] = len(valid_entries)
+    if not issues_ok:
         report["ok"] = False
 
-    entries: list[Entry] = []
-    if isinstance(raw, dict) and isinstance(raw.get("entries"), list):
-        for item in raw["entries"]:
-            entry = _coerce_entry(item) if isinstance(item, dict) else None
-            if entry is not None and _is_valid_iso(entry.created_at):
-                entries.append(entry)
-    report["entry_count"] = len(entries)
+    if valid_entries:
+        report["days_since_last"] = _doctor_days_since_last(valid_entries)
+        report["top_messages"] = _doctor_top_messages(valid_entries)
 
-    if entries:
-        entries.sort(key=lambda e: e.created_at, reverse=True)
-        try:
-            most_recent = datetime.fromisoformat(
-                entries[0].created_at.replace("Z", "+00:00")
-            )
-            now = datetime.now(tz=timezone.utc)
-            report["days_since_last"] = (now.date() - most_recent.date()).days
-        except (ValueError, TypeError):
-            report["days_since_last"] = None
-
-        by_length = sorted(entries, key=lambda e: len(e.message), reverse=True)[:3]
-        report["top_messages"] = [
-            (e.id[:8] + "…", len(e.message)) for e in by_length
-        ]
-
-    if quiet:
-        print(_json.dumps(report, default=str))
-    else:
-        console.print(ui.doctor_report(report))
-
+    _emit_doctor_report(report, quiet=quiet)
     if not report["ok"]:
         sys.exit(1)
 
@@ -2745,98 +2905,76 @@ def completions(shell: str) -> None:
     """Print a shell completion script for the given shell."""
     shell = shell.lower()
     if shell == "bash":
-        print(_BASH_COMPLETION)
+        print(_bash_completion())
     elif shell == "zsh":
-        print(_ZSH_COMPLETION)
+        print(_zsh_completion())
     elif shell == "fish":
-        print(_FISH_COMPLETION)
+        print(_fish_completion())
     else:
         ui.print_error(f'Unsupported shell "{shell}".')
         sys.exit(1)
 
 
-_BASH_COMPLETION = """# bash completion for devlog
+def _bash_completion() -> str:
+    """Generate a bash completion script driven by :data:`COMMANDS`.
+
+    A hand-written snippet is kept for the per-subcommand option
+    completions (``list|search|...``, ``tag``, ``theme``) — those are
+    not generic enough to be worth driving from :data:`COMMANDS`. The
+    top-level command list, however, is generated so adding a new
+    command in :data:`COMMANDS` automatically appears in the
+    completion script.
+    """
+    names = " ".join(name for name, _ in COMMANDS)
+    return f"""# bash completion for devlog
 # Source this file or copy it into ~/.bash_completion.d/
-_devlog_completion() {
+_devlog_completion() {{
     local cur prev words cword
     _init_completion || return
-    local commands="add show edit delete list search today yesterday week tail tags tag merge-tag theme stats calendar rename-tag import completions export repair backup restore doctor"
-    if [[ ${cword} -eq 1 ]]; then
-        COMPREPLY=($(compgen -W "${commands}" -- "${cur}"))
+    local commands="{names}"
+    if [[ ${{cword}} -eq 1 ]]; then
+        COMPREPLY=($(compgen -W "${{commands}}" -- "${{cur}}"))
         return
     fi
-    case "${words[1]}" in
+    case "${{words[1]}}" in
         edit|delete|show) COMPREPLY=($(compgen -W "$(devlog list --quiet 2>/dev/null | python3 -c 'import sys,json
-for line in sys.stdin: print(json.loads(line)["id"][:8])')" -- "${cur}")) ;;
-        list|search|tail|export) COMPREPLY=($(compgen -W "--tag --limit --all --quiet --since --until --format --output" -- "${cur}")) ;;
-        tag) COMPREPLY=($(compgen -W "--delete --dry-run --limit --all --quiet" -- "${cur}")) ;;
-        theme) COMPREPLY=($(compgen -W "list show set path" -- "${cur}")) ;;
+for line in sys.stdin: print(json.loads(line)["id"][:8])')" -- "${{cur}}")) ;;
+        list|search|tail|export) COMPREPLY=($(compgen -W "--tag --limit --all --quiet --since --until --format --output" -- "${{cur}}")) ;;
+        tag) COMPREPLY=($(compgen -W "--delete --dry-run --limit --all --quiet" -- "${{cur}}")) ;;
+        theme) COMPREPLY=($(compgen -W "list show set path" -- "${{cur}}")) ;;
     esac
-}
+}}
 complete -F _devlog_completion devlog
 """
 
-_ZSH_COMPLETION = """#compdef devlog
-# zsh completion for devlog
-_devlog() {
-    local -a commands
-    commands=(
-        'add:Add a new journal entry'
-        'show:Show a single entry by ID'
-        'edit:Edit an entry message and/or tags'
-        'delete:Delete an entry by ID'
-        'list:List entries, newest first'
-        'search:Search entry messages'
-        'today:Show today'\''s entries'
-        'yesterday:Show yesterday'\''s entries'
-        'week:Show the last 7 days'
-        'tail:Show the N most recent entries'
-        'tags:List tags with usage counts'
-        'tag:Show or delete entries with a tag'
-        'merge-tag:Merge two tags across all entries'
-        'theme:View or change the active color theme'
-        'stats:Summarize the journal'
-        'calendar:Show a year-grid heatmap of activity'
-        'rename-tag:Rename a tag across all entries'
-        'import:Import entries from a file'
-        'completions:Print a shell completion script'
-        'export:Export entries to a Markdown file'
-        'repair:Inspect and repair the on-disk journal store'
-        'backup:Write a timestamped copy of the journal'
-        'restore:Restore the journal from a backup file'
-        'doctor:Check the journal store for corruption'
-    )
-    _describe 'command' commands
-}
-_devlog "$@"
-"""
 
-_FISH_COMPLETION = """# fish completion for devlog
-complete -c devlog -f
-complete -c devlog -n "__fish_use_subcommand" -a "add" -d "Add a new journal entry"
-complete -c devlog -n "__fish_use_subcommand" -a "show" -d "Show a single entry by ID"
-complete -c devlog -n "__fish_use_subcommand" -a "edit" -d "Edit an entry"
-complete -c devlog -n "__fish_use_subcommand" -a "delete" -d "Delete an entry"
-complete -c devlog -n "__fish_use_subcommand" -a "list" -d "List entries, newest first"
-complete -c devlog -n "__fish_use_subcommand" -a "search" -d "Search entry messages"
-complete -c devlog -n "__fish_use_subcommand" -a "today" -d "Show today's entries"
-complete -c devlog -n "__fish_use_subcommand" -a "yesterday" -d "Show yesterday's entries"
-complete -c devlog -n "__fish_use_subcommand" -a "week" -d "Show the last 7 days"
-complete -c devlog -n "__fish_use_subcommand" -a "tail" -d "Show the N most recent entries"
-complete -c devlog -n "__fish_use_subcommand" -a "tags" -d "List tags with usage counts"
-complete -c devlog -n "__fish_use_subcommand" -a "tag" -d "Show or delete entries with a tag"
-complete -c devlog -n "__fish_use_subcommand" -a "merge-tag" -d "Merge two tags"
-complete -c devlog -n "__fish_use_subcommand" -a "stats" -d "Summarize the journal"
-complete -c devlog -n "__fish_use_subcommand" -a "calendar" -d "Show a year-grid heatmap of activity"
-complete -c devlog -n "__fish_use_subcommand" -a "rename-tag" -d "Rename a tag"
-complete -c devlog -n "__fish_use_subcommand" -a "import" -d "Import entries from a file"
-complete -c devlog -n "__fish_use_subcommand" -a "completions" -d "Print a completion script"
-complete -c devlog -n "__fish_use_subcommand" -a "export" -d "Export entries to Markdown"
-complete -c devlog -n "__fish_use_subcommand" -a "repair" -d "Inspect and repair the on-disk store"
-complete -c devlog -n "__fish_use_subcommand" -a "backup" -d "Write a timestamped backup"
-complete -c devlog -n "__fish_use_subcommand" -a "restore" -d "Restore from a backup file"
-complete -c devlog -n "__fish_use_subcommand" -a "doctor" -d "Check store health"
-"""
+def _zsh_completion() -> str:
+    """Generate a zsh completion script driven by :data:`COMMANDS`."""
+    lines = ["#compdef devlog", "# zsh completion for devlog", "_devlog() {", "    local -a commands", "    commands=("]
+    for name, desc in COMMANDS:
+        # zsh single-quoted strings: escape any embedded single quote.
+        safe = desc.replace("'", "'\\''")
+        lines.append(f"        '{name}:{safe}'")
+    lines.append("    )")
+    lines.append("    _describe 'command' commands")
+    lines.append("}")
+    lines.append('_devlog "$@"')
+    return "\n".join(lines) + "\n"
+
+
+def _fish_completion() -> str:
+    """Generate a fish completion script driven by :data:`COMMANDS`."""
+    lines = [
+        "# fish completion for devlog",
+        "complete -c devlog -f",
+    ]
+    for name, desc in COMMANDS:
+        # fish double-quoted strings: escape backslash, double-quote, $.
+        safe = desc.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+        lines.append(
+            f'complete -c devlog -n "__fish_use_subcommand" -a "{name}" -d "{safe}"'
+        )
+    return "\n".join(lines) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -2889,9 +3027,7 @@ def export(
         return
 
     filtered = _filter_by_tags(all_entries, tags)
-    tz = _resolve_local_tz()
-    since_dt = _parse_date_bound(since, tz=tz) if since else None
-    until_dt = _parse_date_bound(until, is_upper=True, tz=tz) if until else None
+    since_dt, until_dt = _parse_since_until(since, until)
     filtered = _filter_by_date(filtered, since_dt, until_dt)
     filtered.sort(key=lambda e: e.created_at, reverse=True)
 
@@ -2916,7 +3052,7 @@ def export(
         output = str(export_dir / f"devlog-{ts}.{ext}")
 
     def _entry_md(entry: Entry) -> str:
-        short_id = entry.id[: ui.ID_DISPLAY_LEN]
+        short_id = entry.short_id
         date_str = ui._format_dt(entry.created_at)
         tags_str = ", ".join(entry.tags) if entry.tags else ui.TAG_NONE
         return (
@@ -2928,21 +3064,16 @@ def export(
 
     try:
         if fmt_resolved == "json":
-            import dataclasses as _dc
-
             with open(output, "w", encoding="utf-8") as fh:
                 json.dump(
-                    {"entries": [_dc.asdict(e) for e in filtered]},
+                    {"entries": [dataclasses.asdict(e) for e in filtered]},
                     fh,
                     indent=2,
                     ensure_ascii=False,
                 )
             if not quiet:
-                line = Text()
-                line.append("✔ ", style=ui._bold("success_title"))
-                line.append(
-                    f"Exported {len(filtered)} {ui._plural_noun(len(filtered), 'entry')} to ",
-                    style=ui._s("success_border"),
+                line = ui.success_line(
+                    f"Exported {len(filtered)} {ui._plural_noun(len(filtered), 'entry')} to "
                 )
                 line.append(output, style="bold")
                 err_console.print(line)
@@ -2960,11 +3091,8 @@ def export(
                     for entry in filtered:
                         fh.write(_entry_md(entry))
                         progress.advance(task)
-            line = Text()  # local alias to keep imports tidy
-            line.append("✔ ", style=ui._bold("success_title"))
-            line.append(
-                f"Exported {len(filtered)} {ui._plural_noun(len(filtered), 'entry')} to ",
-                style=ui._s("success_border"),
+            line = ui.success_line(
+                f"Exported {len(filtered)} {ui._plural_noun(len(filtered), 'entry')} to "
             )
             line.append(output, style="bold")
             err_console.print(line)

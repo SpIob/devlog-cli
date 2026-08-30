@@ -57,6 +57,8 @@ def _invoke(runner, *args, tz=None, monkeypatch=None):
 
 
 def test_calendar_grid_empty_year():
+    import datetime as _dt
+
     grid = ui.calendar_grid({}, year=2025)
     text = grid.plain
     # 53 weeks × 7 days = 371 cells max for a non-leap year. The first
@@ -64,10 +66,17 @@ def test_calendar_grid_empty_year():
     # want to confirm the grid is non-empty and uses the right
     # character set.
     assert len(text) > 0
-    # All characters must be from the heatmap alphabet (plus
-    # newlines).
+    # All characters must come from the heatmap alphabet, the gutter
+    # alphabet (the 3-letter %b abbreviations of all 12 months), or
+    # newlines. The gutter adds a 3-char month label on the row where
+    # each month begins, so the alphabet now includes letters.
+    month_chars: set[str] = set()
+    for m in range(1, 13):
+        month_chars.update(_dt.date(2025, m, 1).strftime("%b"))
     for ch in text:
-        assert ch in {" ", "·", "▪", "▫", "█", "\n"}, f"unexpected char {ch!r}"
+        assert ch in {" ", "·", "▪", "▫", "█", "\n"} | month_chars, (
+            f"unexpected char {ch!r}"
+        )
 
 
 def test_calendar_grid_buckets_by_year():
@@ -78,14 +87,36 @@ def test_calendar_grid_buckets_by_year():
     # 2024-06-15 is a Saturday, 2025-06-15 is a Sunday.
     # We don't assert exact cell positions; just that both `·` chars
     # (one for 2024, but only 2025 should be present) exist.
-    # Easier: count the non-space, non-newline cells.
-    non_space = sum(1 for ch in text if ch not in {" ", "\n"})
+    # Easier: count the non-space, non-newline cells, but strip the
+    # gutter (3-char + 1-space) on each line first so the month labels
+    # don't pollute the count.
+    lines = text.splitlines()
+    assert len(lines) == 14, f"expected 7 weekday rows × 2 (gutter + cells), got {len(lines)}"
+    data_rows = lines[1::2]  # every second line is the data row
+    heatmap_chars = {"·", "▪", "▫", "█"}
+    non_space = sum(
+        1 for row in data_rows for ch in row if ch in heatmap_chars
+    )
     assert non_space >= 1  # at least 2025-06-15
     # And the count shouldn't be 2 — only 2025 entries count.
     # 2024 is in a different year, so the cell for that calendar date
     # *is* rendered (in 2024's slot) but we asked for year=2025 so
     # it's a space. So 2024's cell is a space → no extra character.
     assert non_space == 1
+
+
+def test_calendar_grid_has_month_gutter():
+    """The grid must include a left-edge month label gutter."""
+    grid = ui.calendar_grid({}, year=2025)
+    text = grid.plain
+    lines = text.splitlines()
+    # 7 weekday rows × 2 lines (gutter + cells) = 14 total lines.
+    assert len(lines) == 14
+    # The gutter row for the first weekday (Sunday in 2025-01-05) must
+    # contain a 3-letter month abbreviation for January.
+    gutter_lines = lines[0::2]
+    found_jan = any("Jan" in line for line in gutter_lines)
+    assert found_jan, f"no Jan label in gutter: {gutter_lines}"
 
 
 def test_calendar_panel_includes_legend():

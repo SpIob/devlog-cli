@@ -109,6 +109,9 @@ __all__ = [
     "print_error",
     "print_warning",
     "print_info",
+    "success_line",
+    "destructive_line",
+    "dry_run_line",
     "entry_panel",
     "entries_table",
     "tags_table",
@@ -179,6 +182,10 @@ def _plural_noun(n: int, singular: str, plural: str | None = None) -> str:
 
     For *n* in {0, 1}, returns ``singular`` (so "1 row" not "1 rows").
     """
+    # Delegate to ``pluralize`` so the pluralisation rules (notably the
+    # ``"entry"`` → ``"entries"`` special case) live in one place. The
+    # ``n == 1`` early return just keeps the "1 row" wording intact
+    # without a redundant count prefix.
     if n == 1:
         return singular
     if plural is None:
@@ -228,11 +235,73 @@ def print_warning(message: str) -> None:
 
 
 def print_info(message: str) -> None:
-    """Print a dim info line to STDOUT with an ℹ icon."""
+    """Print a dim info line to STDOUT with an ℹ icon.
+
+    The icon is the unicode ℹ (U+2139) on UTF-8-capable terminals
+    and a plain ASCII ``i`` on legacy encodings where the unicode
+    glyph would render as ``?``.
+    """
     line = Text()
-    line.append("ℹ ", style=_s("info_text"))
+    icon = "i" if _ellipsis_for_encoding(sys.stdout.encoding) == "..." else "ℹ "
+    line.append(f"{icon} ", style=_s("info_text"))
     line.append(message, style=_s("info_text"))
     console.print(line)
+
+
+# ---------------------------------------------------------------------------
+# One-liner confirmation helpers (used by tag-rename/merge, import,
+# export, restore, backup). Centralising them keeps the icon style,
+# spacing, and surrounding Typography consistent across commands.
+# ---------------------------------------------------------------------------
+
+
+def success_line(text: str) -> Text:
+    """Build a green ✔ confirmation line for STDOUT.
+
+    Args:
+        text: the message to print after the check icon. Pass the body
+            only; the icon and spacing are added here.
+
+    Returns:
+        A :class:`rich.text.Text` ready to ``console.print(...)``. The
+        caller is responsible for actually printing it, so multi-line
+        compositions (e.g. with extra detail after the headline) stay
+        possible.
+    """
+    line = Text()
+    line.append("✔ ", style=_bold("success_title"))
+    line.append(text, style=_s("success_text"))
+    return line
+
+
+def destructive_line(text: str) -> Text:
+    """Build a red ✘ confirmation line for STDOUT.
+
+    Args:
+        text: the message to print after the cross icon.
+
+    Returns:
+        A :class:`rich.text.Text` ready to ``console.print(...)``.
+    """
+    line = Text()
+    line.append("✘ ", style=_bold("delete_border"))
+    line.append(text, style=_s("error_text"))
+    return line
+
+
+def dry_run_line(text: str) -> Text:
+    """Build a yellow DRY RUN preview line for STDOUT.
+
+    Args:
+        text: the message to print after the ``DRY RUN:`` label.
+
+    Returns:
+        A :class:`rich.text.Text` ready to ``console.print(...)``.
+    """
+    line = Text()
+    line.append("DRY RUN: ", style=_bold("warning_text"))
+    line.append(text, style=_s("warning_text"))
+    return line
 
 
 # ---------------------------------------------------------------------------
@@ -270,18 +339,21 @@ def _format_dt(iso: str, *, tz=None, tz_label: str = "UTC") -> str:
     return dt.strftime(f"%Y-%m-%d %H:%M {tz_label}")
 
 
-def _styled_row(label: str, value) -> Text:
+def _styled_row(label: str, value, *, label_width: int = 9) -> Text:
     """Build a single ``Label : value`` row with aligned columns.
 
     Args:
         label: the row label, rendered dim.
         value: a plain string OR a ``Text`` to be styled as the value.
+        label_width: the ``{:<N}`` width for the label column.
+            ``_stats_row_text`` (now removed) used 12 for its wider
+            left column; defaults to 9 to preserve the entry-panel look.
 
     Returns:
         A ``Text`` ready to be added to a Group inside a Panel.
     """
     line = Text()
-    line.append(f"{label:<6}", style="dim")
+    line.append(f"{label:<{label_width}}", style="dim")
     line.append(": ")
     if isinstance(value, Text):
         line.append_text(value)
@@ -298,7 +370,7 @@ def entry_panel(
     title_style: str | None = None,
     border_style: str | None = None,
     show_full_id: bool = False,
-    footer_hint: str = "Run `devlog list` to see all entries.",
+    footer_hint: str | None = None,
 ) -> Panel:
     """Render a panel for an entry.
 
@@ -316,7 +388,10 @@ def entry_panel(
         border_style: Rich style for the panel border. Defaults to the
             ``success_border`` theme role.
         show_full_id: when True, render the full UUID as a row.
-        footer_hint:  dim italic footer line (set to empty to hide).
+        footer_hint:  dim italic footer line. When ``None`` (the
+            default), a hint that mentions the entry's short id is
+            generated automatically; pass an empty string to suppress
+            the footer entirely.
 
     Returns:
         A configured ``rich.panel.Panel`` ready to print.
@@ -341,6 +416,14 @@ def entry_panel(
         rows.append(_styled_row("ID", Text(entry.id, style=_s("id_dim"))))
     rows.append(_styled_row("Note", Text(entry.message)))
     rows.append(Text())
+    # Resolve the default footer hint lazily so callers can pass either
+    # a custom string (preserved verbatim) or ``None`` to get an
+    # id-aware hint, or an empty string to suppress the line.
+    if footer_hint is None:
+        footer_hint = (
+            f"Use `devlog show {short_id}` to view it again, "
+            f"or `devlog edit {short_id}` to amend it."
+        )
     if footer_hint:
         rows.append(Text(footer_hint, style="dim italic"))
 
@@ -406,24 +489,52 @@ def smart_truncate(
     suffix = message[match_end:end]
 
     parts = []
+    el = _ellipsis()
     if start > 0:
-        parts.append("…")
+        parts.append(el)
     if prefix:
         parts.append(escape(prefix))
     parts.append(f"[{_s('match_highlight')}]{escape(match_text)}[/{_s('match_highlight')}]")
     if suffix:
         parts.append(escape(suffix))
     if end < len(message):
-        parts.append("…")
+        parts.append(el)
 
     return "".join(parts)
 
 
+def _ellipsis() -> str:
+    """Return an ellipsis character that's safe to print on the current stdout.
+
+    The Unicode ``…`` (U+2026) is the most compact form, but on
+    legacy cp1252 (default Windows console) hosts it encodes to
+    ``?`` and the user sees ``message with a ?`` instead of the
+    intended glyph. Picking ``...`` on those hosts keeps the output
+    readable everywhere.
+    """
+    return _ellipsis_for_encoding(sys.stdout.encoding)
+
+
+def _ellipsis_for_encoding(encoding: str | None) -> str:
+    """The encoding-aware core of :func:`_ellipsis`, split out for testing."""
+    if (encoding or "").lower().startswith(("utf-8", "utf-16", "utf-32")):
+        return "\u2026"
+    return "..."
+
+
 def _left_truncate(message: str, limit: int = MSG_TRUNCATE_LEN) -> str:
-    """Truncate to *limit* chars from the left, appending ``…``."""
-    if len(message) > limit:
-        return message[: limit - 1] + "…"
-    return message
+    """Truncate to *limit* chars from the left, appending an ellipsis.
+
+    The budget accounts for the *length of the ellipsis on this
+    terminal*, so a 3-char ``...`` on cp1252 still fits inside
+    ``limit`` chars (a 1-char ``…`` was the implicit assumption before
+    we made the ellipsis encoding-aware).
+    """
+    el = _ellipsis()
+    if len(message) <= limit:
+        return message
+    keep = max(0, limit - len(el))
+    return message[:keep] + el
 
 
 def highlight_message(message: str, query: str) -> str:
@@ -461,6 +572,54 @@ def _tags_text(entry: Entry) -> Text:
     if not entry.tags:
         return Text(TAG_NONE, style="dim")
     return Text(", ".join(entry.tags), style=_s("tags"))
+
+
+def _panel_title(
+    *,
+    icon: str | None,
+    label: str,
+    short_id: str,
+    role: str,
+) -> Text:
+    """Build a ``<icon> <label>  ·  <short_id>`` panel title.
+
+    Centralises the 3-line ``Text.append().append().append()`` chain
+    that the four entry-detail panels (``entry``, ``show``, ``delete``,
+    ``edit``) and the report panels (``repair``, ``doctor``,
+    ``calendar``) all duplicated.
+
+    Args:
+        icon: leading icon character (e.g. ``"✔"`` or ``"✘"``). Pass
+            ``None`` for iconless panels (e.g. ``show``).
+        label: the panel title text.
+        short_id: the 8-char short id to append dim after a separator.
+        role: theme role for the icon and label colour.
+
+    Returns:
+        A :class:`rich.text.Text` ready to drop into ``Panel(title=...)``.
+    """
+    t = Text()
+    if icon:
+        t.append(f"{icon} ", style=_bold(role))
+    t.append(label, style=_bold(role))
+    t.append(f"  ·  {short_id}", style="dim")
+    return t
+
+
+def _updated_text(entry: Entry) -> Text:
+    """Build a styled "updated at" line for entry-detail panels.
+
+    Returns a dim "—" when ``updated_at`` is absent (so the layout
+    stays consistent across freshly-added and edited entries).
+    """
+    if entry.updated_at:
+        return Text(_format_dt(entry.updated_at), style=_s("updated"))
+    return Text("—", style="dim")
+
+
+def _date_text(entry: Entry) -> Text:
+    """Build a styled "created at" line for entry-detail panels."""
+    return Text(_format_dt(entry.created_at), style=_s("date"))
 
 
 def _terminal_width() -> int:
@@ -512,7 +671,13 @@ def _column_widths() -> dict:
     extra = max(0, col_budget - min_with_padding)
     # Give the extra room to Tags first (a few more visible tags is
     # more useful than a few more message chars), then to Message.
-    tags_extra = min(extra, _TAGS_GROWTH_CAP - COL_TAGS_MIN)
+    # The cap is bounded by ``_TAGS_GROWTH_CAP`` (the historical max)
+    # and also by half the available surplus, so a tight terminal
+    # with very little headroom never lets tags consume more than
+    # half the room — leaving a usable message column behind.
+    half_surplus = extra // 2
+    cap = min(max(0, _TAGS_GROWTH_CAP - COL_TAGS_MIN), half_surplus)
+    tags_extra = min(extra, cap)
     tags_width = COL_TAGS_MIN + tags_extra
     message_width = COL_MESSAGE_MIN + (extra - tags_extra)
     return {
@@ -552,7 +717,7 @@ def entries_table(
         title_justify="left",
         title_style="bold",
         caption=subtitle or None,
-        caption_style="dim",
+        caption_style=_s("table_caption"),
         caption_justify="left",
         row_styles=["", _s("zebra_alt")],
         header_style="bold",
@@ -588,7 +753,7 @@ def entries_table(
         "Message",
         width=widths["message"] + _COL_PADDING,
         footer=f"Showing {len(entries)} of {total} {_plural_noun(total, 'entry')}.",
-        footer_style="bold",
+        footer_style=_s("table_footer"),
         # Keep short messages left-aligned (Rich centres them by
         # default) and keep the footer flush against the cell's left
         # edge so it does not float in whitespace.
@@ -637,33 +802,21 @@ def show_panel(entry: Entry) -> Panel:
     Returns:
         A configured ``rich.panel.Panel`` ready to print.
     """
-    short_id = entry.id[:ID_DISPLAY_LEN]
+    short_id = entry.short_id
     full_id = Text(entry.id, style=_s("id_dim"))
-    tags_display = (
-        Text(", ".join(entry.tags), style=_s("tags"))
-        if entry.tags
-        else Text(TAG_NONE, style="dim")
-    )
-    created_text = Text(_format_dt(entry.created_at), style=_s("date"))
-    updated_text = (
-        Text(_format_dt(entry.updated_at), style=_s("updated"))
-        if entry.updated_at
-        else Text("—", style="dim")
-    )
-    message_text = Text(entry.message)
 
     body = Group(
         _styled_row("ID", full_id),
-        _styled_row("Date", created_text),
-        _styled_row("Updtd", updated_text),
-        _styled_row("Tags", tags_display),
+        _styled_row("Date", _date_text(entry)),
+        _styled_row("Updated", _updated_text(entry)),
+        _styled_row("Tags", _tags_text(entry)),
         Text(),
-        message_text,
+        Text(entry.message),
     )
 
-    title = Text()
-    title.append("Entry", style="bold")
-    title.append(f"  ·  {short_id}", style="dim")
+    title = _panel_title(
+        icon=None, label="Entry", short_id=short_id, role="show_border"
+    )
 
     return Panel(
         body,
@@ -676,23 +829,23 @@ def show_panel(entry: Entry) -> Panel:
 
 def delete_panel(entry: Entry) -> Panel:
     """Render a destructive confirmation that an entry was deleted."""
-    short_id = entry.id[:ID_DISPLAY_LEN]
-    date_text = Text(_format_dt(entry.created_at), style=_s("date"))
-    tags_str = ", ".join(entry.tags) if entry.tags else TAG_NONE
-    tags_text = Text(tags_str, style=_s("tags") if entry.tags else "dim")
+    short_id = entry.short_id
+    tags_text = _tags_text(entry) if entry.tags else Text(
+        ", ".join(entry.tags) if entry.tags else TAG_NONE,
+        style=_s("tags") if entry.tags else "dim",
+    )
 
     body = Group(
         _styled_row("ID", Text(short_id, style=_s("id_dim"))),
-        _styled_row("Date", date_text),
+        _styled_row("Date", _date_text(entry)),
         _styled_row("Tags", tags_text),
         Text(),
         Text(entry.message, style="strike dim"),
     )
 
-    title = Text()
-    title.append("✘ ", style=_bold("delete_border"))
-    title.append("Entry deleted", style=_bold("delete_border"))
-    title.append(f"  ·  {short_id}", style="dim")
+    title = _panel_title(
+        icon="✘", label="Entry deleted", short_id=short_id, role="delete_border"
+    )
 
     return Panel(
         body,
@@ -705,31 +858,19 @@ def delete_panel(entry: Entry) -> Panel:
 
 def edit_panel(entry: Entry) -> Panel:
     """Render a blue-bordered confirmation that an entry was edited."""
-    short_id = entry.id[:ID_DISPLAY_LEN]
-    date_text = Text(_format_dt(entry.created_at), style=_s("date"))
-    updated_text = (
-        Text(_format_dt(entry.updated_at), style=_s("updated"))
-        if entry.updated_at
-        else Text("—", style="dim")
-    )
-    tags_display = (
-        Text(", ".join(entry.tags), style=_s("tags"))
-        if entry.tags
-        else Text(TAG_NONE, style="dim")
-    )
+    short_id = entry.short_id
 
     body = Group(
-        _styled_row("Date", date_text),
-        _styled_row("Updtd", updated_text),
-        _styled_row("Tags", tags_display),
+        _styled_row("Date", _date_text(entry)),
+        _styled_row("Updated", _updated_text(entry)),
+        _styled_row("Tags", _tags_text(entry)),
         Text(),
         Text(entry.message),
     )
 
-    title = Text()
-    title.append("✎ ", style=_bold("edit_border"))
-    title.append("Entry updated", style=_bold("edit_border"))
-    title.append(f"  ·  {short_id}", style="dim")
+    title = _panel_title(
+        icon="✎", label="Entry updated", short_id=short_id, role="edit_border"
+    )
 
     return Panel(
         body,
@@ -776,7 +917,7 @@ def tags_table(
         style=_s("date"),
         no_wrap=True,
         footer=f"Across {total_entries} {_plural_noun(total_entries, 'entry')}.",
-        footer_style="bold",
+        footer_style=_s("table_footer"),
     )
 
     for tag, count, last_used in rows:
@@ -828,6 +969,16 @@ def sparkline(values: list[int]) -> str:
 # keeps the grid from collapsing visually on narrow terminals.
 _HEATMAP_CHARS = [" ", "·", "▪", "▫", "█"]
 
+# (upper-bound ratio, character, theme role) for the four non-zero
+# heatmap tiers. Tiers are inclusive on the upper bound; the sentinel
+# ``1.01`` ensures anything that survives the loop gets the top tier.
+_HEATMAP_TIERS: tuple[tuple[float, str, str], ...] = (
+    (0.25, "·", "heatmap_l1"),
+    (0.50, "▪", "heatmap_l2"),
+    (0.75, "▫", "heatmap_l3"),
+    (1.01, "█", "heatmap_l4"),
+)
+
 
 def calendar_grid(per_day: dict, *, year: int) -> Text:
     """Build a year-grid heatmap (53 weeks × 7 days) of entry counts.
@@ -841,6 +992,12 @@ def calendar_grid(per_day: dict, *, year: int) -> Text:
     and each column is one ISO week. The first column may be padded
     with leading spaces so the 1st of January falls on the correct
     weekday row.
+
+    A 3-character gutter on the left of each row carries the
+    short month name (``Jan``, ``Feb`` …) on the *first* week-column
+    that contains at least one day of that month. Subsequent rows
+    for the same week are blank, so the month label never repeats
+    and the gutter stays narrow on a 7-row grid.
 
     Args:
         per_day: ``{YYYY-MM-DD: count}`` map. Dates outside *year* are
@@ -873,19 +1030,41 @@ def calendar_grid(per_day: dict, *, year: int) -> Text:
         """Map a count to (character, theme role)."""
         if count <= 0 or max_count <= 0:
             return " ", "heatmap_empty"
-        # Distribute into 4 non-zero tiers based on fraction of max.
         ratio = count / max_count
-        if ratio > 0.75:
-            return "█", "heatmap_l4"
-        if ratio > 0.5:
-            return "▫", "heatmap_l3"
-        if ratio > 0.25:
-            return "▪", "heatmap_l2"
-        return "·", "heatmap_l1"
+        for threshold, char, role in _HEATMAP_TIERS:
+            if ratio <= threshold:
+                return char, role
+        # Unreachable given the 1.01 sentinel, but keep a sane default.
+        return "█", "heatmap_l4"
+
+    # For each week-column, decide which (if any) month label to put in
+    # the left gutter. The label appears in the row that *contains* the
+    # 1st of the month; we compute the gutter per weekday so the label
+    # always sits next to its month. ``None`` means "blank gutter".
+    gutter_per_row: list[list[str | None]] = [[None] * num_weeks for _ in range(7)]
+    last_month = -1
+    for week in range(num_weeks):
+        for weekday in range(7):
+            day_offset = week * 7 + weekday - first_col_pad
+            if day_offset < 0 or day_offset >= total_days:
+                continue
+            d = jan1 + _dt.timedelta(days=day_offset)
+            if d.month != last_month:
+                gutter_per_row[weekday][week] = d.strftime("%b")
+                last_month = d.month
 
     grid = Text()
     # Build a 7×N array of (char, role) tuples.
     for weekday in range(7):
+        # Left-edge month-label gutter for this row.
+        for week in range(num_weeks):
+            label = gutter_per_row[weekday][week]
+            if label is not None:
+                grid.append(label, style="dim")
+            else:
+                grid.append("   ", style="dim")
+            grid.append(" ")
+        grid.append("\n")
         for week in range(num_weeks):
             cell_index = week * 7 + weekday
             day_offset = cell_index - first_col_pad
@@ -920,15 +1099,15 @@ def calendar_panel(per_day: dict, *, year: int, tz=None) -> Panel:
 
     body_rows: list = [grid]
     body_rows.append(Text())
+    # Build the "less  · ▪ ▫ █  more" legend from the same data
+    # table the heatmap uses, so changing a threshold or character
+    # only requires editing one place.
     legend = Text()
     legend.append("less ", style="dim")
-    legend.append("·", style=_s("heatmap_l1"))
-    legend.append(" ", style="dim")
-    legend.append("▪", style=_s("heatmap_l2"))
-    legend.append(" ", style="dim")
-    legend.append("▫", style=_s("heatmap_l3"))
-    legend.append(" ", style="dim")
-    legend.append("█", style=_s("heatmap_l4"))
+    for _i, (_, char, role) in enumerate(_HEATMAP_TIERS):
+        if _i:
+            legend.append(" ", style="dim")
+        legend.append(char, style=_s(role))
     legend.append(" more", style="dim")
     body_rows.append(legend)
     body_rows.append(
@@ -1017,20 +1196,27 @@ def stats_panel(
     if top_tags:
         rows.append(Text(f"Top {len(top_tags)} tags", style="bold"))
         for tag, count in top_tags:
-            rows.append(_stats_row_text(f"  {tag}", str(count)))
+            rows.append(_styled_row(f"  {tag}", str(count), label_width=12))
     else:
         rows.append(Text("No tags yet.", style="dim"))
 
     rows.append(Text())
     if sparkline_values:
         rows.append(Text("Last 30 days (entries per day)", style="bold"))
-        rows.append(Text(sparkline(sparkline_values), style=_s("date")))
-        rows.append(
-            Text()
-            .append("0", style="dim")
-            .append(" " * max(0, 30 - len(str(sparkline_max)) - len("0")))
-            .append(str(sparkline_max), style="dim")
+        rows.append(Text(sparkline(sparkline_values), style=_s("sparkline")))
+        # Anchor the 0 / max scale labels to the start and end of the
+        # sparkline using a two-column grid; the right column is allowed
+        # to expand so the rightmost label always sits flush against the
+        # last block character regardless of how wide `sparkline_max`
+        # renders in chars.
+        scale = Table.grid(expand=True, padding=(0, 0))
+        scale.add_column(justify="left", no_wrap=True)
+        scale.add_column(justify="right", no_wrap=True)
+        scale.add_row(
+            Text("0", style="dim"),
+            Text(str(sparkline_max), style="dim"),
         )
+        rows.append(scale)
 
     return Panel(
         Padding(Group(*rows), (0, 1)),
@@ -1038,15 +1224,6 @@ def stats_panel(
         title="Journal Stats",
         title_align="left",
     )
-
-
-def _stats_row_text(label: str, value: str) -> Text:
-    """Build a labelled stat row matching the entry-panel style."""
-    t = Text()
-    t.append(f"{label:<12}", style="dim")
-    t.append(": ")
-    t.append(value)
-    return t
 
 
 # ---------------------------------------------------------------------------
@@ -1094,12 +1271,22 @@ def version_banner() -> None:
     )
 
 
-def root_banner() -> None:
+def root_banner(commands: Sequence[tuple[str, str]] | None = None) -> None:
     """Print a friendly banner when ``devlog`` is invoked with no subcommand.
 
     Replaces the raw Click help text with a banner + 2-column command
     table and a hint about ``--help``.
+
+    Args:
+        commands: optional list of ``(name, description)`` tuples. When
+            omitted, falls back to ``devlog.cli.COMMANDS`` so the
+            single source of truth lives in one place. The fallback is
+            lazy-imported to avoid a circular dependency at module load.
     """
+    if commands is None:
+        from devlog.cli import COMMANDS as _COMMANDS
+        commands = _COMMANDS
+
     console.print(
         Text("devlog", style="bold")
         + Text("  ·  a terminal-based developer journal", style="dim")
@@ -1114,30 +1301,8 @@ def root_banner() -> None:
     )
     table.add_column(style=_s("banner_command"), no_wrap=True)
     table.add_column(style="default")
-    table.add_row("add", "Add a new journal entry")
-    table.add_row("show", "Show a single entry by ID")
-    table.add_row("edit", "Edit an entry's message and/or tags")
-    table.add_row("delete", "Delete an entry by ID")
-    table.add_row("list", "List entries, newest first")
-    table.add_row("search", "Search entry messages")
-    table.add_row("today", "Show today's entries")
-    table.add_row("yesterday", "Show yesterday's entries")
-    table.add_row("week", "Show the last 7 days")
-    table.add_row("tail", "Show the N most recent entries")
-    table.add_row("tags", "List tags with usage counts")
-    table.add_row("tag", "Show or delete entries with a tag")
-    table.add_row("merge-tag", "Merge two tags across all entries")
-    table.add_row("theme", "View or change the active color theme")
-    table.add_row("stats", "Summarize the journal")
-    table.add_row("calendar", "Show a year-grid heatmap of activity")
-    table.add_row("rename-tag", "Rename a tag across all entries")
-    table.add_row("import", "Import entries from a JSON or Markdown file")
-    table.add_row("completions", "Print a shell completion script")
-    table.add_row("export", "Export entries to a Markdown file")
-    table.add_row("repair", "Inspect and repair the on-disk journal store")
-    table.add_row("backup", "Write a timestamped copy of the journal")
-    table.add_row("restore", "Restore the journal from a backup file")
-    table.add_row("doctor", "Check the journal store for corruption")
+    for name, desc in commands:
+        table.add_row(name, desc)
     console.print(table)
 
     console.print(
@@ -1222,14 +1387,9 @@ def repair_summary(
 
 def backup_result(path: str, count: int) -> Text:
     """Build a one-line confirmation for a successful backup."""
-    line = Text()
-    line.append("✔ ", style=_bold("success_title"))
-    line.append(
-        f"Backed up {count} {_plural_noun(count, 'entry')} to ",
-        style=_s("success_border"),
-    )
-    line.append(path, style="bold")
-    return line
+    return success_line(
+        f"Backed up {count} {_plural_noun(count, 'entry')} to "
+    ).append(path, style="bold")
 
 
 # ---------------------------------------------------------------------------

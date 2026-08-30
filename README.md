@@ -1145,18 +1145,24 @@ The full list of roles:
 | `warning_text` | yellow warning text and ⚠ icon | `yellow` |
 | `info_text` | dim ℹ info line | `dim` |
 | `success_border` | green border on `add` success panel | `green` |
+| `success_text` | green body text on ✔ confirmation lines | `green` |
 | `success_title` | green title + ✔ icon on `add` success | `bold green` |
 | `show_border` | cyan border on `show` and stats panels | `cyan` |
 | `delete_border` | red border + ✘ on `delete` | `red` |
 | `edit_border` | blue border + ✎ on `edit` | `blue` |
 | `date` | cyan date cells in tables and panels | `cyan` |
-| `updated` | yellow "Updtd" cells | `yellow` |
+| `updated` | yellow "Updated" cells | `yellow` |
 | `tags` | magenta tag cells | `magenta` |
 | `id_dim` | dim short-id cells | `dim white` |
 | `match_highlight` | yellow search-match highlight | `bold yellow` |
 | `banner_version` | version number on `--version` | `bold cyan` |
 | `banner_command` | command names in root help banner | `bold cyan` |
+| `prompt_border` | interactive REPL prompt | `magenta` |
+| `table_caption` | dim caption under a table | `dim` |
+| `table_footer` | bold footer under a table | `bold` |
+| `sparkline` | 30-day histogram in `stats` | `cyan` |
 | `zebra_alt` | alternate-row dim style in `list` | `dim` |
+| `heatmap_base` | base hue for the calendar heatmap | `green` |
 | `heatmap_empty` | empty cells in the `calendar` heatmap | `grey15` |
 | `heatmap_l1` | lightest non-zero tier in the heatmap | `green` |
 | `heatmap_l2` | second heatmap tier | `color(34)` |

@@ -107,11 +107,19 @@ def test_export_quiet_prints_path(runner, tmp_path):
 
 def test_export_unwritable_path(runner, tmp_path):
     _add(runner, "Something")
-    # Pass a path in a nonexistent deep directory to force an OSError
-    bad_path = "/root/no_permission_here/devlog.md"
-    result = runner.invoke(main, ["export", "--output", bad_path, "--quiet"])
-    assert result.exit_code == 2
-    assert "Cannot write to" in result.output
+    # Make the parent read-only so the write fails. Use a tmp_path
+    # subtree so the test is portable across CI and non-root users
+    # (the previous /root/... path didn't exist on macOS or for root).
+    parent = tmp_path / "locked"
+    parent.mkdir()
+    parent.chmod(0o555)
+    bad_path = parent / "devlog.md"
+    try:
+        result = runner.invoke(main, ["export", "--output", str(bad_path), "--quiet"])
+        assert result.exit_code == 2
+        assert "Cannot write to" in result.output
+    finally:
+        parent.chmod(0o755)
 
 
 # ---------------------------------------------------------------------------

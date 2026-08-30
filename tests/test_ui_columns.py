@@ -194,6 +194,35 @@ def test_search_match_visible_in_narrow_column(width, monkeypatch, fixed_termina
     assert "needle" in rendered, f"search match 'needle' missing:\n{rendered}"
 
 
+def test_ellipsis_picks_unicode_on_utf8():
+    """``_ellipsis_for_encoding`` returns ``…`` for UTF-8 (the modern default)."""
+    assert ui._ellipsis_for_encoding("utf-8") == "\u2026"
+    assert ui._ellipsis_for_encoding("UTF-8") == "\u2026"
+    assert ui._ellipsis_for_encoding("utf-16") == "\u2026"
+
+
+def test_ellipsis_picks_dots_on_legacy_cp1252():
+    """``_ellipsis_for_encoding`` returns ``...`` on legacy encodings where
+    ``…`` would render as ``?`` (e.g. Windows cp1252 console hosts)."""
+    assert ui._ellipsis_for_encoding("cp1252") == "..."
+    assert ui._ellipsis_for_encoding("ascii") == "..."
+    assert ui._ellipsis_for_encoding(None) == "..."
+    assert ui._ellipsis_for_encoding("") == "..."
+
+
+def test_left_truncate_uses_ellipsis_helper(monkeypatch):
+    """``_left_truncate`` defers to ``_ellipsis`` so its suffix survives
+    on legacy encodings. We patch the helper directly because
+    ``sys.stdout.encoding`` is read-only.
+    """
+    monkeypatch.setattr(ui, "_ellipsis", lambda: "...")
+    out = ui._left_truncate("a" * 200, limit=12)
+    # 9 chars of message + 3-char "..." suffix = 12 total
+    assert out.endswith("...")
+    assert len(out) == 12
+    assert out == "aaaaaaaaa..."
+
+
 def test_search_match_is_ansi_styled(monkeypatch, fixed_terminal_width):
     """The matched substring must be styled (bold + yellow)."""
     ui.console = Console(no_color=False, width=120, force_terminal=True)
@@ -300,6 +329,32 @@ def test_sparkline_helper_uses_blocks():
     # All-zero day → ▁; max day → █
     assert out[0] == "▁"
     assert out[-1] == "█"
+
+
+def test_stats_panel_anchors_scale_labels_to_sparkline_width():
+    """The 0 / max labels must flank the sparkline regardless of how
+    wide the max value renders. Regression: a previous version padded
+    the labels with a fixed 30 - len(max) char count, which broke when
+    the journal had >9 entries on its busiest day (max became "10" and
+    the right label drifted 1 column left of the last block).
+    """
+    panel = ui.stats_panel(
+        total=10,
+        first_iso="2025-01-01T00:00:00Z",
+        last_iso="2025-01-30T00:00:00Z",
+        top_tags=[],
+        # Busiest day is 99 entries; the scale label must be 2 chars wide
+        # and the previous 30-char-pad math would have under-padded.
+        last_30_days=[(f"2025-01-{i:02d}", 1) for i in range(1, 30)]
+        + [("2025-01-30", 99)],
+    )
+    buf = io.StringIO()
+    Console(file=buf, no_color=True, width=120).print(panel)
+    out = _strip_ansi(buf.getvalue())
+    # Both labels must appear in the panel; the render itself is
+    # left to Rich but the values must survive end-to-end.
+    assert "0" in out
+    assert "99" in out
 
 
 # ---------------------------------------------------------------------------

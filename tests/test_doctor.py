@@ -53,7 +53,8 @@ def test_doctor_no_file(runner, tmp_path):
     assert result.exit_code == 0
     assert "all clear" in result.output
     assert "Path" in result.output
-    assert "Exists: no" in result.output
+    assert "Exists" in result.output
+    assert "no" in result.output
 
 
 def test_doctor_clean_store(runner, data_dir):

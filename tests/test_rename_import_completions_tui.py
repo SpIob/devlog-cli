@@ -486,11 +486,6 @@ def test_interactive_quit_via_stdin(monkeypatch, tmp_path):
     monkeypatch.setattr(_rp.Prompt, "ask", lambda *a, **kw: "q")
 
     result = CliRunner().invoke(main, ["--interactive"])
-    if result.exit_code != 0:
-        print("\n--- STDOUT ---\n" + result.output)
-        if result.exception and not isinstance(result.exception, SystemExit):
-            import traceback
-            traceback.print_exception(type(result.exception), result.exception, result.exception.__traceback__)
     assert result.exit_code == 0
 
 
@@ -504,11 +499,6 @@ def test_interactive_help(monkeypatch, tmp_path):
     monkeypatch.setattr(_rp.Prompt, "ask", lambda *a, **kw: next(responses))
 
     result = CliRunner().invoke(main, ["--interactive"])
-    if result.exit_code != 0:
-        print("\n--- STDOUT ---\n" + result.output)
-        if result.exception and not isinstance(result.exception, SystemExit):
-            import traceback
-            traceback.print_exception(type(result.exception), result.exception, result.exception.__traceback__)
     assert result.exit_code == 0
     assert "Available commands" in result.output
     # Every command group + its sub-commands should be discoverable.

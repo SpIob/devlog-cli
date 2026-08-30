@@ -46,61 +46,50 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 
 #: Every role that :mod:`devlog.ui` may request from the active theme.
 #: A user file may set any subset; unknown keys are dropped with a warning.
-ROLES: frozenset[str] = frozenset(
-    {
-        "error_border",
-        "error_text",
-        "warning_text",
-        "info_text",
-        "success_border",
-        "success_title",
-        "show_border",
-        "delete_border",
-        "edit_border",
-        "date",
-        "updated",
-        "tags",
-        "id_dim",
-        "match_highlight",
-        "banner_version",
-        "banner_command",
-        "zebra_alt",
-        "heatmap_empty",
-        "heatmap_l1",
-        "heatmap_l2",
-        "heatmap_l3",
-        "heatmap_l4",
-    }
-)
+#:
+#: Single source of truth for theme data. ``ROLES`` and ``DEFAULT_THEME``
+#: are derived from this list at import time, and the starter-file
+#: template is generated from the same list by :func:`_theme_template`
+#: so adding a role only requires editing one place.
+_ROLE_DEFAULTS: list[tuple[str, str]] = [
+    ("error_border",     "red"),
+    ("error_text",       "red"),
+    ("warning_text",     "yellow"),
+    ("info_text",        "dim"),
+    ("success_border",   "green"),
+    ("success_text",     "green"),
+    ("success_title",    "bold green"),
+    ("show_border",      "cyan"),
+    ("delete_border",    "red"),
+    ("edit_border",      "blue"),
+    ("date",             "cyan"),
+    ("updated",          "yellow"),
+    ("tags",             "magenta"),
+    ("id_dim",           "dim white"),
+    ("match_highlight",  "bold yellow"),
+    ("banner_version",   "bold cyan"),
+    ("banner_command",   "bold cyan"),
+    ("prompt_border",    "magenta"),
+    ("table_caption",    "dim"),
+    ("table_footer",     "bold"),
+    ("sparkline",        "cyan"),
+    ("zebra_alt",        "dim"),
+    ("heatmap_base",     "green"),
+    ("heatmap_empty",    "grey15"),
+    ("heatmap_l1",       "green"),
+    ("heatmap_l2",       "color(34)"),
+    ("heatmap_l3",       "color(40)"),
+    ("heatmap_l4",       "color(46)"),
+]
+
+
+ROLES: frozenset[str] = frozenset(role for role, _ in _ROLE_DEFAULTS)
 
 
 #: Built-in default palette. These are the values previously hardcoded
 #: in :mod:`devlog.ui`; rendering is byte-identical to the pre-theming
 #: code when no user file is present.
-DEFAULT_THEME: dict[str, str] = {
-    "error_border": "red",
-    "error_text": "red",
-    "warning_text": "yellow",
-    "info_text": "dim",
-    "success_border": "green",
-    "success_title": "bold green",
-    "show_border": "cyan",
-    "delete_border": "red",
-    "edit_border": "blue",
-    "date": "cyan",
-    "updated": "yellow",
-    "tags": "magenta",
-    "id_dim": "dim white",
-    "match_highlight": "bold yellow",
-    "banner_version": "bold cyan",
-    "banner_command": "bold cyan",
-    "zebra_alt": "dim",
-    "heatmap_empty": "grey15",
-    "heatmap_l1": "green",
-    "heatmap_l2": "color(34)",
-    "heatmap_l3": "color(40)",
-    "heatmap_l4": "color(46)",
-}
+DEFAULT_THEME: dict[str, str] = dict(_ROLE_DEFAULTS)
 
 
 # ---------------------------------------------------------------------------
@@ -294,39 +283,29 @@ def get_bold_style(role: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-_THEME_TEMPLATE = """# devlog theme
-#
-# Override any role below to customize colors. Roles you omit use the
-# built-in default. Any Rich style string is accepted: named colors
-# (e.g. "red"), hex ("#ff8800"), 256-color ("color(208)"),
-# true-color ("rgb((255,136,0))"), or composites like "bold yellow".
-#
-# Run `devlog theme list` to see every role and its current value.
+def _theme_template() -> str:
+    """Build the starter ``theme.toml`` content from :data:`_ROLE_DEFAULTS`.
 
-[palette]
-# error_border     = "red"
-# error_text       = "red"
-# warning_text     = "yellow"
-# info_text        = "dim"
-# success_border   = "green"
-# success_title    = "bold green"
-# show_border      = "cyan"
-# delete_border    = "red"
-# edit_border      = "blue"
-# date             = "cyan"
-# updated          = "yellow"
-# tags             = "magenta"
-# id_dim           = "dim white"
-# match_highlight  = "bold yellow"
-# banner_version   = "bold cyan"
-# banner_command   = "bold cyan"
-# zebra_alt        = "dim"
-# heatmap_empty    = "grey15"
-# heatmap_l1       = "green"
-# heatmap_l2       = "color(34)"
-# heatmap_l3       = "color(40)"
-# heatmap_l4       = "color(46)"
-"""
+    Generated rather than hardcoded so the template can never drift
+    from the actual role list — adding a role in :data:`_ROLE_DEFAULTS`
+    automatically shows up here.
+    """
+    header = (
+        "# devlog theme\n"
+        "#\n"
+        "# Override any role below to customize colors. Roles you omit use the\n"
+        "# built-in default. Any Rich style string is accepted: named colors\n"
+        "# (e.g. \"red\"), hex (\"#ff8800\"), 256-color (\"color(208)\"),\n"
+        "# true-color (\"rgb((255,136,0))\"), or composites like \"bold yellow\".\n"
+        "#\n"
+        "# Run `devlog theme list` to see every role and its current value.\n"
+        "\n"
+        "[palette]\n"
+    )
+    body = "\n".join(
+        f"# {role:<16} = \"{default}\"" for role, default in _ROLE_DEFAULTS
+    )
+    return header + body + "\n"
 
 
 def write_default_theme(destination) -> None:
@@ -340,7 +319,7 @@ def write_default_theme(destination) -> None:
             created) or a writable stream (the template text is
             written directly to it).
     """
-    text = _THEME_TEMPLATE
+    text = _theme_template()
     if hasattr(destination, "write"):
         destination.write(text)
         return
