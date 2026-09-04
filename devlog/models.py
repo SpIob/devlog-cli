@@ -58,7 +58,7 @@ def _parse_iso(iso: str) -> _dt.datetime:
 
     Returns the epoch on any parse failure so callers can still sort or
     bucket without raising. This is the read-side counterpart of
-    :func:`devlog.storage._is_valid_iso_timestamp`: the validator
+    :func:`devlog._iso.is_valid_iso_timestamp`: the validator
     reports bad rows, the reader degrades gracefully.
     """
     try:

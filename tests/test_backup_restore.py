@@ -13,39 +13,12 @@ from devlog.models import Entry
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def runner(tmp_path):
-    return CliRunner(env={"DEVLOG_DATA_DIR": str(tmp_path)})
-
-
-@pytest.fixture()
-def data_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
-    return tmp_path
-
-
-def _seed(entry_id, message, created_at="2025-01-01T00:00:00Z", tags=None):
-    storage.add_entry(
-        Entry(
-            id=entry_id,
-            message=message,
-            tags=list(tags) if tags else [],
-            created_at=created_at,
-        )
-    )
-
-
-# ---------------------------------------------------------------------------
 # backup
 # ---------------------------------------------------------------------------
 
 
-def test_backup_creates_file_in_backups_dir(runner, data_dir):
-    _seed("11111111-1111-1111-1111-111111111111", "msg")
+def test_backup_creates_file_in_backups_dir(runner, data_dir, seed_entry):
+    seed_entry("11111111-1111-1111-1111-111111111111", "msg")
     result = runner.invoke(main, ["backup", "--quiet"])
     assert result.exit_code == 0
     out_path = result.output.strip()
@@ -54,8 +27,8 @@ def test_backup_creates_file_in_backups_dir(runner, data_dir):
     assert out_path.endswith(".json")
 
 
-def test_backup_filename_format(runner, data_dir):
-    _seed("11111111-1111-1111-1111-111111111111", "msg")
+def test_backup_filename_format(runner, data_dir, seed_entry):
+    seed_entry("11111111-1111-1111-1111-111111111111", "msg")
     result = runner.invoke(main, ["backup", "--quiet"])
     out_path = result.output.strip()
     filename = os.path.basename(out_path)
@@ -67,9 +40,9 @@ def test_backup_filename_format(runner, data_dir):
     datetime.strptime(ts_part, "%Y%m%d-%H%M%S")
 
 
-def test_backup_writes_valid_json(runner, data_dir):
-    _seed("11111111-1111-1111-1111-111111111111", "alpha")
-    _seed("22222222-2222-2222-2222-222222222222", "beta", tags=["t"])
+def test_backup_writes_valid_json(runner, data_dir, seed_entry):
+    seed_entry("11111111-1111-1111-1111-111111111111", "alpha")
+    seed_entry("22222222-2222-2222-2222-222222222222", "beta", tags=["t"])
     result = runner.invoke(main, ["backup", "--quiet"])
     out_path = result.output.strip()
     payload = json.loads(open(out_path).read())
@@ -78,8 +51,8 @@ def test_backup_writes_valid_json(runner, data_dir):
     assert {e["message"] for e in payload["entries"]} == {"alpha", "beta"}
 
 
-def test_backup_default_output(runner, data_dir):
-    _seed("11111111-1111-1111-1111-111111111111", "msg")
+def test_backup_default_output(runner, data_dir, seed_entry):
+    seed_entry("11111111-1111-1111-1111-111111111111", "msg")
     result = runner.invoke(main, ["backup"])
     assert result.exit_code == 0
     assert "Backed up" in result.output
@@ -87,8 +60,8 @@ def test_backup_default_output(runner, data_dir):
     assert "entries-" in result.output
 
 
-def test_backup_explicit_output(runner, data_dir, tmp_path):
-    _seed("11111111-1111-1111-1111-111111111111", "msg")
+def test_backup_explicit_output(runner, data_dir, tmp_path, seed_entry):
+    seed_entry("11111111-1111-1111-1111-111111111111", "msg")
     out_path = tmp_path / "mybackup.json"
     result = runner.invoke(main, ["backup", "--output", str(out_path), "--quiet"])
     assert result.exit_code == 0
@@ -105,14 +78,15 @@ def test_backup_empty_journal(runner, data_dir):
     assert payload["entries"] == []
 
 
-def test_backup_creates_backups_dir_if_missing(runner, tmp_path):
+def test_backup_creates_backups_dir_if_missing(runner, tmp_path, monkeypatch):
     """The backups dir should be auto-created on first backup."""
-    monkeypatch_data = tmp_path
-    assert not (monkeypatch_data / "backups").exists()
-    runner2 = CliRunner(env={"DEVLOG_DATA_DIR": str(monkeypatch_data)})
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(data_dir))
+    runner2 = CliRunner(env={"DEVLOG_DATA_DIR": str(data_dir)})
     result = runner2.invoke(main, ["backup", "--quiet"])
     assert result.exit_code == 0
-    assert (monkeypatch_data / "backups").exists()
+    assert (data_dir / "backups").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -120,15 +94,15 @@ def test_backup_creates_backups_dir_if_missing(runner, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_restore_round_trip(runner, data_dir):
+def test_restore_round_trip(runner, data_dir, seed_entry):
     """Backup → mutate → restore returns to the backed-up state."""
-    _seed("11111111-1111-1111-1111-111111111111", "original")
+    seed_entry("11111111-1111-1111-1111-111111111111", "original")
     backup_result = runner.invoke(main, ["backup", "--quiet"])
     assert backup_result.exit_code == 0
     backup_path = backup_result.output.strip()
 
     # Mutate
-    _seed("22222222-2222-2222-2222-222222222222", "added after backup")
+    seed_entry("22222222-2222-2222-2222-222222222222", "added after backup")
 
     # Restore
     result = runner.invoke(main, ["restore", backup_path, "-y"])
@@ -193,8 +167,8 @@ def test_restore_skips_invalid_rows(runner, data_dir, tmp_path):
     assert entries[0].id == "ok"
 
 
-def test_restore_prompts_when_existing(runner, data_dir, tmp_path):
-    _seed("11111111-1111-1111-1111-111111111111", "existing")
+def test_restore_prompts_when_existing(runner, data_dir, tmp_path, seed_entry):
+    seed_entry("11111111-1111-1111-1111-111111111111", "existing")
     backup_file = tmp_path / "b.json"
     backup_file.write_text(
         json.dumps(
@@ -234,14 +208,20 @@ def test_restore_structural_invalid_errors(runner, tmp_path):
     assert "structurally invalid" in result.output
 
 
-def test_restore_unreadable_path():
-    runner = CliRunner(env={"DEVLOG_DATA_DIR": "/tmp/devlog-test"})
-    result = runner.invoke(main, ["restore", "/nonexistent/path.json", "-y"])
-    assert result.exit_code == 2  # click's exists=True
+def test_restore_unreadable_path(runner, tmp_path):
+    # Create a path that's unreadable
+    unreadable = tmp_path / "unreadable.json"
+    unreadable.write_text("{}", encoding="utf-8")
+    os.chmod(unreadable, 0o000)
+    try:
+        result = runner.invoke(main, ["restore", str(unreadable), "-y"])
+        assert result.exit_code == 2
+    finally:
+        os.chmod(unreadable, 0o644)
 
 
-def test_restore_dry_run_does_not_write(runner, data_dir, tmp_path):
-    _seed("11111111-1111-1111-1111-111111111111", "original")
+def test_restore_dry_run_does_not_write(runner, data_dir, tmp_path, seed_entry):
+    seed_entry("11111111-1111-1111-1111-111111111111", "original")
     backup_file = tmp_path / "b.json"
     backup_file.write_text(
         json.dumps(

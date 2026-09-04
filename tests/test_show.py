@@ -1,24 +1,17 @@
 """Tests for the `devlog show` command."""
 
 import json
+import re
 
 import pytest
-from click.testing import CliRunner
 
 from devlog.cli import main
-
-
-@pytest.fixture()
-def runner(tmp_path):
-    return CliRunner(env={"DEVLOG_DATA_DIR": str(tmp_path)})
 
 
 def _add(runner, message, *tags):
     args = ["add", message] + [a for t in tags for a in ("-t", t)]
     result = runner.invoke(main, args)
     assert result.exit_code == 0
-    # Parse the short id from "Entry added  ·  XXXXXXXX" or similar
-    import re
     m = re.search(r"[a-f0-9]{8}", result.output)
     assert m, f"could not parse id from: {result.output!r}"
     return m.group(0)

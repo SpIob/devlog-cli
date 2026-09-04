@@ -53,8 +53,9 @@ def test_today_empty(runner, data_dir):
 
 def test_today_shows_todays_entries(runner, data_dir):
     now = datetime.now(tz=timezone.utc)
+    # Use 30 minutes instead of 1 hour to avoid crossing midnight in UTC.
     _seed("11111111-aaaa-bbbb-cccc-111111111111", "today one", _utc_iso(now))
-    _seed("22222222-aaaa-bbbb-cccc-222222222222", "today two", _utc_iso(now - timedelta(hours=1)))
+    _seed("22222222-aaaa-bbbb-cccc-222222222222", "today two", _utc_iso(now - timedelta(minutes=30)))
     result = runner.invoke(main, ["today"])
     assert result.exit_code == 0
     assert "today one" in result.output

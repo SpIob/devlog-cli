@@ -5,21 +5,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from click.testing import CliRunner
 
 from devlog.cli import main
 from devlog.storage import StoragePermissionError
-
-
-# ---------------------------------------------------------------------------
-# Fixture
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def runner(tmp_path):
-    """Return a CliRunner pre-configured with an isolated DEVLOG_DATA_DIR."""
-    return CliRunner(env={"DEVLOG_DATA_DIR": str(tmp_path)})
 
 
 # ---------------------------------------------------------------------------

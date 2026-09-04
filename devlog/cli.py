@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Tuple
 
 import click
-from rich.text import Text
 
 try:
     import tomllib  # type: ignore[import-not-found]
@@ -27,6 +26,13 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 
 from devlog import storage
 from devlog import themes
+from devlog import _dates
+from devlog import _tagops
+from devlog import _interactive
+from devlog import _completions
+from devlog import _io
+from devlog import _iso
+from devlog._dates import _resolve_local_tz
 from devlog.models import Entry
 from devlog.storage import StorageError
 from devlog import ui
@@ -34,10 +40,6 @@ from devlog import ui
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-TAG_RE = re.compile(r"^[a-z0-9\-]+$")
-MAX_TAG_LENGTH = 32
-MAX_TAGS = 10
 
 # Single source of truth for the command list. Drives:
 #   * `devlog root_banner` (printed when no subcommand is given)
@@ -83,331 +85,6 @@ err_console = ui.err_console
 # ---------------------------------------------------------------------------
 
 
-def _validate_tags(raw_tags: Tuple[str, ...]) -> list[str]:
-    """Validate and normalise a sequence of raw tag strings.
-
-    Validation rules (in order):
-        1. Normalise: strip whitespace, lower-case.
-        2. Character set: only a-z, 0-9, hyphen.
-        3. Maximum tag length: 32 characters.
-        4. Maximum distinct tags per entry: 10.
-
-    Args:
-        raw_tags: tuple of raw tag strings as provided by the user.
-
-    Returns:
-        list[str]: deduplicated, normalised tags.
-
-    Raises:
-        click.UsageError: on any validation failure.
-    """
-    seen: list[str] = []
-    seen_set: set[str] = set()
-
-    for original in raw_tags:
-        norm = original.strip().lower()
-
-        if not TAG_RE.fullmatch(norm):
-            raise click.UsageError(
-                f'Tag "{original}" contains invalid characters. '
-                "Use lowercase letters, numbers, and hyphens only."
-            )
-
-        if len(norm) > MAX_TAG_LENGTH:
-            raise click.UsageError(
-                f'Tag "{original}" exceeds maximum length of '
-                f"{MAX_TAG_LENGTH} characters."
-            )
-
-        if norm not in seen_set:
-            seen_set.add(norm)
-            seen.append(norm)
-
-    if len(seen) > MAX_TAGS:
-        raise click.UsageError(
-            f"Maximum {MAX_TAGS} tags per entry. You provided {len(seen)}."
-        )
-
-    return seen
-
-
-def _filter_by_tags(entries: list[Entry], tags: Tuple[str, ...]) -> list[Entry]:
-    """Filter entries so that all provided tags are present (AND logic).
-
-    Args:
-        entries: full list of Entry objects.
-        tags:    raw tag strings to filter by (normalised internally).
-
-    Returns:
-        list[Entry]: entries that carry every requested tag.
-    """
-    if not tags:
-        return entries
-    norm_filter = {t.strip().lower() for t in tags}
-    return [e for e in entries if norm_filter.issubset(set(e.tags))]
-
-
-# Supported --since / --until input forms. ``None`` means "no bound".
-_RELATIVE_DAY_RE = re.compile(r"^(\d+)\s*d$")
-_RELATIVE_WEEK_RE = re.compile(r"^(\d+)\s*w$")
-
-
-def _resolve_local_tz():
-    """Return the local :class:`zoneinfo.ZoneInfo` from ``DEVLOG_TZ``, or ``None``.
-
-    Behaviour:
-        * Env var unset → return ``None`` (callers should fall back to UTC).
-        * Env var set to a valid IANA name → return the ``ZoneInfo``.
-        * Env var set to an invalid name → render a red error panel and
-          exit with code 1. We deliberately fail loudly: a silent
-          fallback to UTC after a typo would mask the real configuration
-          problem.
-
-    The function delegates the actual IANA-name → ``ZoneInfo``
-    resolution to :func:`devlog.storage._resolve_zoneinfo` so the
-    lazy import lives in one place. The ``tzdata`` package is a
-    small dependency that provides IANA data on Windows and as a
-    fallback elsewhere.
-    """
-    raw = os.environ.get("DEVLOG_TZ")
-    if not raw:
-        return None
-    try:
-        return storage._resolve_zoneinfo(raw)
-    except ValueError as exc:
-        ui.print_error(
-            f'Invalid DEVLOG_TZ "{raw}": {exc}. '
-            "Use an IANA name like America/New_York or Europe/Berlin."
-        )
-        sys.exit(1)
-
-
-def _parse_date_bound(
-    value: str,
-    *,
-    is_upper: bool = False,
-    tz=None,
-) -> datetime.datetime:
-    """Parse a user-supplied date bound into a UTC ``datetime``.
-
-    Accepted forms (case-insensitive, whitespace stripped):
-
-        * ``YYYY-MM-DD``                 — date only, midnight UTC.
-        * ``YYYY-MM-DDTHH:MM``           — ISO local form, treated as UTC.
-        * ``YYYY-MM-DDTHH:MM:SS``        — ISO local form, treated as UTC.
-        * ``YYYY-MM-DD HH:MM`` / ``...:SS`` — same, with a space separator.
-        * ``YYYY-MM-DDTHH:MM:SSZ`` / with timezone — explicit UTC.
-        * ``today``                      — today at midnight UTC.
-        * ``yesterday``                  — yesterday at midnight UTC.
-        * ``Nd`` / ``Nw``                — N days/weeks ago at midnight UTC
-                                          (e.g. ``7d``).
-
-    Args:
-        value:    the raw string from the user.
-        is_upper: when True, a date-only value is interpreted as the
-                  *end* of that day (23:59:59) rather than midnight. This
-                  lets ``--until 2025-01-15`` mean "include 2025-01-15".
-        tz:       when supplied, ``YYYY-MM-DD``, ``Nd``, ``Nw``, ``today``,
-                  and ``yesterday`` are interpreted at *local* midnight in
-                  this zone, then converted to UTC for the comparison.
-                  ``YYYY-MM-DDTHH:MM[:SS]`` with no offset is also
-                  interpreted as local. Inputs that already carry an
-                  explicit offset (``Z``, ``+HH:MM``) are honoured as-is.
-
-    Returns:
-        A timezone-aware ``datetime`` in UTC.
-
-    Raises:
-        click.BadParameter: on any unparseable input. The message lists
-            the supported formats so users can self-correct.
-    """
-    if not value or not value.strip():
-        raise click.BadParameter("date bound cannot be empty")
-
-    raw = value.strip()
-
-    # Natural phrases
-    lower = raw.lower()
-    if lower in ("today", "now"):
-        now = datetime.datetime.now(tz=tz or datetime.timezone.utc)
-        if is_upper and lower == "today":
-            return now.replace(hour=23, minute=59, second=59, microsecond=0)
-        return now.replace(hour=0, minute=0, second=0, microsecond=0)
-    if lower == "yesterday":
-        ref = datetime.datetime.now(tz=tz or datetime.timezone.utc).date() - datetime.timedelta(days=1)
-        dt = datetime.datetime(ref.year, ref.month, ref.day, tzinfo=tz or datetime.timezone.utc)
-        if is_upper:
-            return dt.replace(hour=23, minute=59, second=59)
-        return dt
-
-    # Relative: 7d, 2w
-    m = _RELATIVE_DAY_RE.match(lower)
-    if m:
-        days = int(m.group(1))
-        ref = datetime.datetime.now(tz=tz or datetime.timezone.utc).date() - datetime.timedelta(days=days)
-        dt = datetime.datetime(ref.year, ref.month, ref.day, tzinfo=tz or datetime.timezone.utc)
-        if is_upper:
-            return dt.replace(hour=23, minute=59, second=59)
-        return dt
-    m = _RELATIVE_WEEK_RE.match(lower)
-    if m:
-        weeks = int(m.group(1))
-        ref = (
-            datetime.datetime.now(tz=tz or datetime.timezone.utc).date()
-            - datetime.timedelta(weeks=weeks)
-        )
-        dt = datetime.datetime(ref.year, ref.month, ref.day, tzinfo=tz or datetime.timezone.utc)
-        if is_upper:
-            return dt.replace(hour=23, minute=59, second=59)
-        return dt
-
-    # Date only: YYYY-MM-DD
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
-        dt = datetime.datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=tz or datetime.timezone.utc)
-        if is_upper:
-            return dt.replace(hour=23, minute=59, second=59)
-        return dt
-
-    # Full ISO with optional Z / +00:00 / +HH:MM
-    parseable = raw.replace(" ", "T")
-    if parseable.endswith("Z"):
-        parseable = parseable[:-1] + "+00:00"
-    try:
-        dt = datetime.datetime.fromisoformat(parseable)
-    except ValueError:
-        raise click.BadParameter(
-            f'Invalid date "{value}". Supported formats: '
-            '"YYYY-MM-DD", "YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM:SSZ", '
-            '"today", "yesterday", "Nd" (N days ago), "Nw" (N weeks ago).'
-        )
-    if dt.tzinfo is None:
-        # Naive timestamp — honour the local zone if one is active,
-        # otherwise treat as UTC (the historical default).
-        dt = dt.replace(tzinfo=tz or datetime.timezone.utc)
-    else:
-        dt = dt.astimezone(datetime.timezone.utc)
-    return dt
-
-
-# Relative-time input forms for `add --at` / `edit --at`. These are
-# minute/hour-only because seconds-level backfill is rare and would
-# just be confusing — if you need second precision, pass the absolute
-# timestamp.
-_RELATIVE_HOUR_RE = re.compile(r"^(\d+)\s*h$")
-_RELATIVE_MINUTE_RE = re.compile(r"^(\d+)\s*m$")
-
-
-def _parse_timestamp(value: str, *, tz=None) -> datetime.datetime:
-    """Parse a user-supplied timestamp for ``--at`` on ``add``/``edit``.
-
-    Unlike :func:`_parse_date_bound`, this is a *point in time*, not a
-    date bound. Accepted forms:
-
-        * ``YYYY-MM-DD``                  — local midnight (00:00:00).
-        * ``YYYY-MM-DDTHH:MM``            — local-tz interpretation.
-        * ``YYYY-MM-DDTHH:MM:SS``         — local-tz interpretation.
-        * ``YYYY-MM-DD HH:MM[:SS]``       — same, with space separator.
-        * ``YYYY-MM-DDTHH:MM:SSZ`` / with offset — explicit (no
-                                            local-tz reinterpretation).
-        * ``Nh``                          — N hours ago, relative to now.
-        * ``Nm``                          — N minutes ago, relative to now.
-
-    Args:
-        value: the raw string from the user.
-        tz:    when supplied, naive (no-offset) inputs are interpreted
-               in this zone, then converted to UTC. When ``None``,
-               naive inputs are treated as UTC.
-
-    Returns:
-        A timezone-aware ``datetime`` in UTC.
-
-    Raises:
-        click.BadParameter: on any unparseable input. The error message
-            lists the supported formats.
-    """
-    if not value or not value.strip():
-        raise click.BadParameter("--at cannot be empty")
-
-    raw = value.strip()
-    lower = raw.lower()
-
-    # Relative forms: 2h, 30m
-    m = _RELATIVE_HOUR_RE.match(lower)
-    if m:
-        hours = int(m.group(1))
-        return datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(hours=hours)
-    m = _RELATIVE_MINUTE_RE.match(lower)
-    if m:
-        minutes = int(m.group(1))
-        return datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(minutes=minutes)
-
-    # Date-only: YYYY-MM-DD → local midnight, then convert to UTC so
-    # callers always get a UTC datetime.
-    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
-        dt = datetime.datetime.strptime(raw, "%Y-%m-%d").replace(
-            tzinfo=tz or datetime.timezone.utc
-        )
-        return dt.astimezone(datetime.timezone.utc)
-
-    # Full ISO with optional Z / +00:00 / +HH:MM
-    parseable = raw.replace(" ", "T")
-    if parseable.endswith("Z"):
-        parseable = parseable[:-1] + "+00:00"
-    try:
-        dt = datetime.datetime.fromisoformat(parseable)
-    except ValueError as exc:
-        raise click.BadParameter(
-            f'Invalid --at "{value}". Supported formats: '
-            '"YYYY-MM-DD", "YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM:SSZ", '
-            '"YYYY-MM-DD HH:MM[:SS]", "Nh" (N hours ago), "Nm" (N minutes ago).'
-        ) from exc
-    if dt.tzinfo is None:
-        # Naive timestamp — honour the local zone if one is active,
-        # otherwise treat as UTC (the historical default). Convert
-        # to UTC for storage so the contract — "returns a UTC
-        # datetime" — holds regardless of the active zone.
-        dt = dt.replace(tzinfo=tz or datetime.timezone.utc)
-    return dt.astimezone(datetime.timezone.utc)
-
-
-def _filter_by_date(
-    entries: list[Entry],
-    since: datetime.datetime | None,
-    until: datetime.datetime | None,
-) -> list[Entry]:
-    """Return entries with ``created_at`` in ``[since, until]``.
-
-    Both bounds are inclusive. ``None`` means "no bound on that side".
-    Entries whose ``created_at`` is unparseable are dropped when either
-    bound is supplied, since a date filter is meaningless for them.
-
-    Args:
-        entries: full list of Entry objects.
-        since:   lower bound (inclusive) or None.
-        until:   upper bound (inclusive) or None.
-
-    Returns:
-        list[Entry]: filtered, in original order.
-    """
-    if since is None and until is None:
-        return entries
-
-    def _within(entry: Entry) -> bool:
-        try:
-            ts = datetime.datetime.fromisoformat(
-                entry.created_at.replace("Z", "+00:00")
-            )
-        except (ValueError, TypeError, AttributeError):
-            return False
-        if since is not None and ts < since:
-            return False
-        if until is not None and ts > until:
-            return False
-        return True
-
-    return [e for e in entries if _within(e)]
-
-
 def _handle_storage_error(exc: StorageError) -> None:
     """Render a storage error and exit with code 2.
 
@@ -416,6 +93,48 @@ def _handle_storage_error(exc: StorageError) -> None:
     """
     ui.print_error(str(exc).removeprefix("Error: "))
     sys.exit(2)
+
+
+def _load_entries(func):
+    """Decorator: load entries from storage and pass to the wrapped function.
+
+    Replaces the 18 repeated ``try: storage.load_entries() except StorageError``
+    blocks in command functions. The wrapped function receives the entries list
+    as its first argument after the explicit parameters.
+    """
+    import functools
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            entries = storage.load_entries()
+        except StorageError as exc:
+            _handle_storage_error(exc)
+            return
+        return func(*args, entries, **kwargs)
+    return wrapper
+
+
+def _bail_on_click_error(exit_code: int = 1):
+    """Decorator: catch click.UsageError/click.BadParameter and exit cleanly.
+
+    Replaces the ~12 repeated ``try / except click.UsageError`` blocks.
+    """
+    import functools
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except click.UsageError as exc:
+                ui.print_error(str(exc))
+                sys.exit(exit_code)
+            except click.BadParameter as exc:
+                ui.print_error(str(exc))
+                sys.exit(exit_code)
+        return wrapper
+    return decorator
 
 
 def _resolve_entry_by_id_or_exit(all_entries: list[Entry], entry_id: str) -> Entry:
@@ -442,21 +161,6 @@ def _resolve_entry_by_id_or_exit(all_entries: list[Entry], entry_id: str) -> Ent
     sys.exit(1)
 
 
-def _parse_since_until(
-    since: str | None, until: str | None
-) -> tuple[datetime.datetime | None, datetime.datetime | None]:
-    """Parse a ``(since, until)`` CLI pair into UTC datetimes.
-
-    Both bounds default to ``None`` (no bound). The local-zone handling
-    mirrors :func:`_parse_date_bound` — when ``DEVLOG_TZ`` is set, naive
-    date inputs are interpreted in that zone.
-    """
-    tz = _resolve_local_tz()
-    since_dt = _parse_date_bound(since, tz=tz) if since else None
-    until_dt = _parse_date_bound(until, is_upper=True, tz=tz) if until else None
-    return since_dt, until_dt
-
-
 def _print_jsonl(entries) -> None:
     """Print *entries* as one JSON object per line (the ``--quiet`` contract)."""
     for entry in entries:
@@ -473,142 +177,6 @@ def _require_positive_int(name: str, value: int) -> None:
     if value <= 0:
         ui.print_error(f"{name} must be a positive integer.")
         sys.exit(1)
-
-
-def _filter_by_local_window(
-    entries: list[Entry],
-    end_date: "datetime.date",
-    days: int,
-    tz,
-) -> list[Entry]:
-    """Return entries whose *local* date falls in ``[end_date - days, end_date]``.
-
-    Centralises the tz-vs-UTC fork that ``today`` / ``yesterday`` /
-    ``week`` previously inlined three times. When ``tz`` is set, the
-    local-date bucketing uses ``storage.local_date_for``; otherwise it
-    falls back to the UTC date derived from ``created_at``.
-    """
-    import datetime as _dt
-
-    start_date = end_date - _dt.timedelta(days=days)
-    out = []
-    for entry in entries:
-        if tz is not None:
-            local_d = storage.local_date_for(entry.created_at, tz)
-        else:
-            # UTC fallback — inline the same epoch-on-failure contract
-            # as ``storage.local_date_for`` so unreadable timestamps
-            # silently land in 1970-01-01 (and thus never match a recent
-            # window) rather than crashing the command.
-            try:
-                dt = datetime.datetime.fromisoformat(
-                    entry.created_at.replace("Z", "+00:00")
-                )
-                local_d = dt.date()
-            except (ValueError, TypeError, AttributeError):
-                local_d = datetime.date(1970, 1, 1)
-        if start_date <= local_d <= end_date:
-            out.append(entry)
-    return out
-
-
-def _validate_new_tag(raw: str) -> str:
-    """Validate a user-supplied NEW tag and return its normalised form.
-
-    Runs the same rules as :func:`_validate_tags` (a single-tag tuple)
-    but with the more specific error messages the ``rename-tag`` /
-    ``merge-tag`` commands have always emitted. Used by both commands so
-    a bad NEW value fails fast with a clear error, before any storage
-    I/O happens.
-
-    Args:
-        raw: the raw tag string as the user typed it.
-
-    Returns:
-        The normalised (stripped, lowercased) tag.
-
-    Raises:
-        click.UsageError: on empty / invalid-chars / over-length input.
-    """
-    if not raw or not raw.strip():
-        raise click.UsageError("NEW tag cannot be empty.")
-    # Pre-validate the *raw* (un-normalised) string so an invalid tag
-    # like ``INFRA`` (uppercase) is rejected with a clear error rather
-    # than silently normalised to ``infra`` and then triggering the
-    # "OLD and NEW are the same" no-op path when the user actually
-    # meant a different value. ``_validate_tags`` lowercases before
-    # matching, so the regex check there would never see the
-    # uppercase letters and would happily return ``infra``.
-    if not TAG_RE.fullmatch(raw.strip()):
-        raise click.UsageError(
-            f'Tag "{raw}" contains invalid characters. '
-            "Use lowercase letters, numbers, and hyphens only."
-        )
-    if len(raw.strip()) > MAX_TAG_LENGTH:
-        raise click.UsageError(
-            f'Tag "{raw}" exceeds maximum length of {MAX_TAG_LENGTH} characters.'
-        )
-    norm = _validate_tags((raw,))
-    return norm[0]
-
-
-def _rewrite_tag_in_entry(entry: Entry, old: str, new: str) -> None:
-    """Replace every occurrence of ``old`` with ``new`` in ``entry.tags``.
-
-    Handles dedup: if ``entry.tags`` already contains ``new``, a
-    duplicate is never inserted (i.e. ``rename`` is idempotent and
-    ``merge`` does not double-tag entries that already carry ``new``).
-    Stamps ``entry.updated_at`` so the change is visible in ``tags``
-    and ``stats``.
-    """
-    new_tags: list[str] = []
-    for t in entry.tags:
-        if t == old or t == new:
-            if new not in new_tags:
-                new_tags.append(new)
-        else:
-            new_tags.append(t)
-    entry.tags = new_tags
-    entry.updated_at = storage.utc_now_iso()
-
-
-def _print_tag_op_dry_run(text: str) -> None:
-    """Print a yellow DRY RUN preview line for tag-mutation commands."""
-    console.print(ui.dry_run_line(text))
-
-
-def _print_tag_op_success(text: str) -> None:
-    """Print a green ✔ confirmation line for tag-mutation commands."""
-    console.print(ui.success_line(text))
-    """Return entries whose *local* date falls in ``[end_date - days, end_date]``.
-
-    Centralises the tz-vs-UTC fork that ``today`` / ``yesterday`` /
-    ``week`` previously inlined three times. When ``tz`` is set, the
-    local-date bucketing uses ``storage.local_date_for``; otherwise it
-    falls back to the UTC date derived from ``created_at``.
-    """
-    import datetime as _dt
-
-    start_date = end_date - _dt.timedelta(days=days)
-    out = []
-    for entry in entries:
-        if tz is not None:
-            local_d = storage.local_date_for(entry.created_at, tz)
-        else:
-            # UTC fallback — inline the same epoch-on-failure contract
-            # as ``storage.local_date_for`` so unreadable timestamps
-            # silently land in 1970-01-01 (and thus never match a recent
-            # window) rather than crashing the command.
-            try:
-                dt = datetime.datetime.fromisoformat(
-                    entry.created_at.replace("Z", "+00:00")
-                )
-                local_d = dt.date()
-            except (ValueError, TypeError, AttributeError):
-                local_d = datetime.date(1970, 1, 1)
-        if start_date <= local_d <= end_date:
-            out.append(entry)
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -640,123 +208,11 @@ def main(ctx: click.Context, version: bool, interactive: bool) -> None:
             ):
                 ui.print_error("Interactive mode requires a TTY.")
                 sys.exit(1)
-            _interactive_repl()
+            _interactive._interactive_repl(main)
             ctx.exit(0)
             return
         ui.root_banner()
         ctx.exit(0)
-
-
-# ---------------------------------------------------------------------------
-# Interactive REPL (`devlog --interactive`)
-# ---------------------------------------------------------------------------
-
-
-def _interactive_repl() -> None:
-    """A minimal line-based REPL for browsing and quick adds.
-
-    Supported commands at the prompt:
-        add <message> [-t tag1 -t tag2 ...]   → add an entry
-        s <query>                              → search the journal
-        l [-t tag] [-n N]                      → list entries
-        tags                                    → show tag counts
-        today                                   → show today's entries
-        stats                                   → show summary
-        show <id>                               → show one entry
-        help                                    → show available commands
-        q | quit | exit                         → leave the REPL
-
-    Each successful action is followed by the standard Rich output. The
-    REPL keeps running until the user quits or an EOFError is raised
-    (e.g. Ctrl-D).
-    """
-    from rich.prompt import Prompt
-
-    console.print(
-        f"[{ui._s('banner_command')}]devlog interactive[/{ui._s('banner_command')}]  ·  "
-        "type [bold]help[/bold] for commands, [bold]q[/bold] to quit"
-    )
-
-    while True:
-        try:
-            line = Prompt.ask(
-                f"[{ui._s('prompt_border')}]devlog>[/{ui._s('prompt_border')}]"
-            ).strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print()  # newline
-            return
-
-        if not line:
-            continue
-        if line in ("q", "quit", "exit"):
-            return
-        if line in ("h", "help", "?"):
-            _print_repl_help()
-            continue
-
-        # Dispatch by re-invoking the CLI in-process. Easier than re-implementing.
-        try:
-            # Use Click's standalone command invocation. `mix_stderr=False`
-            # was removed in Click 8.2+; the default is `False` now.
-            import click.testing
-
-            runner = click.testing.CliRunner()
-            # Split shell-style arguments.
-            try:
-                import shlex
-                argv = shlex.split(line)
-            except ValueError as exc:
-                ui.print_error(str(exc))
-                continue
-            if not argv:
-                continue
-            result = runner.invoke(main, argv, catch_exceptions=False)
-            if result.output:
-                console.print(result.output, highlight=False)
-        except SystemExit:
-            # Click's sys.exit() bubbles up here; swallow so the REPL keeps going.
-            pass
-        except Exception as exc:  # noqa: BLE001
-            ui.print_error(str(exc))
-
-
-def _print_repl_help() -> None:
-    """Print a one-line description of every command available in the REPL.
-
-    Generated from ``main.list_commands`` so it stays in sync as new
-    commands are added. Includes sub-commands of grouped commands
-    (``theme``) by name. Aliases (``list``, ``search``) are also
-    surfaced as the REPL accepts both forms.
-    """
-    # Pull the short docstring (first line) for each command and the
-    # commands themselves. ``list_commands`` returns every registered
-    # command, including those behind a group like ``theme``.
-    cmds: list[tuple[str, str]] = []
-    for name in sorted(main.list_commands(None)):
-        cmd = main.get_command(None, name)
-        if cmd is None:
-            continue
-        if isinstance(cmd, click.Group):
-            sub = ", ".join(sorted(cmd.list_commands(None)))
-            cmds.append((name, f"{cmd.short_help or ''} (sub: {sub})".strip()))
-        else:
-            cmds.append((name, (cmd.short_help or "").strip()))
-
-    aliases = [
-        ("l", "alias for list"),
-        ("s", "alias for search"),
-        ("h", "alias for help"),
-        ("q", "leave the REPL"),
-        ("w", "alias for week"),
-        ("y", "alias for yesterday"),
-    ]
-
-    console.print("Available commands:")
-    width = max(len(name) for name, _ in cmds + aliases)
-    for name, desc in cmds:
-        console.print(f"  [bold]{name:<{width}}[/bold]  {desc}")
-    for name, desc in aliases:
-        console.print(f"  [bold]{name:<{width}}[/bold]  {desc}")
 
 
 # ---------------------------------------------------------------------------
@@ -786,14 +242,14 @@ def add(message: str, tag: Tuple[str, ...], quiet: bool, at: str | None) -> None
         sys.exit(1)
 
     try:
-        norm_tags = _validate_tags(tag)
+        norm_tags = _tagops._validate_tags(tag)
     except click.UsageError as exc:
         ui.print_error(str(exc))
         sys.exit(1)
 
     if at is not None:
         try:
-            ts_dt = _parse_timestamp(at, tz=_resolve_local_tz())
+            ts_dt = _dates._parse_timestamp(at, tz=_dates._resolve_local_tz())
         except click.BadParameter as exc:
             ui.print_error(str(exc))
             sys.exit(2)
@@ -855,27 +311,36 @@ def list_entries(
         _handle_storage_error(exc)
         return  # unreachable; silences type-checker
 
-    filtered = _filter_by_tags(all_entries, tags)
-    since_dt, until_dt = _parse_since_until(since, until)
-    filtered = _filter_by_date(filtered, since_dt, until_dt)
+    total_all = len(all_entries)
+    filtered = _tagops._filter_by_tags(all_entries, tags)
+    since_dt, until_dt = _dates._parse_since_until(since, until)
+    filtered = _dates._filter_by_date(filtered, since_dt, until_dt)
     filtered.sort(key=lambda e: e.created_at, reverse=True)
 
-    total = len(filtered)
+    total_filtered = len(filtered)
     shown = filtered if show_all else filtered[:limit]
 
     if quiet:
         _print_jsonl(shown)
         return
 
-    if total == 0:
-        if tags:
+    if total_filtered == 0:
+        if tags or since or until:
             ui.print_info("No entries match your filters.")
         else:
             ui.print_info("No entries found.")
         return
 
-    title = f"Journal · {total} {ui._plural_noun(total, 'entry')}"
-    table = ui.entries_table(shown, total, title=title)
+    # Show filtered count, and total count when filters are applied
+    has_filters = bool(tags or since or until)
+    if has_filters:
+        title = (
+            f"Journal · {total_filtered} of {total_all} "
+            f"{ui._plural_noun(total_all, 'entry')}"
+        )
+    else:
+        title = f"Journal · {total_filtered} {ui._plural_noun(total_filtered, 'entry')}"
+    table = ui.entries_table(shown, total_filtered, title=title)
     console.print(table)
 
 
@@ -918,9 +383,9 @@ def search(
         _handle_storage_error(exc)
         return
 
-    filtered = _filter_by_tags(all_entries, tags)
-    since_dt, until_dt = _parse_since_until(since, until)
-    filtered = _filter_by_date(filtered, since_dt, until_dt)
+    filtered = _tagops._filter_by_tags(all_entries, tags)
+    since_dt, until_dt = _dates._parse_since_until(since, until)
+    filtered = _dates._filter_by_date(filtered, since_dt, until_dt)
     matched = [e for e in filtered if query.lower() in e.message.lower()]
     matched.sort(key=lambda e: e.created_at, reverse=True)
 
@@ -993,13 +458,13 @@ def _edit_compute_tags(
     out = list(current)
     if set_tags:
         try:
-            out = _validate_tags(set_tags)
+            out = _tagops._validate_tags(set_tags)
         except click.UsageError as exc:
             ui.print_error(str(exc))
             sys.exit(1)
     if add_tags:
         try:
-            additions = _validate_tags(add_tags)
+            additions = _tagops._validate_tags(add_tags)
         except click.UsageError as exc:
             ui.print_error(str(exc))
             sys.exit(1)
@@ -1025,7 +490,7 @@ def _edit_resolve_at(
     if at is None:
         return match.created_at
     try:
-        parsed = _parse_timestamp(at, tz=_resolve_local_tz())
+        parsed = _dates._parse_timestamp(at, tz=_dates._resolve_local_tz())
     except click.BadParameter as exc:
         ui.print_error(str(exc))
         sys.exit(2)
@@ -1330,7 +795,7 @@ def tags(sort: str, limit: int, show_all: bool, quiet: bool) -> None:
     elif sort == "name":
         rows.sort(key=lambda r: r[0])
     else:  # recent
-        rows.sort(key=lambda r: (-(int(_iso_to_epoch(r[2])) if r[2] else 0), r[0]))
+        rows.sort(key=lambda r: (-(int(_dates._iso_to_epoch(r[2])) if r[2] else 0), r[0]))
 
     total_tags = len(rows)
     shown = rows if show_all else rows[:limit]
@@ -1347,12 +812,6 @@ def tags(sort: str, limit: int, show_all: bool, quiet: bool) -> None:
 
     table = ui.tags_table(shown, total_tags, len(all_entries))
     console.print(table)
-
-
-def _iso_to_epoch(iso: str) -> int:
-    """Convert a stored ISO 8601 UTC string to a POSIX epoch int."""
-    dt = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    return int(dt.timestamp())
 
 
 # ---------------------------------------------------------------------------
@@ -1409,7 +868,7 @@ def tag(
     # Validate the tag the same way `add` and `rename-tag` do, so users
     # can't smuggle in characters the storage layer would reject.
     try:
-        norm_tag = _validate_tags((name,))[0]
+        norm_tag = _tagops._validate_tags((name,))[0]
     except click.UsageError as exc:
         ui.print_error(str(exc))
         sys.exit(1)
@@ -1499,8 +958,21 @@ def _tag_show_impl(
         ui.print_info(f'No entries with tag "{norm_tag}".')
         return
 
-    title = f'Tag: {norm_tag} · {total} {ui._plural_noun(total, "entry")}'
-    table = ui.entries_table(shown, total, title=title)
+    # For display, remove the filtered tag from the tags list since
+    # the user already knows every entry has this tag.
+    shown_for_display = [
+        Entry(
+            id=e.id,
+            message=e.message,
+            tags=[t for t in e.tags if t != norm_tag],
+            created_at=e.created_at,
+            updated_at=e.updated_at,
+        )
+        for e in shown
+    ]
+
+    title = f'Tag · {norm_tag} · {total} {ui._plural_noun(total, "entry")}'
+    table = ui.entries_table(shown_for_display, total, title=title)
     console.print(table)
 
 
@@ -1613,12 +1085,12 @@ def today(limit: int, quiet: bool) -> None:
         _handle_storage_error(exc)
         return
 
-    tz = _resolve_local_tz()
+    tz = _dates._resolve_local_tz()
     if tz is not None:
         local_today = datetime.datetime.now(tz=tz).date()
     else:
         local_today = datetime.datetime.now(tz=datetime.timezone.utc).date()
-    today_entries = _filter_by_local_window(all_entries, end_date=local_today, days=0, tz=tz)
+    today_entries = _dates._filter_by_local_window(all_entries, end_date=local_today, days=0, tz=tz)
     subtitle = local_today.strftime("%Y-%m-%d")
 
     today_entries.sort(key=lambda e: e.created_at, reverse=True)
@@ -1634,8 +1106,8 @@ def today(limit: int, quiet: bool) -> None:
         ui.print_info("No entries yet today.")
         return
 
-    title = f"Today · {total} {ui._plural_noun(total, 'entry')}"
-    table = ui.entries_table(shown, total, title=title, subtitle=subtitle)
+    title = f"Today · {subtitle} · {total} {ui._plural_noun(total, 'entry')}"
+    table = ui.entries_table(shown, total, title=title)
     console.print(table)
 
 
@@ -1663,13 +1135,13 @@ def yesterday(limit: int, quiet: bool) -> None:
         _handle_storage_error(exc)
         return
 
-    tz = _resolve_local_tz()
+    tz = _dates._resolve_local_tz()
     if tz is not None:
         local_today = datetime.datetime.now(tz=tz).date()
     else:
         local_today = datetime.datetime.now(tz=datetime.timezone.utc).date()
     local_yesterday = local_today - datetime.timedelta(days=1)
-    yesterday_entries = _filter_by_local_window(
+    yesterday_entries = _dates._filter_by_local_window(
         all_entries, end_date=local_yesterday, days=0, tz=tz
     )
     subtitle = local_yesterday.strftime("%Y-%m-%d")
@@ -1686,8 +1158,8 @@ def yesterday(limit: int, quiet: bool) -> None:
         ui.print_info("No entries yet yesterday.")
         return
 
-    title = f"Yesterday · {total} {ui._plural_noun(total, 'entry')}"
-    table = ui.entries_table(shown, total, title=title, subtitle=subtitle)
+    title = f"Yesterday · {subtitle} · {total} {ui._plural_noun(total, 'entry')}"
+    table = ui.entries_table(shown, total, title=title)
     console.print(table)
 
 
@@ -1723,13 +1195,13 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
         _handle_storage_error(exc)
         return
 
-    tz = _resolve_local_tz()
+    tz = _dates._resolve_local_tz()
     if anchor:
         # Parse the anchor in the local zone when possible, then convert
         # to UTC. Falls back to UTC if no tz is set, mirroring
         # `_parse_date_bound` behaviour.
         try:
-            anchor_dt = _parse_date_bound(anchor, tz=tz)
+            anchor_dt = _dates._parse_date_bound(anchor, tz=tz)
         except click.BadParameter as exc:
             ui.print_error(str(exc))
             sys.exit(2)
@@ -1739,7 +1211,7 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
     else:
         end_date = datetime.datetime.now(tz=datetime.timezone.utc).date()
 
-    week_entries = _filter_by_local_window(all_entries, end_date=end_date, days=6, tz=tz)
+    week_entries = _dates._filter_by_local_window(all_entries, end_date=end_date, days=6, tz=tz)
     start_date = end_date - datetime.timedelta(days=6)
     week_entries.sort(key=lambda e: e.created_at, reverse=True)
 
@@ -1764,18 +1236,6 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
     console.print(table)
 
 
-def _utc_date_from_iso(iso: str):
-    """Return the UTC date for a stored ISO 8601 timestamp.
-
-    Returns 1970-01-01 on unparseable input (mirrors ``local_date_for``).
-    """
-    try:
-        dt = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except (ValueError, TypeError, AttributeError):
-        return datetime.date(1970, 1, 1)
-    return dt.date()
-
-
 # ---------------------------------------------------------------------------
 # calendar
 # ---------------------------------------------------------------------------
@@ -1797,7 +1257,7 @@ def _utc_date_from_iso(iso: str):
 )
 def calendar(year: int | None, quiet: bool) -> None:
     """Show a year-grid heatmap of journal activity."""
-    tz = _resolve_local_tz()
+    tz = _dates._resolve_local_tz()
     if year is None:
         year = (
             datetime.datetime.now(tz=tz).year if tz is not None
@@ -1848,7 +1308,7 @@ def tail(n: int, tags: Tuple[str, ...], quiet: bool) -> None:
         _handle_storage_error(exc)
         return
 
-    filtered = _filter_by_tags(all_entries, tags)
+    filtered = _tagops._filter_by_tags(all_entries, tags)
     filtered.sort(key=lambda e: e.created_at, reverse=True)
     shown = filtered[:n]
     total = len(filtered)
@@ -1883,8 +1343,8 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
         _handle_storage_error(exc)
         return
 
-    since_dt, until_dt = _parse_since_until(since, until)
-    all_entries = _filter_by_date(all_entries, since_dt, until_dt)
+    since_dt, until_dt = _dates._parse_since_until(since, until)
+    all_entries = _dates._filter_by_date(all_entries, since_dt, until_dt)
     # Also drop entries whose created_at cannot be parsed at all, so
     # downstream formatting (which assumes a valid ISO timestamp) never
     # crashes. Other commands go through this filter implicitly via
@@ -1897,7 +1357,7 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
         return
 
     # Total & date range
-    tz = _resolve_local_tz()
+    tz = _dates._resolve_local_tz()
     total = len(all_entries)
     sorted_by_date = sorted(all_entries, key=lambda e: e.created_at)
     first_iso = sorted_by_date[0].created_at
@@ -1976,7 +1436,7 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
 def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
     """Rename a tag across all entries (OLD → NEW)."""
     try:
-        new_tag = _validate_new_tag(new)
+        new_tag = _tagops._validate_new_tag(new)
     except click.UsageError as exc:
         ui.print_error(str(exc))
         sys.exit(1)
@@ -2013,7 +1473,7 @@ def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
         return
 
     for entry in affected:
-        _rewrite_tag_in_entry(entry, old_normalized, new_tag)
+        _tagops._rewrite_tag_in_entry(entry, old_normalized, new_tag)
 
     try:
         storage.save_entries(all_entries)
@@ -2047,7 +1507,7 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
     OLD but not double-tagged with NEW. Use ``--dry-run`` to preview.
     """
     try:
-        new_tag = _validate_new_tag(new)
+        new_tag = _tagops._validate_new_tag(new)
     except click.UsageError as exc:
         ui.print_error(str(exc))
         sys.exit(1)
@@ -2100,7 +1560,7 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
         return
 
     for entry in touched:
-        _rewrite_tag_in_entry(entry, old_normalized, new_tag)
+        _tagops._rewrite_tag_in_entry(entry, old_normalized, new_tag)
 
     try:
         storage.save_entries(all_entries)
@@ -2282,55 +1742,7 @@ def _emit_import_summary(
 @click.option("--quiet", "-q", is_flag=True, help="Suppress preview output.")
 def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
     """Import entries from a JSON or Markdown export file."""
-    if fmt == "auto":
-        fmt = _sniff_import_format(path)
-
-    candidates, unreadable_rows = _read_import_payload(path, fmt)
-
-    try:
-        existing = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
-
-    to_add, skipped = _dedup_against_existing(candidates, existing)
-
-    if dry_run:
-        if not quiet:
-            _emit_import_summary(
-                len(to_add), skipped, unreadable_rows, dry_run=True
-            )
-        return
-
-    if to_add:
-        try:
-            existing.extend(to_add)
-            storage.save_entries(existing)
-        except StorageError as exc:
-            _handle_storage_error(exc)
-            return
-
-    if not quiet:
-        if to_add:
-            _emit_import_summary(
-                len(to_add), skipped, unreadable_rows, dry_run=False
-            )
-        else:
-            # No new imports — surface the skip count so the user knows
-            # it was a no-op, not a bug.
-            if skipped or unreadable_rows:
-                parts = []
-                if skipped:
-                    parts.append(
-                        f"{skipped} duplicate{ui.plural_s(skipped)} skipped"
-                    )
-                if unreadable_rows:
-                    parts.append(
-                        f"{unreadable_rows} unreadable row{ui.plural_s(unreadable_rows)} ignored"
-                    )
-                ui.print_info(f"No new entries to import ({', '.join(parts)}).")
-            else:
-                ui.print_info("No entries to import.")
+    _io.import_cmd(path, fmt, dry_run, quiet)
 
 
 def _parse_markdown_export(content: str) -> list[Entry]:
@@ -2520,11 +1932,11 @@ def _build_repair_plan(raw: object) -> tuple[list[Entry], list[storage.Issue]]:
 
 
 def _is_valid_iso(value: str) -> bool:
-    return bool(storage._is_valid_iso_timestamp(value))
+    return _iso.is_valid_iso_timestamp(value)
 
 
 def _is_valid_tag(t: str) -> bool:
-    return bool(storage._TAG_RE.fullmatch(t)) and len(t) <= storage._MAX_TAG_LENGTH
+    return _tagops._is_valid_tag(t)
 
 
 @main.command()
@@ -2903,78 +2315,7 @@ def doctor(quiet: bool) -> None:
 )
 def completions(shell: str) -> None:
     """Print a shell completion script for the given shell."""
-    shell = shell.lower()
-    if shell == "bash":
-        print(_bash_completion())
-    elif shell == "zsh":
-        print(_zsh_completion())
-    elif shell == "fish":
-        print(_fish_completion())
-    else:
-        ui.print_error(f'Unsupported shell "{shell}".')
-        sys.exit(1)
-
-
-def _bash_completion() -> str:
-    """Generate a bash completion script driven by :data:`COMMANDS`.
-
-    A hand-written snippet is kept for the per-subcommand option
-    completions (``list|search|...``, ``tag``, ``theme``) — those are
-    not generic enough to be worth driving from :data:`COMMANDS`. The
-    top-level command list, however, is generated so adding a new
-    command in :data:`COMMANDS` automatically appears in the
-    completion script.
-    """
-    names = " ".join(name for name, _ in COMMANDS)
-    return f"""# bash completion for devlog
-# Source this file or copy it into ~/.bash_completion.d/
-_devlog_completion() {{
-    local cur prev words cword
-    _init_completion || return
-    local commands="{names}"
-    if [[ ${{cword}} -eq 1 ]]; then
-        COMPREPLY=($(compgen -W "${{commands}}" -- "${{cur}}"))
-        return
-    fi
-    case "${{words[1]}}" in
-        edit|delete|show) COMPREPLY=($(compgen -W "$(devlog list --quiet 2>/dev/null | python3 -c 'import sys,json
-for line in sys.stdin: print(json.loads(line)["id"][:8])')" -- "${{cur}}")) ;;
-        list|search|tail|export) COMPREPLY=($(compgen -W "--tag --limit --all --quiet --since --until --format --output" -- "${{cur}}")) ;;
-        tag) COMPREPLY=($(compgen -W "--delete --dry-run --limit --all --quiet" -- "${{cur}}")) ;;
-        theme) COMPREPLY=($(compgen -W "list show set path" -- "${{cur}}")) ;;
-    esac
-}}
-complete -F _devlog_completion devlog
-"""
-
-
-def _zsh_completion() -> str:
-    """Generate a zsh completion script driven by :data:`COMMANDS`."""
-    lines = ["#compdef devlog", "# zsh completion for devlog", "_devlog() {", "    local -a commands", "    commands=("]
-    for name, desc in COMMANDS:
-        # zsh single-quoted strings: escape any embedded single quote.
-        safe = desc.replace("'", "'\\''")
-        lines.append(f"        '{name}:{safe}'")
-    lines.append("    )")
-    lines.append("    _describe 'command' commands")
-    lines.append("}")
-    lines.append('_devlog "$@"')
-    return "\n".join(lines) + "\n"
-
-
-def _fish_completion() -> str:
-    """Generate a fish completion script driven by :data:`COMMANDS`."""
-    lines = [
-        "# fish completion for devlog",
-        "complete -c devlog -f",
-    ]
-    for name, desc in COMMANDS:
-        # fish double-quoted strings: escape backslash, double-quote, $.
-        safe = desc.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
-        lines.append(
-            f'complete -c devlog -n "__fish_use_subcommand" -a "{name}" -d "{safe}"'
-        )
-    return "\n".join(lines) + "\n"
+    _completions.completions(shell)
 
 
 # ---------------------------------------------------------------------------
@@ -3020,85 +2361,7 @@ def export(
     quiet: bool,
 ) -> None:
     """Export entries to a Markdown or JSON file."""
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
-
-    filtered = _filter_by_tags(all_entries, tags)
-    since_dt, until_dt = _parse_since_until(since, until)
-    filtered = _filter_by_date(filtered, since_dt, until_dt)
-    filtered.sort(key=lambda e: e.created_at, reverse=True)
-
-    if not filtered:
-        ui.print_warning("Warning: No entries to export.")
-        sys.exit(0)
-
-    # Resolve format. When --output is given, its extension wins unless
-    # the user explicitly asked for a format. When --output is absent,
-    # pick based on --format (auto → markdown by default).
-    fmt_resolved = _resolve_export_format(output, fmt)
-
-    # Resolve output path. If the user did not pass -o, write into
-    # <data-dir>/exports/ instead of polluting the current working dir.
-    if output is None:
-        ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime(
-            "%Y%m%d-%H%M%S"
-        )
-        ext = "json" if fmt_resolved == "json" else "md"
-        export_dir = storage.get_data_dir() / "exports"
-        export_dir.mkdir(parents=True, exist_ok=True)
-        output = str(export_dir / f"devlog-{ts}.{ext}")
-
-    def _entry_md(entry: Entry) -> str:
-        short_id = entry.short_id
-        date_str = ui._format_dt(entry.created_at)
-        tags_str = ", ".join(entry.tags) if entry.tags else ui.TAG_NONE
-        return (
-            f"## {date_str} — {short_id}\n\n"
-            f"{entry.message}\n\n"
-            f"**Tags:** {tags_str}\n\n"
-            "---\n"
-        )
-
-    try:
-        if fmt_resolved == "json":
-            with open(output, "w", encoding="utf-8") as fh:
-                json.dump(
-                    {"entries": [dataclasses.asdict(e) for e in filtered]},
-                    fh,
-                    indent=2,
-                    ensure_ascii=False,
-                )
-            if not quiet:
-                line = ui.success_line(
-                    f"Exported {len(filtered)} {ui._plural_noun(len(filtered), 'entry')} to "
-                )
-                line.append(output, style="bold")
-                err_console.print(line)
-            else:
-                print(output)
-        elif quiet:
-            with open(output, "w", encoding="utf-8") as fh:
-                for entry in filtered:
-                    fh.write(_entry_md(entry))
-            print(output)
-        else:
-            with ui.export_progress(len(filtered)) as progress:
-                task = progress.add_task("Exporting…", total=len(filtered))
-                with open(output, "w", encoding="utf-8") as fh:
-                    for entry in filtered:
-                        fh.write(_entry_md(entry))
-                        progress.advance(task)
-            line = ui.success_line(
-                f"Exported {len(filtered)} {ui._plural_noun(len(filtered), 'entry')} to "
-            )
-            line.append(output, style="bold")
-            err_console.print(line)
-    except (PermissionError, OSError):
-        ui.print_error(f"Cannot write to {output}. Check the path and permissions.")
-        sys.exit(2)
+    _io.export(output, fmt, tags, since, until, quiet)
 
 
 def _resolve_export_format(output: str | None, fmt: str) -> str:

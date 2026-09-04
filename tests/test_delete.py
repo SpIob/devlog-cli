@@ -3,21 +3,9 @@
 import re
 
 import pytest
-from click.testing import CliRunner
 
 from devlog.cli import main
 from devlog import storage
-
-
-@pytest.fixture()
-def runner(tmp_path):
-    return CliRunner(env={"DEVLOG_DATA_DIR": str(tmp_path)})
-
-
-@pytest.fixture()
-def data_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
-    return tmp_path
 
 
 def _add(runner, message, *tags):

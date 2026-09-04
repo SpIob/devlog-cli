@@ -119,6 +119,59 @@ def test_calendar_grid_has_month_gutter():
     assert found_jan, f"no Jan label in gutter: {gutter_lines}"
 
 
+def test_calendar_grid_label_alignment():
+    """Each month label must sit on the same row as the day it labels.
+
+    The first day of each month in 2025 falls on a known weekday.
+    The display is laid out Sunday-first (display row 0=Sun,
+    1=Mon, ..., 6=Sat). Python's ``date.weekday()`` is
+    Monday-first (0=Mon, 6=Sun), so the display row is
+    ``(python_weekday + 1) % 7``.
+    """
+    # 2025 first-of-month weekdays (Python Mon=0 .. Sun=6):
+    # Jan=Wed, Feb=Sat, Mar=Sat, Apr=Tue, May=Thu, Jun=Sun,
+    # Jul=Tue, Aug=Fri, Sep=Mon, Oct=Wed, Nov=Sat, Dec=Mon.
+    expected = {
+        "Jan": 3,  # Wed → display row 3
+        "Feb": 6,  # Sat → display row 6
+        "Mar": 6,  # Sat
+        "Apr": 2,  # Tue
+        "May": 4,  # Thu
+        "Jun": 0,  # Sun
+        "Jul": 2,  # Tue
+        "Aug": 5,  # Fri
+        "Sep": 1,  # Mon
+        "Oct": 3,  # Wed
+        "Nov": 6,  # Sat
+        "Dec": 1,  # Mon
+    }
+    grid = ui.calendar_grid({}, year=2025)
+    lines = grid.plain.splitlines()
+    gutter_lines = lines[0::2]
+    for month, display_row in expected.items():
+        assert month in gutter_lines[display_row], (
+            f"{month} should be on gutter row {display_row}, "
+            f"but gutter lines are: {gutter_lines}"
+        )
+
+
+def test_calendar_grid_all_twelve_months_labeled():
+    """Every month in the year must appear at least once in the gutter.
+
+    Regression guard for the old bug where the gutter algorithm only
+    labelled some months because the gutter was indexed by loop
+    position rather than the actual day-of-week of the 1st of the
+    month.
+    """
+    grid = ui.calendar_grid({}, year=2025)
+    text = grid.plain
+    for month in (
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ):
+        assert month in text, f"missing month label: {month}"
+
+
 def test_calendar_panel_includes_legend():
     panel = ui.calendar_panel({"2025-01-15": 1}, year=2025)
     # The Panel renders to a Console record; just confirm the function

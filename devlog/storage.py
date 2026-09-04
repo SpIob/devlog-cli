@@ -7,6 +7,7 @@ from datetime import date as _date, datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+from devlog import _iso
 from devlog.models import Entry
 
 # ---------------------------------------------------------------------------
@@ -18,8 +19,9 @@ ENTRIES_FILE_NAME = "entries.json"
 BACKUPS_DIR_NAME = "backups"
 
 # Tag validation: must match the rules enforced by cli._validate_tags
-_TAG_RE = re.compile(r"^[a-z0-9\-]+$")
-_MAX_TAG_LENGTH = 32
+# Public so other modules (cli, tests) can use the same rules.
+TAG_RE = re.compile(r"^[a-z0-9\-]+$")
+MAX_TAG_LENGTH = 32
 
 
 # ---------------------------------------------------------------------------
@@ -265,24 +267,6 @@ class Issue:
     field: Optional[str] = None
 
 
-def _is_valid_iso_timestamp(value: object) -> bool:
-    """Return True if *value* parses as a ``YYYY-MM-DDTHH:MM:SSZ`` timestamp.
-
-    Accepts the canonical form produced by ``cli.add``; anything else is
-    rejected. We intentionally do not try to be lenient here — invalid
-    timestamps are exactly what `devlog repair` should surface.
-    """
-    if not isinstance(value, str) or not value.endswith("Z"):
-        return False
-    try:
-        # ``fromisoformat`` accepts a ``+HH:MM`` suffix in py3.7+, so we
-        # translate the trailing ``Z`` to ``+00:00`` for the parse.
-        datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        return False
-    return True
-
-
 def _validate_tag_values(tags: object) -> list[str]:
     """Return the list of *tags* (assumed to be a list of strings).
 
@@ -292,17 +276,17 @@ def _validate_tag_values(tags: object) -> list[str]:
     can see what needs fixing.
     """
     if not isinstance(tags, list):
-        return [f"tags field must be a list (got {type(tags).__name__})"]
-    problems: list[str] = []
+        return ["tags must be a list"]
+    problems = []
     for t in tags:
         if not isinstance(t, str):
-            problems.append(f"tag must be a string (got {type(t).__name__})")
+            problems.append("tag must be a string")
             continue
-        if not _TAG_RE.fullmatch(t):
+        if not TAG_RE.fullmatch(t):
             problems.append(f'tag "{t}" has invalid characters')
             continue
-        if len(t) > _MAX_TAG_LENGTH:
-            problems.append(f'tag "{t}" exceeds {_MAX_TAG_LENGTH} chars')
+        if len(t) > MAX_TAG_LENGTH:
+            problems.append(f'tag "{t}" exceeds {MAX_TAG_LENGTH} chars')
     return problems
 
 
@@ -421,7 +405,7 @@ def validate_entries(data: object) -> list[Issue]:
                     message=f"{prefix} missing 'created_at'",
                 )
             )
-        elif not _is_valid_iso_timestamp(created_at):
+        elif not _iso.is_valid_iso_timestamp(created_at):
             issues.append(
                 Issue(
                     kind="bad_timestamp",
@@ -434,7 +418,7 @@ def validate_entries(data: object) -> list[Issue]:
 
         # updated_at (optional)
         updated_at = item.get("updated_at", None)
-        if updated_at is not None and not _is_valid_iso_timestamp(updated_at):
+        if updated_at is not None and not _iso.is_valid_iso_timestamp(updated_at):
             issues.append(
                 Issue(
                     kind="bad_timestamp",
