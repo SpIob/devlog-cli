@@ -159,10 +159,7 @@ devlog add MESSAGE [OPTIONS]
 
 **Notes:**
 
-- Tags are normalized to lowercase and stripped of whitespace before storage.
-- Duplicate tags on the same entry are silently deduplicated.
-- Tags containing characters outside `[a-z0-9-]` (after normalization) are rejected with a clear error and exit code 1.
-- Maximum 10 tags per entry; maximum 32 characters per tag.
+- Tag validation: see [Tag rules](#tag-rules).
 - An empty message string exits with code 1.
 
 **Examples:**
@@ -305,7 +302,7 @@ devlog edit ID [OPTIONS]
 - An empty `--message` is rejected with the same `MESSAGE cannot be empty` error as `devlog add`. The editor path is allowed to produce an empty body, since the user may want to save a blank note on purpose.
 - No-op edits (the result equals the existing entry) print `No changes.` and exit 0 without touching the file.
 - Tag flags combine: `--tag` runs first, then `--add-tag` adds, then `--remove-tag` removes.
-- Validation rules for tag characters and length match `devlog add`.
+- Validation rules for tag characters and length: see [Tag rules](#tag-rules).
 
 **Examples:**
 
@@ -624,7 +621,7 @@ devlog tag NAME [OPTIONS]
 
 **Notes:**
 
-- `NAME` is validated with the same rules as `devlog add` (lowercase, `[a-z0-9-]`, ≤ 32 chars).
+- `NAME` is validated with the same rules as `devlog add` — see [Tag rules](#tag-rules).
 - `devlog tag NAME --delete` asks `Remove tag "NAME" from N entries?` by default — pass `-y`/`--yes` to skip, or combine with `--quiet` to skip the prompt in scripts.
 - `devlog tag NAME --delete --dry-run` previews the change without writing.
 - Use `devlog merge-tag A B` if you want to *combine* two tags instead of just inspecting or removing one.
@@ -680,7 +677,7 @@ devlog rename-tag OLD NEW [OPTIONS]
 | Argument / Option | Short | Type | Required | Default | Description |
 |-------------------|-------|------|----------|---------|-------------|
 | `OLD` | — | string | Yes | — | The existing tag to replace. |
-| `NEW` | — | string | Yes | — | The new tag name. Validated with the same rules as `devlog add`. |
+| `NEW` | — | string | Yes | — | The new tag name. Validated as a tag (see [Tag rules](#tag-rules)). |
 | `--dry-run` | — | flag | No | False | Show the count of affected entries without writing. |
 | `--quiet` | `-q` | flag | No | False | Suppress the success line. |
 
@@ -689,7 +686,7 @@ devlog rename-tag OLD NEW [OPTIONS]
 - Every entry that contains `OLD` is rewritten in place. The entry's `created_at` is preserved and `updated_at` is set to the current UTC time.
 - If an entry already carries `NEW`, the result is deduplicated so no entry ends up with the same tag twice.
 - If no entries carry `OLD`, prints `No entries with tag "<old>".` and exits 0.
-- `NEW` is validated against the same character/length rules as `devlog add` and rejected with a clear error if it would be invalid. (Older versions used to silently no-op when the lowercased NEW happened to equal OLD — that path is fixed.)
+- `NEW` is validated against the tag rules (see [Tag rules](#tag-rules)) and rejected with a clear error if it would be invalid. (Older versions used to silently no-op when the lowercased NEW happened to equal OLD — that path is fixed.)
 
 **Examples:**
 
@@ -711,7 +708,7 @@ devlog merge-tag OLD NEW [OPTIONS]
 | Argument / Option | Short | Type | Required | Default | Description |
 |-------------------|-------|------|----------|---------|-------------|
 | `OLD` | — | string | Yes | — | The tag to retire. |
-| `NEW` | — | string | Yes | — | The tag to consolidate into. Validated with the same rules as `devlog add`. |
+| `NEW` | — | string | Yes | — | The tag to consolidate into. Validated as a tag (see [Tag rules](#tag-rules)). |
 | `--dry-run` | — | flag | False | Show the count of affected entries without writing. |
 | `--quiet` | `-q` | flag | False | Suppress the success line. |
 
@@ -1040,6 +1037,22 @@ devlog doctor --quiet | jq '{ok, entry_count, issues: (.issues | length)}'
 
 ---
 
+## Tag rules
+
+Every command that accepts tags (`add`, `edit`, `tag`, `rename-tag`,
+`merge-tag`, plus the `--tag` filter on `list` / `search` / `tail` /
+`export`) applies the same rules:
+
+- **Character set:** `^[a-z0-9-]+$` — lowercase letters, digits, and hyphens. Other characters (uppercase, underscores, spaces, punctuation) are rejected.
+- **Length:** ≤ 32 characters per tag.
+- **Count:** ≤ 10 distinct tags per entry.
+- **Normalisation:** whitespace is stripped and the result is lowercased before storage, so `  Backend ` is stored as `backend`. Duplicate tags on the same entry are silently deduplicated.
+- **Storage:** tags are stored verbatim (already normalised) and rendered as a comma-separated list in tables and panels.
+
+These rules are enforced at every boundary; a tag that violates them is rejected with a clear error and the command exits with code 1 before any file I/O happens.
+
+---
+
 ## Date filters
 
 `devlog list`, `devlog search`, `devlog export`, and `devlog stats` all accept `--since` and `--until` flags. Bounds are inclusive: `--until 2025-01-15` includes entries written on January 15th.
@@ -1255,6 +1268,7 @@ devlog-cli/
 │   ├── models.py         ← Entry dataclass / TypedDict definition
 │   ├── _completions.py   ← Bash / zsh / fish completion script generators
 │   ├── _dates.py         ← Date-range parsing, week boundaries, TZ helpers
+│   ├── _filter.py        ← Shared filter chain (tag → date → sort)
 │   ├── _interactive.py   ← Line-based REPL dispatcher
 │   ├── _io.py            ← Export/import readers and writers
 │   ├── _iso.py           ← ISO-8601 parsing / formatting helpers

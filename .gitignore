@@ -8,3 +8,9 @@ __pycache__/
 # Build artifacts
 dist/
 *.egg-info/
+
+# devlog export output (lives under <data-dir>/exports/ by default;
+# a copy sometimes lands in the project root during local runs)
+devlog-export.md
+*.export.md
+exports/
