@@ -79,11 +79,18 @@ def _filter_by_tags(entries: list[Entry], tags: tuple[str, ...]) -> list[Entry]:
 
     Returns:
         list[Entry]: entries that carry every requested tag.
+
+    Note:
+        The filter set is built *once* as a :class:`frozenset` (cheap
+        outside the comprehension) and we then call
+        ``frozenset.issubset(entry.tags)``. The naive ``set(e.tags)``
+        approach rebuilt the per-entry set on every iteration — small
+        constant overhead, but measurable on 10k+ journals.
     """
     if not tags:
         return entries
-    norm_filter = {t.strip().lower() for t in tags}
-    return [e for e in entries if norm_filter.issubset(set(e.tags))]
+    norm_filter = frozenset(t.strip().lower() for t in tags)
+    return [e for e in entries if norm_filter.issubset(e.tags)]
 
 
 def _validate_new_tag(raw: str) -> str:
@@ -129,7 +136,9 @@ def _validate_new_tag(raw: str) -> str:
     return norm[0]
 
 
-def _rewrite_tag_in_entry(entry: Entry, old: str, new: str) -> None:
+def _rewrite_tag_in_entry(
+    entry: Entry, old: str, new: str, *, now: str | None = None
+) -> None:
     """Replace every occurrence of ``old`` with ``new`` in ``entry.tags``.
 
     Handles dedup: if ``entry.tags`` already contains ``new``, a
@@ -137,6 +146,16 @@ def _rewrite_tag_in_entry(entry: Entry, old: str, new: str) -> None:
     ``merge`` does not double-tag entries that already carry ``new``).
     Stamps ``entry.updated_at`` so the change is visible in ``tags``
     and ``stats``.
+
+    Args:
+        entry: the entry to mutate in place.
+        old:   the tag to retire.
+        new:   the tag to substitute (or add).
+        now:   pre-computed UTC ``updated_at`` timestamp. Bulk callers
+               (``rename-tag``, ``merge-tag``, ``tag --delete``) must
+               pass the same value for every entry in the run so all
+               affected rows share one ``datetime.now()`` syscall
+               instead of one syscall per entry.
     """
     new_tags: list[str] = []
     for t in entry.tags:
@@ -146,7 +165,7 @@ def _rewrite_tag_in_entry(entry: Entry, old: str, new: str) -> None:
         else:
             new_tags.append(t)
     entry.tags = new_tags
-    entry.updated_at = storage.utc_now_iso()
+    entry.updated_at = now if now is not None else storage.utc_now_iso()
 
 
 def _is_valid_tag(tag: str) -> bool:

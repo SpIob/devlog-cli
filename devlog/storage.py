@@ -182,19 +182,32 @@ def find_entry_by_id(entries: List[Entry], id_prefix: str) -> Entry | None:
 
     Returns:
         The matching Entry, or ``None`` if no match / ambiguous.
+
+    Note:
+        On-disk ids are minted by ``uuid.uuid4()`` and are therefore
+        always lowercase, so we only lowercase the *user-supplied*
+        prefix once and compare against the stored ids directly. Doing
+        ``e.id.lower()`` per entry is wasted work — on a 10k journal
+        with 100 lookups that was 2M redundant ``str.lower()`` calls.
     """
     if not id_prefix:
         return None
 
     needle = id_prefix.lower()
-    exact = [e for e in entries if e.id.lower() == needle]
-    if exact:
-        return exact[0]
-
-    matches = [e for e in entries if e.id.lower().startswith(needle)]
-    if len(matches) == 1:
-        return matches[0]
-    return None
+    # Phase 1: exact match. UUIDs are lowercase; needle is too. If a
+    # user's prefix happens to be a full UUID, the comparison is just
+    # an O(n) string scan with no allocation per entry.
+    for e in entries:
+        if e.id == needle:
+            return e
+    # Phase 2: unique short prefix. Re-scan with startswith().
+    matches: list[Entry] = []
+    for e in entries:
+        if e.id.startswith(needle):
+            matches.append(e)
+            if len(matches) > 1:
+                return None
+    return matches[0] if len(matches) == 1 else None
 
 
 def find_entry_id_prefix_matches(entries: List[Entry], id_prefix: str) -> List[Entry]:
@@ -202,7 +215,7 @@ def find_entry_id_prefix_matches(entries: List[Entry], id_prefix: str) -> List[E
     if not id_prefix:
         return []
     needle = id_prefix.lower()
-    return [e for e in entries if e.id.lower().startswith(needle)]
+    return [e for e in entries if e.id.startswith(needle)]
 
 
 def update_entry(updated: Entry) -> bool:

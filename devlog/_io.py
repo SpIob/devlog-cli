@@ -9,6 +9,7 @@ import json
 import re
 import sys
 import uuid
+from operator import attrgetter
 from typing import TYPE_CHECKING
 
 from devlog import _dates
@@ -18,6 +19,10 @@ from devlog.models import Entry
 
 if TYPE_CHECKING:
     from devlog import storage
+
+
+# Pre-built sort key — see cli._BY_CREATED_AT for the rationale.
+_BY_CREATED_AT = attrgetter("created_at")
 
 
 def _sniff_import_format(path: str) -> str:
@@ -357,7 +362,7 @@ def export(
     filtered = _tagops._filter_by_tags(all_entries, tags)
     since_dt, until_dt = _dates._parse_since_until(since, until)
     filtered = _dates._filter_by_date(filtered, since_dt, until_dt)
-    filtered.sort(key=lambda e: e.created_at, reverse=True)
+    filtered.sort(key=_BY_CREATED_AT, reverse=True)
 
     if not filtered:
         ui.print_warning("Warning: No entries to export.")
