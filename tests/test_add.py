@@ -54,6 +54,18 @@ def test_add_empty_message(runner):
     assert "MESSAGE cannot be empty" in result.output
 
 
+def test_add_rejects_whitespace_only_message(runner):
+    """Whitespace-only messages should be rejected like empty ones.
+
+    Regression: previously ``devlog add "   "`` was accepted and
+    created a blank entry, polluting search/stats and contradicting
+    the empty-string rejection at the same code path.
+    """
+    result = runner.invoke(main, ["add", "   "])
+    assert result.exit_code == 1
+    assert "MESSAGE cannot be empty" in result.output
+
+
 def test_add_invalid_tag_chars(runner):
     result = runner.invoke(main, ["add", "Msg", "-t", "bad tag"])
     assert result.exit_code == 1
@@ -166,3 +178,26 @@ def test_add_at_with_local_tz(runner, tmp_path, monkeypatch):
     assert result.exit_code == 0
     entries = storage.load_entries()
     assert entries[0].created_at == "2025-02-15T14:00:00Z"
+
+
+def test_add_at_accepts_relative_days(runner, tmp_path, monkeypatch):
+    """`--at Nd` and `--at Nw` are accepted as relative day/week forms.
+
+    Regression: the ``--at`` parser previously only accepted ``Nh`` and
+    ``Nm``, even though the matching ``--since/--until`` filters
+    accept ``Nd``/``Nw``. The asymmetric behaviour confused users who
+    tried to backdate a week-old entry.
+    """
+    from devlog import storage
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    result = runner.invoke(main, ["add", "x", "--at", "1d"])
+    assert result.exit_code == 0
+    result = runner.invoke(main, ["add", "x", "--at", "1w"])
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    # Both entries should have timestamps within the last 8 days
+    from datetime import datetime, timezone
+    for e in entries:
+        ts = datetime.strptime(e.created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        age = (datetime.now(tz=timezone.utc) - ts).total_seconds()
+        assert 0 <= age <= 8 * 86400 + 5

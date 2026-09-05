@@ -145,6 +145,31 @@ def test_doctor_quiet_corrupt_json(runner, data_dir, tmp_path):
     assert any(i["kind"] == "corrupt_json" for i in obj["issues"])
 
 
+def test_doctor_recovers_truncated_trailing_garbage(runner, data_dir, tmp_path):
+    """A trailing half-written entry should not doom the whole file.
+
+    Doctor should still report the recoverable entries rather than
+    collapsing to ``entry_count: 0`` (the pre-fix behaviour).
+    """
+    payload = {
+        "entries": [
+            {
+                "id": "good",
+                "message": "survivor",
+                "tags": ["ok"],
+                "created_at": "2025-01-01T00:00:00Z",
+            }
+        ]
+    }
+    corrupt = json.dumps(payload) + '{ "id": "broken", "mess'  # truncated
+    (tmp_path / "entries.json").write_text(corrupt, encoding="utf-8")
+    result = runner.invoke(main, ["doctor", "--quiet"])
+    # Doctor should recover and report the surviving entry
+    obj = json.loads(result.output.strip())
+    assert obj["entry_count"] == 1
+    assert obj["ok"] is True
+
+
 # ---------------------------------------------------------------------------
 # Stats within the report
 # ---------------------------------------------------------------------------
@@ -157,6 +182,27 @@ def test_doctor_reports_days_since_last(runner, data_dir):
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 0
     assert "5 days ago" in result.output
+
+
+def test_doctor_handles_future_dated_entry(runner, data_dir):
+    """A future-dated entry must not produce a negative "N days ago".
+
+    Regression: previously the panel printed "Last entry: -26417
+    days ago" for entries dated in 2099. Now it should say
+    "in N days (future-dated)".
+    """
+    future = datetime.now(tz=timezone.utc) + timedelta(days=365)
+    _seed("22222222-2221-1111-1111-111111111111", "future", _utc_iso(future))
+    result = runner.invoke(main, ["doctor"])
+    assert result.exit_code == 0
+    # The negative delta must never appear in the user-facing output
+    assert "days ago" not in result.output or "-" not in result.output.split("Last entry")[1].split("\n")[0]
+    assert "future-dated" in result.output
+    # And the quiet JSON must keep a numeric value (negative is
+    # the wire-format sentinel for "in the future").
+    qresult = runner.invoke(main, ["doctor", "--quiet"])
+    payload = json.loads(qresult.output.strip())
+    assert payload["days_since_last"] < 0
 
 
 def test_doctor_reports_longest_messages(runner, data_dir):

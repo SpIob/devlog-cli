@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import datetime as _dt
-from dataclasses import asdict, dataclass, field
-from typing import Any, List, Optional
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+from devlog import _iso
 
 
 @dataclass
@@ -44,14 +46,6 @@ class Entry:
         """``(created_at, message)`` — the idempotency key used by ``import``."""
         return (self.created_at, self.message)
 
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-safe ``dict`` view of this entry.
-
-        Equivalent to ``dataclasses.asdict(self)`` but exposed as a
-        method so call sites don't have to import ``dataclasses``.
-        """
-        return asdict(self)
-
 
 def _parse_iso(iso: str) -> _dt.datetime:
     """Parse a stored ``YYYY-MM-DDTHH:MM:SSZ`` string to a UTC datetime.
@@ -61,7 +55,7 @@ def _parse_iso(iso: str) -> _dt.datetime:
     :func:`devlog._iso.is_valid_iso_timestamp`: the validator
     reports bad rows, the reader degrades gracefully.
     """
-    try:
-        return _dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except (ValueError, TypeError, AttributeError):
+    dt = _iso.try_parse_utc_iso(iso)
+    if dt is None:
         return _dt.datetime(1970, 1, 1, tzinfo=_dt.timezone.utc)
+    return dt

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import click
 
+from devlog import _iso
 from devlog import storage
 from devlog import ui
 from devlog.models import Entry
@@ -182,6 +183,8 @@ def _parse_timestamp(value: str, *, tz=None) -> datetime.datetime:
                                             local-tz reinterpretation).
         * ``Nh``                          — N hours ago, relative to now.
         * ``Nm``                          — N minutes ago, relative to now.
+        * ``Nd``                          — N days ago at local midnight.
+        * ``Nw``                          — N weeks ago at local midnight.
 
     Args:
         value: the raw string from the user.
@@ -201,23 +204,39 @@ def _parse_timestamp(value: str, *, tz=None) -> datetime.datetime:
 
     raw = value.strip()
     lower = raw.lower()
+    zone = tz or datetime.timezone.utc
 
-    # Relative forms: 2h, 30m
+    # Relative forms: 2h, 30m, 7d, 1w
     m = _RELATIVE_HOUR_RE.match(lower)
     if m:
         hours = int(m.group(1))
-        return datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(hours=hours)
+        return datetime.datetime.now(tz=zone) - datetime.timedelta(hours=hours)
     m = _RELATIVE_MINUTE_RE.match(lower)
     if m:
         minutes = int(m.group(1))
-        return datetime.datetime.now(tz=datetime.timezone.utc) - datetime.timedelta(minutes=minutes)
+        return datetime.datetime.now(tz=zone) - datetime.timedelta(minutes=minutes)
+    m = _RELATIVE_DAY_RE.match(lower)
+    if m:
+        days = int(m.group(1))
+        ref = datetime.datetime.now(tz=zone).date() - datetime.timedelta(days=days)
+        return datetime.datetime(
+            ref.year, ref.month, ref.day, tzinfo=zone
+        ).astimezone(datetime.timezone.utc)
+    m = _RELATIVE_WEEK_RE.match(lower)
+    if m:
+        weeks = int(m.group(1))
+        ref = (
+            datetime.datetime.now(tz=zone).date()
+            - datetime.timedelta(weeks=weeks)
+        )
+        return datetime.datetime(
+            ref.year, ref.month, ref.day, tzinfo=zone
+        ).astimezone(datetime.timezone.utc)
 
     # Date-only: YYYY-MM-DD → local midnight, then convert to UTC so
     # callers always get a UTC datetime.
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
-        dt = datetime.datetime.strptime(raw, "%Y-%m-%d").replace(
-            tzinfo=tz or datetime.timezone.utc
-        )
+        dt = datetime.datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=zone)
         return dt.astimezone(datetime.timezone.utc)
 
     # Full ISO with optional Z / +00:00 / +HH:MM
@@ -230,14 +249,16 @@ def _parse_timestamp(value: str, *, tz=None) -> datetime.datetime:
         raise click.BadParameter(
             f'Invalid --at "{value}". Supported formats: '
             '"YYYY-MM-DD", "YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM:SSZ", '
-            '"YYYY-MM-DD HH:MM[:SS]", "Nh" (N hours ago), "Nm" (N minutes ago).'
+            '"YYYY-MM-DD HH:MM[:SS]", '
+            '"Nh" (N hours ago), "Nm" (N minutes ago), '
+            '"Nd" (N days ago), "Nw" (N weeks ago).'
         ) from exc
     if dt.tzinfo is None:
         # Naive timestamp — honour the local zone if one is active,
         # otherwise treat as UTC (the historical default). Convert
         # to UTC for storage so the contract — "returns a UTC
         # datetime" — holds regardless of the active zone.
-        dt = dt.replace(tzinfo=tz or datetime.timezone.utc)
+        dt = dt.replace(tzinfo=zone)
     return dt.astimezone(datetime.timezone.utc)
 
 
@@ -264,11 +285,8 @@ def _filter_by_date(
         return entries
 
     def _within(entry: Entry) -> bool:
-        try:
-            ts = datetime.datetime.fromisoformat(
-                entry.created_at.replace("Z", "+00:00")
-            )
-        except (ValueError, TypeError, AttributeError):
+        ts = _iso.try_parse_utc_iso(entry.created_at)
+        if ts is None:
             return False
         if since is not None and ts < since:
             return False
@@ -315,35 +333,22 @@ def _filter_by_local_window(
         if tz is not None:
             local_d = storage.local_date_for(entry.created_at, tz)
         else:
-            # UTC fallback — inline the same epoch-on-failure contract
+            # UTC fallback — preserve the same epoch-on-failure contract
             # as ``storage.local_date_for`` so unreadable timestamps
             # silently land in 1970-01-01 (and thus never match a recent
             # window) rather than crashing the command.
-            try:
-                dt = datetime.datetime.fromisoformat(
-                    entry.created_at.replace("Z", "+00:00")
-                )
-                local_d = dt.date()
-            except (ValueError, TypeError, AttributeError):
-                local_d = datetime.date(1970, 1, 1)
+            local_d = _iso.utc_date_from_iso(entry.created_at)
         if start_date <= local_d <= end_date:
             out.append(entry)
     return out
 
 
-def _iso_to_epoch(iso: str) -> int:
-    """Convert a stored ISO 8601 UTC string to a POSIX epoch int."""
-    dt = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    return int(dt.timestamp())
+def today_local_date(tz) -> datetime.date:
+    """Return today's date in *tz*, or UTC when *tz* is ``None``.
 
-
-def _utc_date_from_iso(iso: str):
-    """Return the UTC date for a stored ISO 8601 timestamp.
-
-    Returns 1970-01-01 on unparseable input (mirrors ``local_date_for``).
+    Centralises the ``if tz is not None: ... else: ...`` fork that
+    ``today`` / ``yesterday`` / ``week`` / ``calendar`` / ``stats``
+    previously inlined five times.
     """
-    try:
-        dt = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except (ValueError, TypeError, AttributeError):
-        return datetime.date(1970, 1, 1)
-    return dt.date()
+    effective = tz or datetime.timezone.utc
+    return datetime.datetime.now(tz=effective).date()

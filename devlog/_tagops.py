@@ -48,7 +48,8 @@ def _validate_tags(raw_tags: tuple[str, ...]) -> list[str]:
         if not TAG_RE.fullmatch(norm):
             raise click.UsageError(
                 f'Tag "{original}" contains invalid characters. '
-                "Use lowercase letters, numbers, and hyphens only."
+                "Tags are normalised to lowercase before storage; the "
+                "remaining characters must be a-z, 0-9, or hyphen."
             )
 
         if len(norm) > MAX_TAG_LENGTH:
@@ -117,7 +118,8 @@ def _validate_new_tag(raw: str) -> str:
     if not TAG_RE.fullmatch(raw.strip()):
         raise click.UsageError(
             f'Tag "{raw}" contains invalid characters. '
-            "Use lowercase letters, numbers, and hyphens only."
+            "Tags are normalised to lowercase before storage; the "
+            "remaining characters must be a-z, 0-9, or hyphen."
         )
     if len(raw.strip()) > MAX_TAG_LENGTH:
         raise click.UsageError(

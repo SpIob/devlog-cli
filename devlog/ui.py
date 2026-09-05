@@ -16,7 +16,6 @@ Conventions
 
 from __future__ import annotations
 
-import datetime as _dt
 import os
 import re
 import shutil
@@ -37,6 +36,7 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
+from devlog import _iso
 from devlog import themes
 from devlog.models import Entry
 
@@ -340,9 +340,8 @@ def _format_dt(iso: str, *, tz=None, tz_label: str = "UTC") -> str:
     """
     if not iso:
         return "—"
-    try:
-        dt = _dt.datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    except (ValueError, TypeError, AttributeError):
+    dt = _iso.try_parse_utc_iso(iso)
+    if dt is None:
         return iso
     if tz is not None:
         dt = dt.astimezone(tz)
@@ -1252,8 +1251,8 @@ def stats_panel(
     # span 3 local days in America/New_York (Dec 31, Jan 1, Jan 2) but
     # 2 UTC days.
     try:
-        first_dt = _dt.datetime.fromisoformat(first_iso.replace("Z", "+00:00"))
-        last_dt = _dt.datetime.fromisoformat(last_iso.replace("Z", "+00:00"))
+        first_dt = _iso.parse_utc_iso(first_iso)
+        last_dt = _iso.parse_utc_iso(last_iso)
         if tz is not None:
             first_dt = first_dt.astimezone(tz)
             last_dt = last_dt.astimezone(tz)
@@ -1402,16 +1401,25 @@ def root_banner(commands: Sequence[tuple[str, str]] | None = None) -> None:
 
 
 def repair_summary(
-    issues: list, dropped: int, kept: int, *, dry_run: bool, backup_path: str | None
+    issues: list,
+    dropped: int,
+    kept: int,
+    *,
+    dry_run: bool,
+    backup_path: str | None,
+    tags_stripped: int = 0,
 ) -> Panel:
     """Render a panel summarising a `devlog repair` invocation.
 
     Args:
-        issues:      list of :class:`devlog.storage.Issue` objects.
-        dropped:     number of entries the repair removed.
-        kept:        number of entries retained.
-        dry_run:     True when the user passed --dry-run (no write happened).
-        backup_path: path to a backup file when --backup was used, else None.
+        issues:        list of :class:`devlog.storage.Issue` objects.
+        dropped:       number of entries the repair removed.
+        kept:          number of entries retained.
+        dry_run:       True when the user passed --dry-run (no write happened).
+        backup_path:   path to a backup file when --backup was used, else None.
+        tags_stripped: number of invalid tags removed from otherwise-valid
+                       entries during this repair. Independent of ``dropped``;
+                       the entry is kept, only the offending tag is gone.
 
     Returns:
         A configured :class:`rich.panel.Panel`.
@@ -1446,11 +1454,13 @@ def repair_summary(
     if dry_run:
         rows.append(Text("DRY RUN — no changes were written.", style=_bold("warning_text")))
     else:
-        rows.append(
-            Text(
-                f"Removed {dropped} {_plural_noun(dropped, 'entry')}, kept {kept}.",
-                style=_s("success_border"),
+        parts = [f"Removed {dropped} {_plural_noun(dropped, 'entry')}", f"kept {kept}"]
+        if tags_stripped:
+            parts.append(
+                f"stripped {tags_stripped} bad tag{plural_s(tags_stripped)}"
             )
+        rows.append(
+            Text(", ".join(parts) + ".", style=_s("success_border"))
         )
     if backup_path:
         rows.append(Text(f"Backup written to {backup_path}", style="dim"))
@@ -1521,6 +1531,16 @@ def doctor_report(report: dict) -> Panel:
         rows.append(_styled_row("Last entry", Text("—", style="dim")))
     elif days == 0:
         rows.append(_styled_row("Last entry", Text("today", style=_s("date"))))
+    elif days < 0:
+        rows.append(
+            _styled_row(
+                "Last entry",
+                Text(
+                    f"in {-days} day{plural_s(-days)} (future-dated)",
+                    style=_s("warning_text"),
+                ),
+            )
+        )
     else:
         rows.append(
             _styled_row(

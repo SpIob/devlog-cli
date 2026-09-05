@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 import uuid
 from typing import TYPE_CHECKING
 
@@ -34,8 +35,6 @@ def _sniff_import_format(path: str) -> str:
     Returns:
         ``"json"`` or ``"markdown"``.
     """
-    import sys
-
     lower = path.lower()
     if lower.endswith(".json"):
         return "json"
@@ -72,8 +71,6 @@ def _read_import_payload(path: str, fmt: str) -> tuple[list[Entry], int]:
         counts rows it could not coerce; the markdown parser either
         succeeds or returns zero (it does not surface partial failures).
     """
-    import sys
-
     try:
         with open(path, "r", encoding="utf-8") as fh:
             content = fh.read()
@@ -149,8 +146,6 @@ def _emit_import_summary(
     trailing ``"Ignored K unreadable rows."`` segment, so the helper
     keeps the wording consistent across the two outputs.
     """
-    import sys
-
     verb = "would import" if dry_run else "Imported"
     line_factory = ui.dry_run_line if dry_run else ui.success_line
     parts = [
@@ -169,13 +164,22 @@ def _parse_markdown_export(content: str) -> list[Entry]:
     """Parse the markdown format produced by `devlog export`.
 
     Each entry block looks like:
+
         ## 2025-05-11 10:22 UTC — a1b2c3d4
 
         Message body.
 
         **Tags:** backend, security
 
+        <!-- created_at: 2025-05-11T10:22:33Z -->
+
         ---
+
+    The hidden ``<!-- created_at: ... -->`` line carries the full
+    ISO 8601 timestamp (with seconds). Older exports (pre-fix for
+    the round-trip seconds-loss bug) won't have it; in that case the
+    parser falls back to the minute-precision timestamp in the
+    heading.
     """
     import re as _re
 
@@ -186,6 +190,12 @@ def _parse_markdown_export(content: str) -> list[Entry]:
     )
     tags_re = _re.compile(r"^\*\*Tags:\*\*\s*(.+?)\s*$", _re.MULTILINE)
     sep_re = _re.compile(r"^---\s*$", _re.MULTILINE)
+    # Hidden metadata: full-precision ISO timestamp embedded in a
+    # comment so it survives the Markdown round-trip without
+    # cluttering the human-readable view.
+    created_at_re = _re.compile(
+        r"^<!--\s*created_at:\s*(\S+)\s*-->\s*$", _re.MULTILINE
+    )
 
     entries: list[Entry] = []
     matches = list(heading_re.finditer(content))
@@ -216,11 +226,19 @@ def _parse_markdown_export(content: str) -> list[Entry]:
             tags = []
             message = block
 
-        # Convert "YYYY-MM-DD HH:MM UTC" → "YYYY-MM-DDTHH:MM:00Z"
-        # (the heading only carries minute precision; seconds default to 00)
-        # Strip "UTC" first, then convert the remaining space to "T".
-        no_tz = date_str.replace("UTC", "").strip()
-        created_at = no_tz.replace(" ", "T") + ":00Z"
+        # Prefer the full-precision timestamp from the hidden comment
+        # line (the round-trip-safe form). Fall back to the heading's
+        # minute precision for older exports that lack the comment.
+        created_at_match = created_at_re.search(block)
+        if created_at_match and _re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", created_at_match.group(1)
+        ):
+            created_at = created_at_match.group(1)
+        else:
+            # Heading only carries minute precision; seconds default to 00.
+            # Strip "UTC" first, then convert the remaining space to "T".
+            no_tz = date_str.replace("UTC", "").strip()
+            created_at = no_tz.replace(" ", "T") + ":00Z"
 
         entries.append(
             Entry(
@@ -253,8 +271,6 @@ def _resolve_export_format(output: str | None, fmt: str) -> str:
 
 def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
     """Import entries from a JSON or Markdown export file."""
-    import sys
-
     if fmt == "auto":
         fmt = _sniff_import_format(path)
 
@@ -317,8 +333,6 @@ def export(
     quiet: bool,
 ) -> None:
     """Export entries to a Markdown or JSON file."""
-    import sys
-    from pathlib import Path
     import datetime
     import dataclasses
     import json
@@ -351,7 +365,7 @@ def export(
     # <data-dir>/exports/ instead of polluting the current working dir.
     if output is None:
         ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime(
-            "%Y%mdd-%H%M%S"
+            "%Y%m%d-%H%M%S"
         )
         ext = "json" if fmt_resolved == "json" else "md"
         export_dir = storage.get_data_dir() / "exports"
@@ -362,10 +376,16 @@ def export(
         short_id = entry.short_id
         date_str = ui._format_dt(entry.created_at)
         tags_str = ", ".join(entry.tags) if entry.tags else ui.TAG_NONE
+        # The hidden `<!-- created_at: … -->` line preserves the
+        # full-precision timestamp so a Markdown round-trip (export →
+        # import) doesn't drift on the seconds field. The line is
+        # invisible in rendered Markdown and ignored by the parser if
+        # it is missing on older files.
         return (
             f"## {date_str} — {short_id}\n\n"
             f"{entry.message}\n\n"
             f"**Tags:** {tags_str}\n\n"
+            f"<!-- created_at: {entry.created_at} -->\n\n"
             "---\n"
         )
 

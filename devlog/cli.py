@@ -10,7 +10,6 @@ import datetime
 import dataclasses
 import json
 import os
-import re
 import shutil
 import sys
 import uuid
@@ -32,7 +31,6 @@ from devlog import _interactive
 from devlog import _completions
 from devlog import _io
 from devlog import _iso
-from devlog._dates import _resolve_local_tz
 from devlog.models import Entry
 from devlog.storage import StorageError
 from devlog import ui
@@ -95,59 +93,69 @@ def _handle_storage_error(exc: StorageError) -> None:
     sys.exit(2)
 
 
-def _load_entries(func):
-    """Decorator: load entries from storage and pass to the wrapped function.
+def _iso_epoch_safe(value: str) -> int:
+    """Parse a stored UTC ISO 8601 string to a POSIX epoch, returning 0 on failure.
 
-    Replaces the 18 repeated ``try: storage.load_entries() except StorageError``
-    blocks in command functions. The wrapped function receives the entries list
-    as its first argument after the explicit parameters.
+    Mirrors the silent-failure contract of the original ``_iso_to_epoch``
+    callsite so unparseable timestamps sort to the bottom instead of
+    crashing ``devlog tags --sort=recent``.
     """
-    import functools
-
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        try:
-            entries = storage.load_entries()
-        except StorageError as exc:
-            _handle_storage_error(exc)
-            return
-        return func(*args, entries, **kwargs)
-    return wrapper
+    try:
+        return _iso.iso_to_epoch(value)
+    except (ValueError, TypeError, AttributeError):
+        return 0
 
 
-def _bail_on_click_error(exit_code: int = 1):
-    """Decorator: catch click.UsageError/click.BadParameter and exit cleanly.
+def _load_entries_or_exit() -> list[Entry]:
+    """Load all entries, printing and exiting cleanly on a storage error.
 
-    Replaces the ~12 repeated ``try / except click.UsageError`` blocks.
+    Centralises the 15+ identical ``try: storage.load_entries() except
+    StorageError`` wrappers that previously preceded every command body.
+    Returns the loaded list (always non-None) so callers can chain
+    operations immediately.
     """
-    import functools
-
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except click.UsageError as exc:
-                ui.print_error(str(exc))
-                sys.exit(exit_code)
-            except click.BadParameter as exc:
-                ui.print_error(str(exc))
-                sys.exit(exit_code)
-        return wrapper
-    return decorator
+    try:
+        return storage.load_entries()
+    except StorageError as exc:
+        _handle_storage_error(exc)
+        return []
 
 
-def _resolve_entry_by_id_or_exit(all_entries: list[Entry], entry_id: str) -> Entry:
-    """Resolve an id (full or unique short prefix) to an Entry or exit with code 1.
+def _resolve_entry_by_id_or_exit(
+    all_entries: list[Entry], entry_id: str, *, ignore_missing: bool = False
+) -> Entry | None:
+    """Resolve an id (full or unique short prefix) to an Entry or exit.
 
-    Prints a user-facing error and calls ``sys.exit(1)`` when no entry
-    matches or the prefix is ambiguous. Centralises the exact same
-    resolution dance that ``show``, ``edit`` and ``delete`` previously
-    inlined three times.
+    Args:
+        all_entries: the in-memory entry list to search.
+        entry_id:    the user-supplied id or unique short prefix.
+        ignore_missing: when True, return ``None`` instead of exiting
+            with code 1 if the id is not found. Ambiguous prefixes
+            always exit 1, regardless of this flag.
+
+    Returns:
+        The matching :class:`Entry`, or ``None`` if ``ignore_missing``
+        is set and no entry matched.
+
+    Side effects:
+        Calls :func:`sys.exit` on failure.
     """
     match = storage.find_entry_by_id(all_entries, entry_id)
     if match is not None:
         return match
+    if ignore_missing:
+        # Distinguish "not found" from "ambiguous" by probing the
+        # prefix matcher. We only return None for the genuine
+        # not-found case; ambiguity still exits.
+        candidates = storage.find_entry_id_prefix_matches(all_entries, entry_id)
+        if len(candidates) <= 1:
+            return None
+        short_ids = ", ".join(e.short_id for e in candidates)
+        ui.print_error(
+            f'ID prefix "{entry_id}" matches multiple entries: {short_ids}. '
+            "Use a longer prefix."
+        )
+        sys.exit(1)
     # Distinguish "not found" from "ambiguous"
     candidates = storage.find_entry_id_prefix_matches(all_entries, entry_id)
     if len(candidates) > 1:
@@ -222,7 +230,16 @@ def main(ctx: click.Context, version: bool, interactive: bool) -> None:
 
 @main.command()
 @click.argument("message")
-@click.option("--tag", "-t", multiple=True, help="Attach tags (repeatable).")
+@click.option(
+    "--tag",
+    "-t",
+    multiple=True,
+    help=(
+        "Attach tags (repeatable). Tags are case-insensitive: "
+        "uppercase letters are lowercased before storage. "
+        "Allowed characters: a-z, 0-9, hyphen."
+    ),
+)
 @click.option("--quiet", "-q", is_flag=True, help="Suppress output.")
 @click.option(
     "--at",
@@ -231,21 +248,17 @@ def main(ctx: click.Context, version: bool, interactive: bool) -> None:
     help=(
         "Backdate the entry. Accepts an absolute timestamp "
         "(YYYY-MM-DD, YYYY-MM-DDTHH:MM, …Z) or a relative one "
-        "(Nh / Nm ago). When DEVLOG_TZ is set, naive inputs are "
-        "interpreted in that zone."
+        "(Nh / Nm / Nd / Nw ago). When DEVLOG_TZ is set, naive "
+        "inputs are interpreted in that zone."
     ),
 )
 def add(message: str, tag: Tuple[str, ...], quiet: bool, at: str | None) -> None:
     """Add a new journal entry."""
-    if not message:
+    if not message or not message.strip():
         ui.print_error("MESSAGE cannot be empty.")
         sys.exit(1)
 
-    try:
-        norm_tags = _tagops._validate_tags(tag)
-    except click.UsageError as exc:
-        ui.print_error(str(exc))
-        sys.exit(1)
+    norm_tags = _validate_tags_or_exit(tag)
 
     if at is not None:
         try:
@@ -305,11 +318,7 @@ def list_entries(
     if not show_all:
         _require_positive_int("--limit", limit)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return  # unreachable; silences type-checker
+    all_entries = _load_entries_or_exit()
 
     total_all = len(all_entries)
     filtered = _tagops._filter_by_tags(all_entries, tags)
@@ -377,11 +386,7 @@ def search(
 
     _require_positive_int("--limit", limit)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     filtered = _tagops._filter_by_tags(all_entries, tags)
     since_dt, until_dt = _dates._parse_since_until(since, until)
@@ -423,11 +428,7 @@ def show(id: str, quiet: bool) -> None:
         ui.print_error("ID is required.")
         sys.exit(1)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     match = _resolve_entry_by_id_or_exit(all_entries, id)
 
@@ -441,6 +442,20 @@ def show(id: str, quiet: bool) -> None:
 # ---------------------------------------------------------------------------
 # edit
 # ---------------------------------------------------------------------------
+
+
+def _validate_tags_or_exit(raw_tags: Tuple[str, ...]) -> list[str]:
+    """Run :func:`_tagops._validate_tags` and bail on ``click.UsageError``.
+
+    Centralises the ``try/except → ui.print_error → sys.exit(1)`` dance
+    that ``_edit_compute_tags`` (and the ``add``/``tag`` commands) used
+    to inline.
+    """
+    try:
+        return _tagops._validate_tags(raw_tags)
+    except click.UsageError as exc:
+        ui.print_error(str(exc))
+        sys.exit(1)
 
 
 def _edit_compute_tags(
@@ -457,17 +472,9 @@ def _edit_compute_tags(
     """
     out = list(current)
     if set_tags:
-        try:
-            out = _tagops._validate_tags(set_tags)
-        except click.UsageError as exc:
-            ui.print_error(str(exc))
-            sys.exit(1)
+        out = _validate_tags_or_exit(set_tags)
     if add_tags:
-        try:
-            additions = _tagops._validate_tags(add_tags)
-        except click.UsageError as exc:
-            ui.print_error(str(exc))
-            sys.exit(1)
+        additions = _validate_tags_or_exit(add_tags)
         for t in additions:
             if t not in out:
                 out.append(t)
@@ -545,7 +552,7 @@ def _edit_resolve_message(
     help=(
         "Change created_at to this timestamp. Prompts for confirmation "
         "unless --yes is passed. Accepts absolute (YYYY-MM-DD, "
-        "YYYY-MM-DDTHH:MM, …Z) and relative (Nh / Nm ago) inputs."
+        "YYYY-MM-DDTHH:MM, …Z) and relative (Nh / Nm / Nd / Nw ago) inputs."
     ),
 )
 @click.option("--yes", "-y", "yes", is_flag=True, help="Skip the --at confirmation prompt.")
@@ -564,11 +571,7 @@ def edit(
         ui.print_error("ID is required.")
         sys.exit(1)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     match = _resolve_entry_by_id_or_exit(all_entries, id)
 
@@ -705,19 +708,28 @@ def _resolve_in_path(name: str) -> str | None:
 @click.argument("id")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress output panel.")
-def delete(id: str, yes: bool, quiet: bool) -> None:
+@click.option(
+    "--ignore-missing",
+    is_flag=True,
+    help=(
+        "Exit 0 (not 1) when the given ID does not exist. "
+        "Useful in scripts where ``delete`` should be idempotent."
+    ),
+)
+def delete(id: str, yes: bool, quiet: bool, ignore_missing: bool) -> None:
     """Delete an entry by ID."""
     if not id:
         ui.print_error("ID is required.")
         sys.exit(1)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
-    match = _resolve_entry_by_id_or_exit(all_entries, id)
+    match = _resolve_entry_by_id_or_exit(all_entries, id, ignore_missing=ignore_missing)
+    if match is None:
+        # --ignore-missing and ID not present: succeed silently.
+        if not quiet:
+            ui.print_info(f'Entry "{id}" not present — nothing to delete.')
+        return
 
     if not yes:
         short = match.short_id
@@ -769,11 +781,7 @@ def tags(sort: str, limit: int, show_all: bool, quiet: bool) -> None:
     if not show_all:
         _require_positive_int("--limit", limit)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     aggregates: dict[str, tuple[int, str]] = {}
     for entry in all_entries:
@@ -795,7 +803,7 @@ def tags(sort: str, limit: int, show_all: bool, quiet: bool) -> None:
     elif sort == "name":
         rows.sort(key=lambda r: r[0])
     else:  # recent
-        rows.sort(key=lambda r: (-(int(_dates._iso_to_epoch(r[2])) if r[2] else 0), r[0]))
+        rows.sort(key=lambda r: (-(_iso_epoch_safe(r[2]) if r[2] else 0), r[0]))
 
     total_tags = len(rows)
     shown = rows if show_all else rows[:limit]
@@ -867,20 +875,12 @@ def tag(
 
     # Validate the tag the same way `add` and `rename-tag` do, so users
     # can't smuggle in characters the storage layer would reject.
-    try:
-        norm_tag = _tagops._validate_tags((name,))[0]
-    except click.UsageError as exc:
-        ui.print_error(str(exc))
-        sys.exit(1)
+    norm_tag = _validate_tags_or_exit((name,))[0]
 
     if not show_all:
         _require_positive_int("--limit", limit)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     if delete_tag:
         _tag_delete_impl(all_entries, norm_tag, dry_run=dry_run, quiet=quiet)
@@ -1079,17 +1079,10 @@ def today(limit: int, quiet: bool) -> None:
     """
     _require_positive_int("--limit", limit)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     tz = _dates._resolve_local_tz()
-    if tz is not None:
-        local_today = datetime.datetime.now(tz=tz).date()
-    else:
-        local_today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+    local_today = _dates.today_local_date(tz)
     today_entries = _dates._filter_by_local_window(all_entries, end_date=local_today, days=0, tz=tz)
     subtitle = local_today.strftime("%Y-%m-%d")
 
@@ -1129,17 +1122,10 @@ def yesterday(limit: int, quiet: bool) -> None:
     """
     _require_positive_int("--limit", limit)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     tz = _dates._resolve_local_tz()
-    if tz is not None:
-        local_today = datetime.datetime.now(tz=tz).date()
-    else:
-        local_today = datetime.datetime.now(tz=datetime.timezone.utc).date()
+    local_today = _dates.today_local_date(tz)
     local_yesterday = local_today - datetime.timedelta(days=1)
     yesterday_entries = _dates._filter_by_local_window(
         all_entries, end_date=local_yesterday, days=0, tz=tz
@@ -1189,11 +1175,7 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
     """Show entries from the last 7 days, newest first."""
     _require_positive_int("--limit", limit)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     tz = _dates._resolve_local_tz()
     if anchor:
@@ -1206,10 +1188,8 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
             ui.print_error(str(exc))
             sys.exit(2)
         end_date = anchor_dt.astimezone(tz).date() if tz is not None else anchor_dt.date()
-    elif tz is not None:
-        end_date = datetime.datetime.now(tz=tz).date()
     else:
-        end_date = datetime.datetime.now(tz=datetime.timezone.utc).date()
+        end_date = _dates.today_local_date(tz)
 
     week_entries = _dates._filter_by_local_window(all_entries, end_date=end_date, days=6, tz=tz)
     start_date = end_date - datetime.timedelta(days=6)
@@ -1259,16 +1239,9 @@ def calendar(year: int | None, quiet: bool) -> None:
     """Show a year-grid heatmap of journal activity."""
     tz = _dates._resolve_local_tz()
     if year is None:
-        year = (
-            datetime.datetime.now(tz=tz).year if tz is not None
-            else datetime.datetime.now(tz=datetime.timezone.utc).year
-        )
+        year = _dates.today_local_date(tz).year
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     per_day: dict[str, int] = {}
     for entry in all_entries:
@@ -1302,11 +1275,7 @@ def tail(n: int, tags: Tuple[str, ...], quiet: bool) -> None:
     """Show the N most recent entries (default: 5)."""
     _require_positive_int("N", n)
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     filtered = _tagops._filter_by_tags(all_entries, tags)
     filtered.sort(key=lambda e: e.created_at, reverse=True)
@@ -1337,11 +1306,7 @@ def tail(n: int, tags: Tuple[str, ...], quiet: bool) -> None:
 @click.option("--quiet", "-q", is_flag=True, help="Output a single JSON summary.")
 def stats(since: str | None, until: str | None, quiet: bool) -> None:
     """Show a summary of the journal: total entries, date range, top tags, and a 30-day sparkline."""
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     since_dt, until_dt = _dates._parse_since_until(since, until)
     all_entries = _dates._filter_by_date(all_entries, since_dt, until_dt)
@@ -1350,7 +1315,7 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
     # crashes. Other commands go through this filter implicitly via
     # --since/--until; `stats` without date bounds does not, so we apply
     # it unconditionally here.
-    all_entries = [e for e in all_entries if _is_valid_iso(e.created_at)]
+    all_entries = [e for e in all_entries if _iso.is_valid_iso_timestamp(e.created_at)]
 
     if not all_entries:
         ui.print_info("No entries to summarize.")
@@ -1375,10 +1340,7 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
         per_day[key] = per_day.get(key, 0) + 1
 
     last_30_days: list[tuple[str, int]] = []
-    ref_date = (
-        datetime.datetime.now(tz=tz).date() if tz is not None
-        else datetime.datetime.now(tz=datetime.timezone.utc).date()
-    )
+    ref_date = _dates.today_local_date(tz)
     for i in range(29, -1, -1):
         d = ref_date - datetime.timedelta(days=i)
         iso = d.strftime("%Y-%m-%d")
@@ -1450,11 +1412,7 @@ def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
         ui.print_info(f'OLD and NEW are the same ("{new_tag}"). No changes made.')
         return
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     affected = [e for e in all_entries if old_normalized in e.tags]
 
@@ -1521,11 +1479,7 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
         ui.print_info(f'OLD and NEW are the same ("{new_tag}"). No changes made.')
         return
 
-    try:
-        all_entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    all_entries = _load_entries_or_exit()
 
     # Categorise affected entries. "Touched" = entry had OLD; "skipped"
     # = a subset that already had NEW (we still strip OLD from these,
@@ -1588,145 +1542,6 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _sniff_import_format(path: str) -> str:
-    """Detect ``"json"`` or ``"markdown"`` for an ``import`` file.
-
-    The detection order matches the user-facing contract:
-
-    1. File extension (``.json`` / ``.md`` / ``.markdown``).
-    2. First non-blank byte of the file (``{`` → json, ``#`` → md).
-    3. Failure → print a user-facing error and ``sys.exit(2)``.
-
-    Args:
-        path: the user-supplied path to the file to import.
-
-    Returns:
-        ``"json"`` or ``"markdown"``.
-    """
-    lower = path.lower()
-    if lower.endswith(".json"):
-        return "json"
-    if lower.endswith(".md") or lower.endswith(".markdown"):
-        return "markdown"
-    # Try to sniff format from the first non-blank character so users
-    # can pipe from stdin or import extensionless files.
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            sniff = fh.read(64)
-    except OSError:
-        sniff = ""
-    stripped = sniff.lstrip()
-    if stripped.startswith("{"):
-        return "json"
-    if stripped.startswith("#"):
-        return "markdown"
-    ui.print_error(
-        f'Cannot auto-detect format for "{path}". '
-        "Use --format=json or --format=markdown."
-    )
-    sys.exit(2)
-
-
-def _read_import_payload(path: str, fmt: str) -> tuple[list[Entry], int]:
-    """Parse a JSON or Markdown import file into ``(candidates, unreadable)``.
-
-    Args:
-        path: file to read.
-        fmt:  ``"json"`` or ``"markdown"``.
-
-    Returns:
-        A 2-tuple ``(candidates, unreadable_rows)``. The JSON branch
-        counts rows it could not coerce; the markdown parser either
-        succeeds or returns zero (it does not surface partial failures).
-    """
-    try:
-        with open(path, "r", encoding="utf-8") as fh:
-            content = fh.read()
-    except (PermissionError, OSError) as exc:
-        ui.print_error(f"Cannot read {path}: {exc}")
-        sys.exit(2)
-
-    if fmt == "json":
-        try:
-            payload = json.loads(content)
-        except json.JSONDecodeError as exc:
-            ui.print_error(f"Invalid JSON in {path}: {exc}")
-            sys.exit(2)
-        raw_entries = payload.get("entries", [])
-        candidates: list[Entry] = []
-        unreadable = 0
-        for item in raw_entries:
-            if not isinstance(item, dict):
-                unreadable += 1
-                continue
-            # Mint a uuid up front when the source row is missing one.
-            # This both preserves stable ids when present AND lets
-            # `Entry(**item)` succeed on rows that omit `id`, instead
-            # of silently dropping them as "unreadable".
-            if "id" not in item or not item["id"]:
-                item = {**item, "id": str(uuid.uuid4())}
-            try:
-                e = Entry(**item)
-            except (TypeError, ValueError):
-                unreadable += 1
-                continue
-            candidates.append(e)
-        return candidates, unreadable
-
-    return _parse_markdown_export(content), 0
-
-
-def _dedup_against_existing(
-    candidates: list[Entry], existing: list[Entry]
-) -> tuple[list[Entry], int]:
-    """Return ``(to_add, skipped)`` after removing entries already present.
-
-    Idempotency: an entry is considered "already present" if either
-    the id *or* the ``(created_at, message)`` fingerprint matches an
-    existing entry. This makes re-imports and backup → restore → import
-    round-trips no-ops at the row level.
-    """
-    seen_ids = {e.id for e in existing}
-    seen_fps = {e.fingerprint for e in existing}
-    to_add: list[Entry] = []
-    skipped = 0
-    for cand in candidates:
-        if cand.id in seen_ids or cand.fingerprint in seen_fps:
-            skipped += 1
-            continue
-        # Preserve a stable id from the source when present. Only mint
-        # a fresh uuid if the source row is missing one.
-        if not cand.id:
-            cand.id = str(uuid.uuid4())
-        to_add.append(cand)
-        seen_ids.add(cand.id)
-        seen_fps.add(cand.fingerprint)
-    return to_add, skipped
-
-
-def _emit_import_summary(
-    to_add: int, skipped: int, unreadable: int, *, dry_run: bool
-) -> None:
-    """Print the import dry-run / success headline to the user.
-
-    Both branches (dry-run yellow, success green) build the same
-    ``"<verb> N entries, skip M duplicates"`` sentence with an optional
-    trailing ``"Ignored K unreadable rows."`` segment, so the helper
-    keeps the wording consistent across the two outputs.
-    """
-    verb = "would import" if dry_run else "Imported"
-    line_factory = ui.dry_run_line if dry_run else ui.success_line
-    parts = [
-        f"{verb} {to_add} {ui._plural_noun(to_add, 'entry')}, "
-        f"skip {skipped} duplicate{ui.plural_s(skipped)}."
-    ]
-    if unreadable:
-        parts.append(
-            f" Ignored {unreadable} unreadable row{ui.plural_s(unreadable)}."
-        )
-    console.print(line_factory("".join(parts)))
-
-
 @main.command()
 @click.argument("path", type=click.Path(exists=True, dir_okay=False, readable=True))
 @click.option(
@@ -1745,74 +1560,6 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
     _io.import_cmd(path, fmt, dry_run, quiet)
 
 
-def _parse_markdown_export(content: str) -> list[Entry]:
-    """Parse the markdown format produced by `devlog export`.
-
-    Each entry block looks like:
-        ## 2025-05-11 10:22 UTC — a1b2c3d4
-
-        Message body.
-
-        **Tags:** backend, security
-
-        ---
-    """
-    import re as _re
-
-    # Heading pattern: "## YYYY-MM-DD HH:MM UTC — XXXXXXXX"
-    heading_re = _re.compile(
-        r"^##\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+UTC)\s+—\s+([a-f0-9]+)\s*$",
-        _re.MULTILINE,
-    )
-    tags_re = _re.compile(r"^\*\*Tags:\*\*\s*(.+?)\s*$", _re.MULTILINE)
-    sep_re = _re.compile(r"^---\s*$", _re.MULTILINE)
-
-    entries: list[Entry] = []
-    matches = list(heading_re.finditer(content))
-    for i, m in enumerate(matches):
-        date_str, short_id = m.group(1), m.group(2)
-        # Body runs from end-of-heading to next separator or next heading
-        body_start = m.end()
-        next_boundary = len(content)
-        for j in range(i + 1, len(matches)):
-            next_boundary = matches[j].start()
-            break
-        # Also look for the closest separator after body_start
-        sep = sep_re.search(content, body_start)
-        if sep and sep.start() < next_boundary:
-            next_boundary = sep.start()
-        block = content[body_start:next_boundary].strip()
-
-        # Extract tags line and message
-        tags_match = tags_re.search(block)
-        if tags_match:
-            tags_raw = tags_match.group(1)
-            if tags_raw.lower() in ("(none)", "none", ""):
-                tags = []
-            else:
-                tags = [t.strip().lower() for t in tags_raw.split(",") if t.strip()]
-            message = block[: tags_match.start()].strip()
-        else:
-            tags = []
-            message = block
-
-        # Convert "YYYY-MM-DD HH:MM UTC" → "YYYY-MM-DDTHH:MM:00Z"
-        # (the heading only carries minute precision; seconds default to 00)
-        # Strip "UTC" first, then convert the remaining space to "T".
-        no_tz = date_str.replace("UTC", "").strip()
-        created_at = no_tz.replace(" ", "T") + ":00Z"
-
-        entries.append(
-            Entry(
-                id=f"{short_id}-imported",
-                message=message,
-                tags=tags,
-                created_at=created_at,
-            )
-        )
-    return entries
-
-
 # ---------------------------------------------------------------------------
 # repair / backup / restore / doctor
 # ---------------------------------------------------------------------------
@@ -1820,12 +1567,19 @@ def _parse_markdown_export(content: str) -> list[Entry]:
 
 # Reachable from `devlog repair`: the raw JSON file the validator reads.
 # Kept module-level so the unit tests can target it directly.
-def _read_raw_entries() -> object:
+def _read_raw_entries() -> tuple[object, bool]:
     """Return the parsed JSON payload at the storage path, or raise.
+
+    The second element of the returned tuple is ``True`` when the file
+    was corrupt and we had to fall back to right-truncation to recover
+    a usable JSON object. Callers use this to decide whether to
+    rewrite the file even if no validation issues are reported (the
+    trailing garbage would otherwise stay on disk).
 
     Raises:
         FileNotFoundError: when the file does not yet exist.
-        storage.CorruptedStorageError: when the file contains invalid JSON.
+        storage.CorruptedStorageError: when the file contains invalid JSON
+            and no recoverable portion can be extracted.
         storage.StoragePermissionError: when the file is unreadable.
     """
     path = storage.get_storage_path()
@@ -1833,13 +1587,56 @@ def _read_raw_entries() -> object:
         raise FileNotFoundError(path)
     try:
         with path.open("r", encoding="utf-8") as fh:
-            return json.load(fh)
+            return json.load(fh), False
     except PermissionError as exc:
         raise storage.StoragePermissionError(path, "read") from exc
     except OSError as exc:
         raise storage.StoragePermissionError(path, "read") from exc
-    except json.JSONDecodeError as exc:
-        raise storage.CorruptedStorageError(path) from exc
+    except json.JSONDecodeError:
+        # Try to recover by truncating to the last valid JSON object
+        # boundary. If that succeeds, return the recovered payload
+        # (which may be missing trailing entries the user added since
+        # the file was last flushed) so doctor/repair can still
+        # surface whatever survived. If recovery fails, raise the
+        # original-style corruption error.
+        recovered = _try_recover_entries_from_corrupt_json(path)
+        if recovered is not None:
+            return recovered, True
+        raise storage.CorruptedStorageError(path)
+
+
+def _try_recover_entries_from_corrupt_json(path: Path) -> object | None:
+    """Best-effort recovery when ``entries.json`` is not valid JSON.
+
+    Walks the file from the end looking for the largest prefix that
+    parses as valid JSON. The most common corruption is a trailing
+    write that didn't finish (e.g. power loss mid-flush), so a
+    right-trim usually recovers the previous good state.
+
+    Returns:
+        The parsed JSON object if recovery succeeded, else ``None``.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text:
+        return None
+
+    # Try right-truncation: only attempt the parse at positions that
+    # end on a JSON-object/array boundary, walking backward from the
+    # end. The first successful parse wins. Bounded by O(n) for
+    # pathological files but typically just a handful of attempts.
+    for end in range(len(text), 0, -1):
+        candidate = text[:end]
+        last = candidate.rstrip()[-1:] if candidate.rstrip() else ""
+        if last not in ("}", "]"):
+            continue
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def _coerce_entry(item: dict) -> Entry | None:
@@ -1886,8 +1683,11 @@ def _build_repair_plan(raw: object) -> tuple[list[Entry], list[storage.Issue]]:
         * Entries that the validator cannot even build from the item
           (missing id, wrong root types, etc.) are dropped — counted as
           ``bad_item`` issues.
-        * Entries with valid shape but a bad ``created_at`` or bad tags
-          are dropped — those issues are reported individually.
+        * Entries with a bad ``created_at`` are dropped (a recoverable
+          timestamp is not inferrable from context).
+        * Entries with one or more invalid tags are *kept*, with the
+          bad tags stripped. The ``bad_tag`` issue is still reported so
+          the user knows which entries were touched.
         * Duplicate ids keep the *first* occurrence; subsequent ones are
           reported as ``duplicate_id`` and dropped.
 
@@ -1913,12 +1713,23 @@ def _build_repair_plan(raw: object) -> tuple[list[Entry], list[storage.Issue]]:
             continue  # already covered by `bad_item` / `missing_field` issue
         if entry.id in seen_ids:
             continue  # duplicate; issue already reported
-        # Re-check created_at and tags so we drop malformed-but-buildable rows.
-        if not entry.created_at or not _is_valid_iso(entry.created_at):
+        # Re-check created_at so we drop malformed-but-buildable rows.
+        if not entry.created_at or not _iso.is_valid_iso_timestamp(entry.created_at):
             continue
-        if not all(_is_valid_tag(t) for t in entry.tags):
-            continue
-        if entry.updated_at is not None and not _is_valid_iso(entry.updated_at):
+        # Strip any individual bad tags rather than dropping the entry.
+        # Hand-edited files (or migrations from older devlog versions)
+        # can easily have a single bad tag among many good ones — the
+        # entry itself is still useful, so we salvage it.
+        cleaned_tags = [t for t in entry.tags if _tagops._is_valid_tag(t)]
+        if len(cleaned_tags) != len(entry.tags):
+            entry = Entry(
+                id=entry.id,
+                message=entry.message,
+                tags=cleaned_tags,
+                created_at=entry.created_at,
+                updated_at=entry.updated_at,
+            )
+        if entry.updated_at is not None and not _iso.is_valid_iso_timestamp(entry.updated_at):
             entry = Entry(
                 id=entry.id,
                 message=entry.message,
@@ -1929,14 +1740,6 @@ def _build_repair_plan(raw: object) -> tuple[list[Entry], list[storage.Issue]]:
         kept.append(entry)
         seen_ids.add(entry.id)
     return kept, issues
-
-
-def _is_valid_iso(value: str) -> bool:
-    return _iso.is_valid_iso_timestamp(value)
-
-
-def _is_valid_tag(t: str) -> bool:
-    return _tagops._is_valid_tag(t)
 
 
 @main.command()
@@ -1966,7 +1769,7 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
     ``backups/`` whenever a write happens unless ``--no-backup`` is set.
     """
     try:
-        raw = _read_raw_entries()
+        raw, recovered = _read_raw_entries()
     except FileNotFoundError:
         if not quiet:
             ui.print_info("No journal yet — nothing to repair.")
@@ -1989,8 +1792,16 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
     kept, issues = _build_repair_plan(raw)
     raw_count = len(raw.get("entries", [])) if isinstance(raw, dict) else 0
     dropped = max(0, raw_count - len(kept))
+    # Count how many tags the plan stripped (one per ``bad_tag`` issue
+    # since each issue corresponds to a single offending tag string).
+    tags_stripped = sum(1 for i in issues if i.kind == "bad_tag")
+    # If the file was corrupt and we recovered via right-truncation,
+    # the trailing garbage is still on disk even when the recovered
+    # payload is perfectly valid. Force a rewrite in that case so
+    # the on-disk file becomes well-formed JSON again.
+    force_rewrite = recovered
 
-    if not issues:
+    if not issues and not force_rewrite:
         if not quiet:
             ui.print_info("No issues found. Nothing to repair.")
         return
@@ -2005,17 +1816,40 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
             backup_path = str(backups_dir / backup_filename)
 
             with open(backup_path, "w", encoding="utf-8") as fh:
-                json.dump(raw, fh, indent=2, ensure_ascii=False)
+                # The recovered payload is a *valid* JSON object —
+                # the raw on-disk bytes are still corrupt. Back up the
+                # raw bytes so the user can recover anything we
+                # trimmed off the end.
+                if recovered:
+                    raw_bytes = storage.get_storage_path().read_bytes()
+                    fh.write(raw_bytes.decode("utf-8", errors="replace"))
+                else:
+                    json.dump(raw, fh, indent=2, ensure_ascii=False)
         except (OSError, PermissionError) as exc:
             ui.print_error(f"Could not write backup: {exc}")
             sys.exit(2)
 
     if not dry_run and not yes:
-        click.confirm(
-            f"Repair will drop {dropped} {ui._plural_noun(dropped, 'entry')}. Continue?",
-            default=False,
-            abort=True,
-        )
+        # Prompt copy. We only mention "strip bad tag(s)" when the
+        # plan will actually do that; pure entry drops keep the old
+        # wording. The recovery case is the most user-visible, so it
+        # always gets a dedicated prompt.
+        if recovered and not issues:
+            prompt = (
+                "File has trailing corruption. Repair will trim the "
+                "garbage and rewrite the journal. Continue?"
+            )
+        elif tags_stripped and not dropped:
+            prompt = (
+                f"Repair will strip {tags_stripped} bad tag"
+                f"{ui.plural_s(tags_stripped)} from "
+                f"{len(kept)} {ui._plural_noun(len(kept), 'entry')}. Continue?"
+            )
+        else:
+            prompt = (
+                f"Repair will drop {dropped} {ui._plural_noun(dropped, 'entry')}. Continue?"
+            )
+        click.confirm(prompt, default=False, abort=True)
 
     if not dry_run:
         try:
@@ -2025,6 +1859,13 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
             return
 
     if not quiet:
+        if recovered and not issues:
+            console.print(
+                ui.success_line(
+                    "Trimmed trailing corruption; the recoverable "
+                    "entries have been rewritten."
+                )
+            )
         console.print(
             ui.repair_summary(
                 issues=issues,
@@ -2032,6 +1873,7 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
                 kept=len(kept),
                 dry_run=dry_run,
                 backup_path=backup_path,
+                tags_stripped=tags_stripped,
             )
         )
 
@@ -2052,11 +1894,7 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
 def backup(output_path: str | None, quiet: bool) -> None:
     """Write a timestamped copy of the journal to the backups directory."""
     storage.ensure_storage_dir()
-    try:
-        entries = storage.load_entries()
-    except StorageError as exc:
-        _handle_storage_error(exc)
-        return
+    entries = _load_entries_or_exit()
 
     if output_path:
         destination = Path(output_path)
@@ -2206,24 +2044,28 @@ def _doctor_collect_issues(raw: object) -> tuple[list[dict], list[Entry], bool]:
     if isinstance(raw, dict) and isinstance(raw.get("entries"), list):
         for item in raw["entries"]:
             entry = _coerce_entry(item) if isinstance(item, dict) else None
-            if entry is not None and _is_valid_iso(entry.created_at):
+            if entry is not None and _iso.is_valid_iso_timestamp(entry.created_at):
                 valid_entries.append(entry)
 
     return issue_dicts, valid_entries, not bool(issues)
 
 
 def _doctor_days_since_last(entries: list[Entry]) -> int | None:
-    """Return the number of days since the most recent entry, or ``None``."""
+    """Return the number of days since the most recent entry, or ``None``.
+
+    A non-negative int means "the latest entry is N days in the past".
+    A negative int is a sentinel for "the latest entry is in the
+    future" — the value is the raw day delta, but the renderer turns
+    it into a friendlier "in N days" line. ``None`` means the entries
+    are empty or their timestamps are unparseable.
+    """
     if not entries:
         return None
     most_recent = max(entries, key=lambda e: e.created_at)
-    try:
-        from datetime import datetime, timezone
-
-        dt = datetime.fromisoformat(most_recent.created_at.replace("Z", "+00:00"))
-        return (datetime.now(tz=timezone.utc).date() - dt.date()).days
-    except (ValueError, TypeError):
+    dt = _iso.try_parse_utc_iso(most_recent.created_at)
+    if dt is None:
         return None
+    return (datetime.datetime.now(tz=datetime.timezone.utc).date() - dt.date()).days
 
 
 def _doctor_top_messages(entries: list[Entry]) -> list[tuple[str, int]]:
@@ -2271,7 +2113,7 @@ def doctor(quiet: bool) -> None:
     report["size_bytes"] = _doctor_probe_size(path)
 
     try:
-        raw = _read_raw_entries()
+        raw, _recovered = _read_raw_entries()
     except storage.CorruptedStorageError:
         report["ok"] = False
         report["issues"] = [
@@ -2362,21 +2204,3 @@ def export(
 ) -> None:
     """Export entries to a Markdown or JSON file."""
     _io.export(output, fmt, tags, since, until, quiet)
-
-
-def _resolve_export_format(output: str | None, fmt: str) -> str:
-    """Pick the final export format.
-
-    ``auto`` infers from the output extension. Unknown extensions fall
-    back to Markdown (preserves pre-1.5 behavior for `devlog export -o
-    foo.txt`). Explicit ``--format`` wins over the extension so users
-    can ``-o out.txt -f json``.
-    """
-    if fmt != "auto":
-        return "json" if fmt.lower() == "json" else "markdown"
-    if output is None:
-        return "markdown"
-    lower = output.lower()
-    if lower.endswith(".json"):
-        return "json"
-    return "markdown"

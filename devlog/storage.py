@@ -45,7 +45,8 @@ class CorruptedStorageError(StorageError):
     def __init__(self, path: Path):
         super().__init__(
             f"Error: Storage file is corrupted at {path}. "
-            "Run 'devlog repair' or delete the file to reset."
+            "Restore from a backup with `devlog restore <file>`, or "
+            "delete the file to start fresh."
         )
 
 
@@ -500,11 +501,9 @@ def local_date_for(iso: str, tz) -> "date":
     if not iso:
         return _date(1970, 1, 1)
     try:
-        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        dt = _iso.parse_utc_iso(iso)
     except (ValueError, TypeError, AttributeError):
         return _date(1970, 1, 1)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
     if tz is not None:
         dt = dt.astimezone(tz)
     return dt.date()

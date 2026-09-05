@@ -136,8 +136,13 @@ def test_restore_writes_entries(runner, data_dir, tmp_path):
     assert entries[0].message == "from backup"
 
 
-def test_restore_skips_invalid_rows(runner, data_dir, tmp_path):
-    """Bad rows in the backup are skipped with a warning, not a hard error."""
+def test_restore_salvages_invalid_rows(runner, data_dir, tmp_path):
+    """Hand-edited backups with bad rows are salvaged, not dropped.
+
+    A row with a bad tag is kept; the bad tag is stripped. This
+    matches ``devlog repair``'s policy and means a hand-edited
+    backup is more useful than a perfectly strict one.
+    """
     backup_file = tmp_path / "b.json"
     backup_file.write_text(
         json.dumps(
@@ -151,7 +156,7 @@ def test_restore_skips_invalid_rows(runner, data_dir, tmp_path):
                     },
                     {
                         "id": "bad",
-                        "message": "invalid",
+                        "message": "invalid tag",
                         "tags": ["Bad Tag"],
                         "created_at": "2025-01-02T00:00:00Z",
                     },
@@ -163,8 +168,40 @@ def test_restore_skips_invalid_rows(runner, data_dir, tmp_path):
     assert result.exit_code == 0
     assert "Skipped" in result.output
     entries = storage.load_entries()
-    assert len(entries) == 1
-    assert entries[0].id == "ok"
+    by_id = {e.id: e for e in entries}
+    assert set(by_id) == {"ok", "bad"}
+    # The bad tag was stripped; the entry survived.
+    assert by_id["bad"].tags == []
+
+
+def test_restore_drops_unrecoverable_rows(runner, data_dir, tmp_path):
+    """A bad ``created_at`` is genuinely unrecoverable so the row is dropped."""
+    backup_file = tmp_path / "b.json"
+    backup_file.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "id": "ok",
+                        "message": "valid",
+                        "tags": [],
+                        "created_at": "2025-01-01T00:00:00Z",
+                    },
+                    {
+                        "id": "bad",
+                        "message": "bad time",
+                        "tags": [],
+                        "created_at": "definitely not a date",
+                    },
+                ]
+            }
+        )
+    )
+    result = runner.invoke(main, ["restore", str(backup_file), "-y"])
+    assert result.exit_code == 0
+    assert "Skipped" in result.output
+    entries = storage.load_entries()
+    assert [e.id for e in entries] == ["ok"]
 
 
 def test_restore_prompts_when_existing(runner, data_dir, tmp_path, seed_entry):

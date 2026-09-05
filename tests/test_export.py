@@ -256,3 +256,43 @@ def test_export_success_line_does_not_duplicate_count(runner, tmp_path):
         # The bug was visible on the user-facing success line.
         assert "2 2" not in result.output
         assert "Exported 2 entries" in result.output
+
+
+def test_export_markdown_filename_uses_correct_date(runner, tmp_path, data_dir):
+    """The auto-generated filename must use %Y%m%d (digits), not the
+    literal ``dd`` that produced ``devlog-202609dd-...``."""
+    from datetime import datetime, timezone
+    _add(runner, "x")
+    result = runner.invoke(main, ["export", "--quiet"])
+    assert result.exit_code == 0
+    exports_dir = Path(str(data_dir)) / "exports"
+    files = list(exports_dir.glob("devlog-*.md"))
+    assert files, f"expected an md export file, got: {list(exports_dir.iterdir())}"
+    fname = files[0].name
+    today = datetime.now(tz=timezone.utc).strftime("%Y%m%d")
+    assert today in fname, f"filename {fname!r} missing today's digits ({today})"
+    assert "dd" not in fname, f"filename {fname!r} contains literal 'dd'"
+
+
+def test_export_markdown_includes_full_timestamp_for_round_trip(
+    runner, data_dir, tmp_path
+):
+    """The Markdown exporter must embed the full ISO timestamp in a
+    hidden comment so ``devlog export → import`` does not create
+    duplicate entries due to seconds-truncation."""
+    from devlog import storage
+    _add(runner, "alpha")
+    _add(runner, "beta")
+    out = tmp_path / "roundtrip.md"
+    result = runner.invoke(main, ["export", "--format", "markdown", "--output", str(out)])
+    assert result.exit_code == 0
+    text = out.read_text()
+    # Sanity: the hidden comment line is present at least once
+    assert "<!-- created_at:" in text
+    # Capture the on-disk timestamps before import
+    before = {e.id: e.created_at for e in storage.load_entries()}
+    result = runner.invoke(main, ["import", str(out)])
+    assert result.exit_code == 0
+    # Round-trip is a no-op (no duplicate entries)
+    after = storage.load_entries()
+    assert len(after) == len(before)

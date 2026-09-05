@@ -191,7 +191,13 @@ def test_repair_clean_store_is_a_noop(runner, tmp_path):
     assert len(data["entries"]) == 1
 
 
-def test_repair_drops_invalid_entries(runner, tmp_path):
+def test_repair_strips_invalid_tags_keeps_entry(runner, tmp_path):
+    """An entry with one bad tag should keep the entry and lose the tag.
+
+    Previously the whole entry was dropped — that was heavy-handed
+    for the common case of a hand-edited ``entries.json`` with a
+    single typo. Repair now scrubs bad tags and retains the row.
+    """
     _write_raw(
         tmp_path,
         {
@@ -205,7 +211,7 @@ def test_repair_drops_invalid_entries(runner, tmp_path):
                 {
                     "id": "bad-tag",
                     "message": "invalid tag",
-                    "tags": ["Bad Tag"],
+                    "tags": ["Bad Tag", "ok-tag"],
                     "created_at": "2025-01-02T00:00:00Z",
                 },
                 {
@@ -218,9 +224,42 @@ def test_repair_drops_invalid_entries(runner, tmp_path):
         },
     )
     result = runner.invoke(main, ["repair", "-y"])
-    assert result.exit_code == 1  # dropped some entries
+    # No entries were dropped, so exit is 0
+    assert result.exit_code == 0
     data = json.loads((tmp_path / "entries.json").read_text())
-    assert {e["id"] for e in data["entries"]} == {"good", "good-2"}
+    by_id = {e["id"]: e for e in data["entries"]}
+    assert set(by_id) == {"good", "bad-tag", "good-2"}
+    # The bad tag was stripped; the good tag on the same row survives
+    assert by_id["bad-tag"]["tags"] == ["ok-tag"]
+    # User can see what was changed
+    assert "stripped 1 bad tag" in result.output
+
+
+def test_repair_drops_entries_with_bad_timestamp(runner, tmp_path):
+    """A bad ``created_at`` is unrecoverable so the entry is dropped."""
+    _write_raw(
+        tmp_path,
+        {
+            "entries": [
+                {
+                    "id": "good",
+                    "message": "good",
+                    "tags": ["x"],
+                    "created_at": "2025-01-01T00:00:00Z",
+                },
+                {
+                    "id": "bad-time",
+                    "message": "bad time",
+                    "tags": ["x"],
+                    "created_at": "definitely not a date",
+                },
+            ]
+        },
+    )
+    result = runner.invoke(main, ["repair", "-y"])
+    assert result.exit_code == 1
+    data = json.loads((tmp_path / "entries.json").read_text())
+    assert {e["id"] for e in data["entries"]} == {"good"}
 
 
 def test_repair_dedupes_duplicate_ids(runner, tmp_path):
@@ -274,6 +313,8 @@ def test_repair_dry_run_does_not_write(runner, tmp_path):
 
 
 def test_repair_writes_backup_before_writing(runner, tmp_path):
+    """A backup is written whenever repair touches the file — even if
+    the only change is a tag strip (no entry drop)."""
     _write_raw(
         tmp_path,
         {
@@ -288,13 +329,36 @@ def test_repair_writes_backup_before_writing(runner, tmp_path):
         },
     )
     result = runner.invoke(main, ["repair", "-y"])
-    assert result.exit_code == 1
+    # No entries were dropped (the bad tag was stripped in place), so
+    # exit is 0. But the file was rewritten, so a backup was taken.
+    assert result.exit_code == 0
     backups = list((tmp_path / "backups").glob("*.json"))
     assert len(backups) == 1
     payload = json.loads(backups[0].read_text())
     assert payload["entries"][0]["id"] == "bad"
     # Repair report mentions the backup
     assert "Backup written to" in result.output
+
+
+def test_repair_drops_unrecoverable_writes_backup(runner, tmp_path):
+    """A drop counts as a write too, so a backup is still produced."""
+    _write_raw(
+        tmp_path,
+        {
+            "entries": [
+                {
+                    "id": "bad",
+                    "message": "x",
+                    "tags": [],
+                    "created_at": "not a date",
+                }
+            ]
+        },
+    )
+    result = runner.invoke(main, ["repair", "-y"])
+    assert result.exit_code == 1
+    backups = list((tmp_path / "backups").glob("*.json"))
+    assert len(backups) == 1
 
 
 def test_repair_no_backup_flag_skips_backup(runner, tmp_path):
@@ -312,7 +376,8 @@ def test_repair_no_backup_flag_skips_backup(runner, tmp_path):
         },
     )
     result = runner.invoke(main, ["repair", "-y", "--no-backup"])
-    assert result.exit_code == 1
+    # No drop happened (bad tag was stripped in place), so exit is 0.
+    assert result.exit_code == 0
     assert not (tmp_path / "backups").exists() or not list((tmp_path / "backups").glob("*.json"))
 
 
@@ -341,6 +406,42 @@ def test_repair_corrupt_json_errors(runner, tmp_path):
     assert result.output.count("Error:") <= 1
 
 
+def test_repair_recovers_truncated_trailing_garbage(runner, tmp_path):
+    """A trailing half-written entry should not doom the whole file.
+
+    Reproduces a power-loss-during-flush scenario: the JSON object
+    closes cleanly, but the file has extra non-JSON bytes after the
+    final ``}``. Recovery trims back to the last valid ``}`` and
+    repair proceeds normally.
+    """
+    payload = {
+        "entries": [
+            {
+                "id": "good",
+                "message": "survivor",
+                "tags": ["ok"],
+                "created_at": "2025-01-01T00:00:00Z",
+            }
+        ]
+    }
+    corrupt = json.dumps(payload) + '{ "id": "broken", "mess'  # truncated
+    (tmp_path / "entries.json").write_text(corrupt, encoding="utf-8")
+    result = runner.invoke(main, ["repair", "-y"])
+    # Repair succeeded: the recoverable entry was kept, the trailing
+    # garbage was dropped on the floor.
+    assert result.exit_code == 0
+    data = json.loads((tmp_path / "entries.json").read_text())
+    assert [e["id"] for e in data["entries"]] == ["good"]
+
+
+def test_repair_recovery_fails_when_no_valid_object(runner, tmp_path):
+    """If there is no recoverable object, fall back to the error path."""
+    (tmp_path / "entries.json").write_text("not even an object", encoding="utf-8")
+    result = runner.invoke(main, ["repair", "-y"])
+    assert result.exit_code == 2
+    assert "Cannot repair" in result.output
+
+
 # ---------------------------------------------------------------------------
 # Quiet mode
 # ---------------------------------------------------------------------------
@@ -367,7 +468,16 @@ def test_repair_quiet_with_issues(runner, tmp_path):
         },
     )
     result = runner.invoke(main, ["repair", "-y", "--quiet"])
-    # No issues panel, but the file is still rewritten
+    # No issues panel, but the file is still rewritten. With the new
+    # "strip bad tag" behaviour, the entry survives with empty tags.
     assert "Found" not in result.output
     data = json.loads((tmp_path / "entries.json").read_text())
-    assert data["entries"] == []
+    assert data["entries"] == [
+        {
+            "id": "bad",
+            "message": "x",
+            "tags": [],
+            "created_at": "2025-01-01T00:00:00Z",
+            "updated_at": None,
+        }
+    ]

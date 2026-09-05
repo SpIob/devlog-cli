@@ -82,6 +82,37 @@ def test_delete_not_found(runner):
     assert "No entry found" in result.output
 
 
+def test_delete_ignore_missing_returns_zero(runner):
+    """`--ignore-missing` makes a missing-ID delete exit 0, not 1.
+
+    Useful for scripts that want to call ``devlog delete <id>``
+    idempotently without checking the exit code.
+    """
+    result = runner.invoke(main, ["delete", "deadbeef", "--yes", "--ignore-missing"])
+    assert result.exit_code == 0
+    assert "not present" in result.output or "nothing to delete" in result.output
+
+
+def test_delete_ignore_missing_still_errors_on_ambiguous(runner, data_dir):
+    """Ambiguous prefixes are never ignored; only not-found is."""
+    # Seed two entries with the same short prefix
+    from devlog import storage
+    from devlog.models import Entry
+    storage.add_entry(Entry(
+        id="a1111111-1111-1111-1111-111111111111",
+        message="first",
+        created_at="2025-01-01T00:00:00Z",
+    ))
+    storage.add_entry(Entry(
+        id="a1111111-2222-2222-2222-222222222222",
+        message="second",
+        created_at="2025-01-02T00:00:00Z",
+    ))
+    result = runner.invoke(main, ["delete", "a", "--yes", "--ignore-missing"])
+    assert result.exit_code == 1
+    assert "multiple" in result.output.lower()
+
+
 def test_delete_empty_id(runner):
     result = runner.invoke(main, ["delete", "", "--yes"])
     assert result.exit_code == 1
