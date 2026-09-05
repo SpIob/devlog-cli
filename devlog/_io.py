@@ -84,6 +84,13 @@ def _read_import_payload(path: str, fmt: str) -> tuple[list[Entry], int]:
         except json.JSONDecodeError as exc:
             ui.print_error(f"Invalid JSON in {path}: {exc}")
             sys.exit(2)
+        if not isinstance(payload, dict):
+            ui.print_error(
+                f"Invalid JSON in {path}: expected an object with an "
+                "'entries' key, got "
+                f"{type(payload).__name__}."
+            )
+            sys.exit(2)
         raw_entries = payload.get("entries", [])
         candidates: list[Entry] = []
         unreadable = 0

@@ -106,6 +106,29 @@ def test_entry_panel_without_tags_shows_placeholder():
     assert "(none)" in out
 
 
+def test_edit_panel_includes_footer_hint():
+    """`edit_panel` should show a follow-up hint so the user knows how
+    to confirm the change."""
+    entry = _make_entry(message="updated")
+    buf = io.StringIO()
+    Console(file=buf, no_color=True, width=120).print(ui.edit_panel(entry))
+    out = _strip_ansi(buf.getvalue())
+    assert "devlog show" in out
+    assert "Entry updated" in out
+
+
+def test_delete_panel_includes_footer_hint():
+    """`delete_panel` should show a follow-up hint so the user knows
+    what to do next (verify, or write a replacement)."""
+    entry = _make_entry(message="gone")
+    buf = io.StringIO()
+    Console(file=buf, no_color=True, width=120).print(ui.delete_panel(entry))
+    out = _strip_ansi(buf.getvalue())
+    assert "devlog list" in out
+    assert "devlog add" in out
+    assert "Entry deleted" in out
+
+
 # ---------------------------------------------------------------------------
 # smart_truncate
 # ---------------------------------------------------------------------------
@@ -459,6 +482,22 @@ def test_root_banner_lists_all_commands():
         assert cmd in out, f"root banner is missing command: {cmd}"
 
 
+def test_root_banner_includes_version():
+    """The root banner must include the version so new users can see it
+    without running ``--version``."""
+    buf = io.StringIO()
+    saved = ui.console
+    ui.console = Console(file=buf, no_color=True, width=120)
+    try:
+        ui.root_banner()
+    finally:
+        ui.console = saved
+    out = _strip_ansi(buf.getvalue())
+    # The first line carries the version ("devlog  ·  v1.5.0  ·  ...").
+    first_line = next(l for l in out.splitlines() if l.strip())
+    assert f"v{ui.VERSION}" in first_line
+
+
 # ---------------------------------------------------------------------------
 # theme integration
 # ---------------------------------------------------------------------------
@@ -564,6 +603,15 @@ def test_success_line_appends_styled_segments():
     out = line.plain
     assert "Backed up 3 entries to" in out
     assert "/tmp/backup.json" in out
+
+
+def test_backup_result_quotes_path():
+    """`backup_result` must wrap the path in quotes so paths containing
+    spaces stay unambiguous in the one-line confirmation."""
+    line = ui.backup_result("/Users/me/My Backups/entries-2025.json", 7)
+    out = line.plain
+    assert '"/Users/me/My Backups/entries-2025.json"' in out
+    assert "7 entries" in out
 
 
 def test_success_line_uses_bold_icon_and_border_text():

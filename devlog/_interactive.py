@@ -75,7 +75,18 @@ def _interactive_repl(main_cli) -> None:
             if not argv:
                 continue
             result = runner.invoke(main_cli, argv, catch_exceptions=False)
-            if result.output:
+            if result.exit_code != 0 and result.output:
+                # A failed sub-command. Prefix its output with the
+                # error panel so the user can tell at a glance that
+                # what follows is *not* a success state. Without
+                # this, a typo like ``lis`` would dump the Click
+                # usage block and the user would have to read it
+                # carefully to know it was a failure.
+                ui.print_error(
+                    f"Command {argv[0]!r} failed (exit {result.exit_code})."
+                )
+                console.print(result.output, highlight=False)
+            elif result.output:
                 console.print(result.output, highlight=False)
         except SystemExit:
             # Click's sys.exit() bubbles up here; swallow so the REPL keeps going.

@@ -108,17 +108,24 @@ def _parse_date_bound(
 
     # Natural phrases
     lower = raw.lower()
-    if lower in ("today", "now"):
+    if lower == "now":
+        # "now" is a point in time, not a date — return the current
+        # instant regardless of `is_upper`. Resetting to midnight here
+        # would make `--until now` (or `--since now`) exclude every
+        # entry created after 00:00 of the current day, which is
+        # almost never what the user means.
+        return datetime.datetime.now(tz=tz or datetime.timezone.utc)
+    if lower == "today":
         now = datetime.datetime.now(tz=tz or datetime.timezone.utc)
-        if is_upper and lower == "today":
+        if is_upper:
             return now.replace(hour=23, minute=59, second=59, microsecond=0)
         return now.replace(hour=0, minute=0, second=0, microsecond=0)
     if lower == "yesterday":
         ref = datetime.datetime.now(tz=tz or datetime.timezone.utc).date() - datetime.timedelta(days=1)
         dt = datetime.datetime(ref.year, ref.month, ref.day, tzinfo=tz or datetime.timezone.utc)
         if is_upper:
-            return dt.replace(hour=23, minute=59, second=59)
-        return dt
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(datetime.timezone.utc)
+        return dt.astimezone(datetime.timezone.utc)
 
     # Relative: 7d, 2w
     m = _RELATIVE_DAY_RE.match(lower)
@@ -127,8 +134,8 @@ def _parse_date_bound(
         ref = datetime.datetime.now(tz=tz or datetime.timezone.utc).date() - datetime.timedelta(days=days)
         dt = datetime.datetime(ref.year, ref.month, ref.day, tzinfo=tz or datetime.timezone.utc)
         if is_upper:
-            return dt.replace(hour=23, minute=59, second=59)
-        return dt
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(datetime.timezone.utc)
+        return dt.astimezone(datetime.timezone.utc)
     m = _RELATIVE_WEEK_RE.match(lower)
     if m:
         weeks = int(m.group(1))
@@ -138,15 +145,15 @@ def _parse_date_bound(
         )
         dt = datetime.datetime(ref.year, ref.month, ref.day, tzinfo=tz or datetime.timezone.utc)
         if is_upper:
-            return dt.replace(hour=23, minute=59, second=59)
-        return dt
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(datetime.timezone.utc)
+        return dt.astimezone(datetime.timezone.utc)
 
     # Date only: YYYY-MM-DD
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
         dt = datetime.datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=tz or datetime.timezone.utc)
         if is_upper:
-            return dt.replace(hour=23, minute=59, second=59)
-        return dt
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(datetime.timezone.utc)
+        return dt.astimezone(datetime.timezone.utc)
 
     # Full ISO with optional Z / +00:00 / +HH:MM
     parseable = raw.replace(" ", "T")
@@ -162,11 +169,11 @@ def _parse_date_bound(
         )
     if dt.tzinfo is None:
         # Naive timestamp — honour the local zone if one is active,
-        # otherwise treat as UTC (the historical default).
+        # otherwise treat as UTC (the historical default). Convert
+        # to UTC so the contract — "returns a UTC datetime" — holds
+        # regardless of the active zone.
         dt = dt.replace(tzinfo=tz or datetime.timezone.utc)
-    else:
-        dt = dt.astimezone(datetime.timezone.utc)
-    return dt
+    return dt.astimezone(datetime.timezone.utc)
 
 
 def _parse_timestamp(value: str, *, tz=None) -> datetime.datetime:
@@ -210,11 +217,15 @@ def _parse_timestamp(value: str, *, tz=None) -> datetime.datetime:
     m = _RELATIVE_HOUR_RE.match(lower)
     if m:
         hours = int(m.group(1))
-        return datetime.datetime.now(tz=zone) - datetime.timedelta(hours=hours)
+        return (datetime.datetime.now(tz=zone) - datetime.timedelta(hours=hours)).astimezone(
+            datetime.timezone.utc
+        )
     m = _RELATIVE_MINUTE_RE.match(lower)
     if m:
         minutes = int(m.group(1))
-        return datetime.datetime.now(tz=zone) - datetime.timedelta(minutes=minutes)
+        return (datetime.datetime.now(tz=zone) - datetime.timedelta(minutes=minutes)).astimezone(
+            datetime.timezone.utc
+        )
     m = _RELATIVE_DAY_RE.match(lower)
     if m:
         days = int(m.group(1))

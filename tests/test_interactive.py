@@ -92,3 +92,28 @@ def test_interactive_add_dispatches_to_cli(data_dir, monkeypatch):
     assert len(entries) == 1
     assert entries[0].message == "hello from repl"
     assert entries[0].tags == ["repltest"]
+
+
+def test_interactive_failed_command_prints_error_panel(monkeypatch, tmp_path):
+    """A failing sub-command must surface an error panel so the user
+    can distinguish it from successful output at a glance.
+
+    Regression: previously, a typo like ``lis`` would dump the Click
+    usage block with no visual cue that it was a failure, making the
+    REPL confusing.
+    """
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("DEVLOG_INTERACTIVE_FORCE", "1")
+
+    from rich import prompt as _rp
+    # ``lis`` is not a real command. Click will exit 2 with usage text.
+    responses = iter(["lis", "q"])
+    monkeypatch.setattr(_rp.Prompt, "ask", lambda *a, **kw: next(responses))
+
+    result = CliRunner().invoke(main, ["--interactive"])
+    assert result.exit_code == 0  # the REPL itself does not exit
+    # The error panel must be present, prefixed to the failed output.
+    assert "✘" in result.output
+    assert "failed" in result.output
+    # The original Click usage text must still appear below the panel.
+    assert "Usage" in result.output or "No such command" in result.output

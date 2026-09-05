@@ -362,15 +362,22 @@ def test_stats_panel_anchors_scale_labels_to_sparkline_width():
 # ---------------------------------------------------------------------------
 
 
-def test_repair_panel_uses_wrench_icon():
-    """The repair panel title must use the wrench (🔧), not a pencil."""
+def test_repair_panel_uses_repair_icon():
+    """The repair panel title must use a repair icon, not a pencil.
+
+    The icon used to be the wrench emoji (``🔧``), which renders as a
+    monochrome glyph on terminals without an emoji font and breaks the
+    visual family shared with ``✔ ✘ ⚠ ℹ ✎``. The current icon is the
+    hammer-and-pick (``⚒``); we only assert the panel is recognisably
+    a repair panel and is not the edit pencil.
+    """
     panel = ui.repair_summary(
         issues=[], dropped=0, kept=5, dry_run=True, backup_path=None
     )
     buf = io.StringIO()
     Console(file=buf, no_color=True, width=120).print(panel)
     out = _strip_ansi(buf.getvalue())
-    assert "🔧" in out
+    assert "⚒" in out
     assert "✎" not in out
     assert "Repair" in out
 
@@ -414,3 +421,71 @@ def test_root_banner_has_no_rule():
         assert not (len(line) >= 40 and set(line) == {"─"}), (
             f"root banner still emits a decorative rule: {line!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Narrow-terminal handling
+# ---------------------------------------------------------------------------
+
+
+def test_is_narrow_terminal_true_below_minimum():
+    """A 60-col terminal is narrower than the 80-col minimum."""
+    ui.console = Console(no_color=True, width=60, force_terminal=True)
+    assert ui._is_narrow_terminal() is True
+
+
+def test_is_narrow_terminal_false_at_minimum():
+    """80 cols is the threshold; we drop Tags only when strictly narrower."""
+    ui.console = Console(no_color=True, width=ui.MIN_TERMINAL_WIDTH, force_terminal=True)
+    assert ui._is_narrow_terminal() is False
+
+
+def test_narrow_terminal_drops_tags_column(monkeypatch, fixed_terminal_width):
+    """On a 60-col terminal, the entries table must not contain a Tags column.
+
+    Regression: a previous version kept the 4-column layout at narrow
+    widths, which silently truncated the 8-char short id and the
+    20-char date. The narrow path now drops the Tags column so the
+    ID + Date + Message stay readable. At 60 cols (below
+    ``_NARROW_TABLE_MIN_WIDTH``) the id and date are shortened to
+    fit; the 6-char id prefix and 16-char date prefix must both be
+    visible.
+    """
+    ui.console = Console(no_color=True, width=60, force_terminal=True)
+    e = _make_entry(entry_id="7cfe48d5-d244-4db5-8274-f5b6e26dfb5b", tags=["a", "b"])
+    rendered = _render([e], total=1)
+    # The 6-char short id prefix and the 16-char date prefix must be
+    # visible in the 3-column layout.
+    assert "7cfe48" in rendered
+    assert "2025-05-11 10:22" in rendered
+    # The Tags header should not be present in the data row.
+    header_line = rendered.splitlines()[2]  # first data row
+    assert "Tags" not in header_line
+
+
+def test_narrow_terminal_at_min_width_keeps_full_id_and_date(
+    monkeypatch, fixed_terminal_width
+):
+    """At 70 cols (>=_NARROW_TABLE_MIN_WIDTH=65) the full 8-char id and
+    20-char date must survive in the 3-column layout."""
+    ui.console = Console(no_color=True, width=70, force_terminal=True)
+    e = _make_entry(entry_id="7cfe48d5-d244-4db5-8274-f5b6e26dfb5b")
+    rendered = _render([e], total=1)
+    assert "7cfe48d5" in rendered
+    assert "2025-05-11 10:22 UTC" in rendered
+
+
+def test_narrow_terminal_warning_fires(monkeypatch, fixed_terminal_width):
+    """The narrow-terminal warning must be written to STDERR exactly once."""
+    ui.console = Console(no_color=True, width=60, force_terminal=True)
+    saved_err = ui.err_console
+    err_buf = io.StringIO()
+    ui.err_console = Console(file=err_buf, no_color=True, width=60, force_terminal=True)
+    try:
+        e = _make_entry()
+        ui.entries_table([e], total=1)
+        err_out = _strip_ansi(err_buf.getvalue())
+        assert "narrower than" in err_out
+        assert "Tags" in err_out
+    finally:
+        ui.err_console = saved_err

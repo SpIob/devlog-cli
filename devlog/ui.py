@@ -5,10 +5,12 @@ and styling is consistent across commands.
 
 Conventions
 -----------
-- Errors are written to ``err_console`` (STDERR) in red with a ✘ icon.
-- Warnings are written to ``err_console`` in yellow with a ⚠ icon.
+- Errors are written to ``err_console`` (STDERR) in a red bordered panel
+  with a ✘ icon.
+- Warnings are written to ``err_console`` (STDERR) in a yellow bordered
+  line with a ⚠ icon.
 - Informational/empty-state lines are written to ``console`` (STDOUT)
-  dimmed with a ℹ icon.
+  unbordered, dimmed, with a ℹ icon.
 - Color is automatically disabled when the ``NO_COLOR`` environment
   variable is set (https://no-color.org) or when the target stream is
   not a TTY.
@@ -83,6 +85,13 @@ COL_MESSAGE_MIN = 27  # 27 chars is the smallest a journal message can be
 # columns — the user is told to widen their terminal instead.
 MIN_TERMINAL_WIDTH = 80
 MAX_TERMINAL_WIDTH = 160
+
+# Below :data:`MIN_TERMINAL_WIDTH` the 4-column table is reduced to
+# 3 columns (dropping Tags) by :func:`entries_table`. This constant is
+# the *minimum* width at which the 3-column table still fits the full
+# 8-char short id + 20-char date + 27-char message; below it, the date
+# is shortened. 8 + 20 + 27 + 6 padding + 4 box = 65.
+_NARROW_TABLE_MIN_WIDTH = 65
 
 TAG_NONE = "(none)"
 
@@ -230,11 +239,24 @@ def print_error(message: str) -> None:
 
 
 def print_warning(message: str) -> None:
-    """Print a yellow warning to STDERR (single line, no panel)."""
+    """Print a yellow warning to STDERR in a slim bordered box.
+
+    The box mirrors the visual grammar of :func:`print_error` (a
+    border-styled container) and :func:`print_info` (a leading icon
+    + body) so the three states read as a single family. Errors are
+    loud red panels, warnings are a quieter bordered line, info is
+    an unbordered dim line — three weights, one visual language.
+    """
     line = Text()
     line.append("⚠ ", style=_bold("warning_text"))
     line.append(message, style=_s("warning_text"))
-    err_console.print(line)
+    err_console.print(
+        Panel(
+            line,
+            border_style=_s("warning_text"),
+            padding=(0, 1),
+        )
+    )
 
 
 def print_info(message: str) -> None:
@@ -573,8 +595,15 @@ def highlight_message(message: str, query: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _short_id(entry: Entry) -> str:
-    return entry.id[:ID_DISPLAY_LEN]
+def _short_id(entry: Entry, length: int | None = None) -> str:
+    """Return the entry's short id, optionally truncated to *length* chars.
+
+    The default uses :data:`ID_DISPLAY_LEN` (8) for the full short id.
+    Pass a smaller *length* on very-narrow terminals where the id
+    column is too narrow to fit the full 8 chars.
+    """
+    n = ID_DISPLAY_LEN if length is None else length
+    return entry.id[:n]
 
 
 def _tags_text(entry: Entry) -> Text:
@@ -623,6 +652,7 @@ def _themed_panel(
     border_role: str,
     title=None,
     padding: tuple[int, int] | None = (0, 1),
+    footer_hint: str | None = None,
 ) -> Panel:
     """Build a themed :class:`rich.panel.Panel` with shared defaults.
 
@@ -637,6 +667,11 @@ def _themed_panel(
         padding: Rich padding tuple, or ``None`` to omit the padding
             (used by calendar/stats which already wrap the body in
             :class:`rich.padding.Padding`).
+        footer_hint: optional dim italic hint line appended to the
+            body (e.g. ``"Use `devlog list` to verify"``). The hint is
+            appended to *body* if it's a :class:`rich.console.Group`;
+            for other body types the caller must already include the
+            hint. Pass ``""`` to explicitly opt out.
     """
     kwargs = {
         "border_style": _s(border_role),
@@ -645,6 +680,9 @@ def _themed_panel(
     }
     if padding is not None:
         kwargs["padding"] = padding
+    if footer_hint:
+        if isinstance(body, Group):
+            body = Group(*body.renderables, Text(footer_hint, style="dim italic"))
     return Panel(body, **kwargs)
 
 
@@ -689,6 +727,40 @@ def _date_text(entry: Entry) -> Text:
     return Text(_format_dt(entry.created_at), style=_s("date"))
 
 
+def _raw_terminal_width() -> int:
+    """Return the *actual* terminal width with no floor or cap.
+
+    Split out from :func:`_terminal_width` so the narrow-terminal
+    detection in :func:`_is_narrow_terminal` can see the true width
+    before the layout helper floors it at :data:`MIN_TERMINAL_WIDTH`.
+    Returns 0 when the width is unknown (e.g. captured stdout with no
+    declared width) so callers can treat that as "not narrow".
+    """
+    try:
+        w = console.width
+        if w and w > 0:
+            return w
+    except (AttributeError, RuntimeError):
+        pass
+    try:
+        return shutil.get_terminal_size((100, 20)).columns
+    except (OSError, ValueError):
+        return 0
+
+
+def _is_narrow_terminal() -> bool:
+    """True when the active terminal is too small for the full table.
+
+    The full 4-column table (ID + Date + Tags + Message) needs at least
+    :data:`MIN_TERMINAL_WIDTH` (80) cols to render without truncating
+    the 8-char short id. When the terminal is narrower than that, the
+    entries table drops the Tags column and prints a one-line warning
+    so the user understands why.
+    """
+    w = _raw_terminal_width()
+    return 0 < w < MIN_TERMINAL_WIDTH
+
+
 def _terminal_width() -> int:
     """Best-effort terminal width with a sane floor and cap.
 
@@ -699,16 +771,7 @@ def _terminal_width() -> int:
     into a window too small to show the full 8-char short ID +
     19-char date + a usable message column.
     """
-    try:
-        w = console.width
-        if w and w > 0:
-            return max(MIN_TERMINAL_WIDTH, min(w, MAX_TERMINAL_WIDTH))
-    except (AttributeError, RuntimeError):
-        pass
-    try:
-        w = shutil.get_terminal_size((100, 20)).columns
-    except (OSError, ValueError):
-        w = 100
+    w = _raw_terminal_width() or 100
     return max(MIN_TERMINAL_WIDTH, min(w, MAX_TERMINAL_WIDTH))
 
 
@@ -774,12 +837,62 @@ def entries_table(
 
     Returns:
         A fully configured ``rich.table.Table`` instance.
+
+    Note:
+        When the terminal is narrower than :data:`MIN_TERMINAL_WIDTH`
+        (80 cols) the Tags column is dropped so the 8-char short id
+        and the 20-char date never get clipped, and a one-line warning
+        is written to STDERR so the user knows why Tags are missing.
+        On terminals narrower than :data:`_NARROW_TABLE_MIN_WIDTH`
+        (65 cols) the date is shortened to ``YYYY-MM-DD HH:MM`` and
+        the id to 6 chars so the table still fits.
     """
     widths = _column_widths()
+    narrow = _is_narrow_terminal()
+    very_narrow = False
+
+    if narrow:
+        # Build a one-line warning on STDERR. We print here (instead of
+        # returning a flag) because the table is the *primary* surface
+        # — the user shouldn't have to scroll past our warning to read
+        # the rows. The warning goes to STDERR so it doesn't pollute
+        # any piped output.
+        err_console.print(
+            f"[{_s('warning_text')}]⚠ Terminal is narrower than "
+            f"{MIN_TERMINAL_WIDTH} cols; hiding the Tags column. "
+            f"Widen the window to see tags.[/{_s('warning_text')}]"
+        )
+        # Drop the tags column and give the freed width to Message so
+        # the table still uses the available space. Recompute as a
+        # 3-column layout; box overhead drops from 5 to 4 separators.
+        raw_w = _raw_terminal_width()
+        if raw_w < _NARROW_TABLE_MIN_WIDTH:
+            # Below the 3-column budget the table can't render the full
+            # short id + full date + 27-char message. Use a shorter
+            # date (no seconds, no zone) and a 6-char id so the table
+            # still fits without Rich hiding any cells. The
+            # ``very_narrow`` flag flips the date/id rendering.
+            very_narrow = True
+            id_w = 6
+            date_w = 16  # "YYYY-MM-DD HH:MM"
+        else:
+            id_w = COL_ID_WIDTH
+            date_w = COL_DATE_WIDTH
+        col_budget = raw_w - 4
+        msg_w = max(
+            COL_MESSAGE_MIN,
+            col_budget - id_w - date_w - (3 * _COL_PADDING),
+        )
+        widths = {
+            "id": id_w,
+            "date": date_w,
+            "message": msg_w,
+        }
 
     table = Table(
         box=ROUNDED,
         show_footer=True,
+        show_lines=narrow,  # only on narrow to keep wide tables compact
         title=title or None,
         title_justify="left",
         title_style="bold",
@@ -805,17 +918,18 @@ def entries_table(
         no_wrap=True,
         width=widths["date"] + _COL_PADDING,
     )
-    # Tags are truncated with an ellipsis when too long to fit, so a
-    # single long tag list never pushes the row taller than its
-    # neighbours. Users who want to see the full tag list can pass
-    # --all to widen the table on a wide terminal.
-    table.add_column(
-        "Tags",
-        style=_s("tags"),
-        no_wrap=True,
-        overflow="ellipsis",
-        width=widths["tags"] + _COL_PADDING,
-    )
+    if not narrow:
+        # Tags are truncated with an ellipsis when too long to fit, so a
+        # single long tag list never pushes the row taller than its
+        # neighbours. Users who want to see the full tag list can pass
+        # --all to widen the table on a wide terminal.
+        table.add_column(
+            "Tags",
+            style=_s("tags"),
+            no_wrap=True,
+            overflow="ellipsis",
+            width=widths["tags"] + _COL_PADDING,
+        )
     table.add_column(
         "Message",
         width=widths["message"] + _COL_PADDING,
@@ -842,12 +956,25 @@ def entries_table(
             )
         else:
             msg_cell = escape(_left_truncate(entry.message, msg_limit))
-        table.add_row(
-            _short_id(entry),
-            _format_dt(entry.created_at),
-            _tags_text(entry),
-            msg_cell,
-        )
+        id_cell = _short_id(entry, length=6 if very_narrow else None)
+        if very_narrow:
+            # Strip the trailing "UTC" so the 16-char date format fits.
+            date_cell = _format_dt(entry.created_at)[:16]
+        else:
+            date_cell = _format_dt(entry.created_at)
+        if narrow:
+            table.add_row(
+                id_cell,
+                date_cell,
+                msg_cell,
+            )
+        else:
+            table.add_row(
+                _short_id(entry),
+                _format_dt(entry.created_at),
+                _tags_text(entry),
+                msg_cell,
+            )
 
     return table
 
@@ -913,6 +1040,7 @@ def delete_panel(entry: Entry) -> Panel:
         body,
         border_role="delete_border",
         title=title,
+        footer_hint=f"Run `devlog list` to verify, or `devlog add` to write a new one.",
     )
 
 
@@ -936,6 +1064,7 @@ def edit_panel(entry: Entry) -> Panel:
         body,
         border_role="edit_border",
         title=title,
+        footer_hint=f"Run `devlog show {short_id}` to confirm the change.",
     )
 
 
@@ -1178,15 +1307,18 @@ def calendar_panel(per_day: dict, *, year: int, tz=None) -> Panel:
 
     body_rows: list = [grid]
     body_rows.append(Text())
-    # Build the "less  · ▪ ▫ █  more" legend from the same data
+    # Build the "less · ▪ ▫ █ more" legend from the same data
     # table the heatmap uses, so changing a threshold or character
-    # only requires editing one place.
+    # only requires editing one place. The tier chars keep their own
+    # theme colour so the gradient reads left-to-right.
     legend = Text()
     legend.append("less ", style="dim")
-    for _i, (_, char, role) in enumerate(_HEATMAP_TIERS):
-        if _i:
+    first = True
+    for _char, role in [(t[1], t[2]) for t in _HEATMAP_TIERS]:
+        if not first:
             legend.append(" ", style="dim")
-        legend.append(char, style=_s(role))
+        legend.append(_char, style=_s(role))
+        first = False
     legend.append(" more", style="dim")
     body_rows.append(legend)
     body_rows.append(
@@ -1339,10 +1471,14 @@ def version_banner() -> None:
 
     The previous design wrapped the version in a horizontal ``Rule``,
     but the rule carried no information and overflowed on narrow
-    terminals. A single, prominent version line is enough.
+    terminals. A single, prominent version line is enough. The
+    "devlog" brand mark is styled with the same ``banner_version``
+    theme role as the version number so users can recolor the
+    whole brand in one place via their theme file.
     """
     console.print(
-        Text("devlog, version ", style="bold")
+        Text("devlog", style=_s("banner_version"))
+        + Text(", version ", style="bold")
         + Text(VERSION, style=_s("banner_version"))
     )
 
@@ -1383,6 +1519,7 @@ def root_banner(commands: Sequence[tuple[str, str]] | None = None) -> None:
 
     console.print(
         Text("devlog", style="bold")
+        + Text(f"  ·  v{VERSION}", style=_s("banner_version"))
         + Text("  ·  a terminal-based developer journal", style="dim")
     )
 
@@ -1465,7 +1602,7 @@ def repair_summary(
     if backup_path:
         rows.append(Text(f"Backup written to {backup_path}", style="dim"))
 
-    title = _panel_title(icon="🔧", label="Repair · devlog store", role="info_text")
+    title = _panel_title(icon="⚒", label="Repair · devlog store", role="info_text")
 
     return _themed_panel(
         Group(*rows),
@@ -1480,10 +1617,18 @@ def repair_summary(
 
 
 def backup_result(path: str, count: int) -> Text:
-    """Build a one-line confirmation for a successful backup."""
-    return success_line(
+    """Build a one-line confirmation for a successful backup.
+
+    The path is wrapped in quotes and dimmed so it remains unambiguous
+    when it contains spaces (a path like ``/Users/me/My Backups/x``
+    would otherwise read as a sequence of separate words in the
+    success line).
+    """
+    line = success_line(
         f"Backed up {count} {_plural_noun(count, 'entry')} to "
-    ).append(path, style="bold")
+    )
+    line.append(f'"{path}"', style="dim")
+    return line
 
 
 # ---------------------------------------------------------------------------
@@ -1592,7 +1737,7 @@ def doctor_report(report: dict) -> Panel:
             )
 
     title = _panel_title(
-        icon="🩺",
+        icon="♥",
         label=("Doctor · all clear" if report.get("ok") else "Doctor · attention"),
         role="success_border" if report.get("ok") else "warning_text",
     )
@@ -1616,8 +1761,11 @@ def theme_table(
     palette: Mapping[str, str] | None = None,
     *,
     title: str = "Active theme",
+    show_source: bool = True,
+    show_preview: bool = True,
+    grouped: bool = True,
 ) -> Table:
-    """Render a two-column table of role → style mappings.
+    """Render a multi-column table of role → style mappings.
 
     Used by the ``devlog theme list`` subcommand. When *palette* is
     omitted, the active theme is rendered. Roles are shown in
@@ -1627,7 +1775,16 @@ def theme_table(
     Args:
         palette: a ``{role: style}`` mapping. Defaults to the active
             theme from :mod:`devlog.themes`.
-        title:   the table title (default: ``"Active theme"``).
+        title: the table title (default: ``"Active theme"``).
+        show_source: when True, render a footer row with the resolved
+            theme path and current on-disk status. Off by default for
+            programmatic callers that build their own footer.
+        show_preview: when True, render a third "Preview" column with
+            a 2-char colour swatch per role. Disable for diff-friendly
+            plain text output.
+        grouped: when True, insert a section subheader between each
+            group defined in :data:`devlog.themes.SECTIONS`. Disable
+            for a flat role list.
 
     Returns:
         A configured ``rich.table.Table`` instance.
@@ -1646,8 +1803,57 @@ def theme_table(
     )
     table.add_column("Role", style=_s("id_dim"), no_wrap=True)
     table.add_column("Style", style="default")
+    if show_preview:
+        table.add_column("Preview", no_wrap=True)
 
-    for role in sorted(themes.ROLES):
-        table.add_row(role, palette[role])
+    if grouped:
+        for section_name, roles in themes.SECTIONS.items():
+            present = [r for r in roles if r in palette]
+            if not present:
+                continue
+            table.add_row(
+                Text(section_name, style="bold"),
+                Text(""),
+                *([Text("")] if show_preview else ()),
+                end_section=True,
+            )
+            for role in present:
+                if show_preview:
+                    table.add_row(
+                        role,
+                        palette[role],
+                        Text("██", style=palette[role]),
+                    )
+                else:
+                    table.add_row(role, palette[role])
+    else:
+        for role in sorted(themes.ROLES):
+            if show_preview:
+                table.add_row(
+                    role,
+                    palette[role],
+                    Text("██", style=palette[role]),
+                )
+            else:
+                table.add_row(role, palette[role])
+
+    if show_source:
+        status = themes.get_theme_status()
+        path = themes.get_theme_path()
+        footer = f"path: {path}   status: {status}"
+        style = "yellow" if status.startswith("error") else "dim"
+        if show_preview:
+            table.add_row(
+                Text(footer, style=style),
+                Text(""),
+                Text(""),
+                end_section=True,
+            )
+        else:
+            table.add_row(
+                Text(footer, style=style),
+                Text(""),
+                end_section=True,
+            )
 
     return table

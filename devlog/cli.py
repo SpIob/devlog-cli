@@ -10,7 +10,6 @@ import datetime
 import dataclasses
 import json
 import os
-import shutil
 import sys
 import uuid
 from pathlib import Path
@@ -680,7 +679,7 @@ def _edit_in_editor(initial: str) -> str | None:
         if rc != 0:
             return None
         with open(tmp_path, "r", encoding="utf-8") as fh:
-            return fh.read().rstrip("\n")
+            return fh.read().rstrip("\r\n")
     except FileNotFoundError:
         return None
     except (OSError, IOError):
@@ -987,9 +986,13 @@ def theme() -> None:
 
 
 @theme.command("list")
-def theme_list() -> None:
+@click.option("--flat", is_flag=True, default=False, help="Disable section grouping.")
+@click.option("--no-preview", is_flag=True, default=False, help="Hide the preview swatch column.")
+def theme_list(flat: bool, no_preview: bool) -> None:
     """Print every theme role and its current style."""
-    console.print(ui.theme_table())
+    console.print(
+        ui.theme_table(grouped=not flat, show_preview=not no_preview)
+    )
 
 
 @theme.command("show")
@@ -1013,45 +1016,262 @@ def theme_show(role: str | None) -> None:
     themes.write_default_theme(sys.stdout)
 
 
+def _read_theme_source(path: Path) -> dict[str, str]:
+    """Read a theme file and convert parse errors into a clean error path.
+
+    Returns the raw ``[palette]`` mapping. Raises :class:`SystemExit`
+    with a CLI-friendly error on failure.
+    """
+    try:
+        return themes._parse_file(path)
+    except tomllib.TOMLDecodeError as exc:
+        ui.print_error(f"Theme file is invalid TOML: {exc}")
+        sys.exit(1)
+    except (OSError, TypeError) as exc:
+        ui.print_error(f"Cannot read theme file: {exc}")
+        sys.exit(1)
+
+
 @theme.command("set")
 @click.argument(
     "source",
     type=click.Path(exists=True, dir_okay=False, readable=True),
 )
-def theme_set(source: str) -> None:
+@click.option(
+    "--check",
+    "check_only",
+    is_flag=True,
+    default=False,
+    help="Validate SOURCE without installing it. Exits 1 on any error.",
+)
+def theme_set(source: str, check_only: bool) -> None:
     """Install a theme file as the active theme.
 
     SOURCE is a path to a ``theme.toml`` file. Its contents are
-    validated; unknown roles are ignored with a warning. On success
-    the file is copied to the active theme path and the change takes
-    effect for the next devlog invocation.
+    validated; unknown roles are ignored with a warning, invalid style
+    values cause the install to be rejected. On success the file is
+    copied to the active theme path and the change takes effect for
+    the next devlog invocation. With ``--check`` the file is only
+    validated; nothing is written.
     """
     src = Path(source)
-    dst = themes.get_theme_path()
+    raw = _read_theme_source(src)
 
-    try:
-        raw = themes._parse_file(src)  # noqa: SLF001 - intentional internal use
-    except tomllib.TOMLDecodeError as exc:
-        ui.print_error(f"Theme file is invalid TOML: {exc}")
-        sys.exit(1)
-    except OSError as exc:
-        ui.print_error(f"Cannot read theme file: {exc}")
-        sys.exit(1)
-
-    unknown = sorted(k for k in raw if k not in themes.ROLES)
+    unknown, invalid = themes.validate_source(raw)
     for key in unknown:
         ui.print_warning(f"theme role '{key}' is unknown and will be ignored.")
+    for key in invalid:
+        ui.print_warning(
+            f"theme role '{key}' has invalid style {raw[key]!r}; "
+            "fix before installing."
+        )
 
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        shutil.copy2(src, dst)
-    except OSError as exc:
-        ui.print_error(f"Cannot write theme file to {dst}: {exc}")
+    if invalid:
+        ui.print_error(
+            f"Refusing to install: {len(invalid)} role(s) have invalid style values."
+        )
         sys.exit(1)
 
+    if check_only:
+        print(f"Theme file is valid: {src}")
+        return
+
+    try:
+        active = themes.install_theme_file(src, themes.get_theme_path())
+    except themes.ThemeInstallError as exc:
+        ui.print_error(str(exc))
+        sys.exit(1)
+
+    print(f"Theme installed at {themes.get_theme_path()} ({len(active)} roles).")
+
+
+@theme.command("use")
+@click.argument("name")
+def theme_use(name: str) -> None:
+    """Install a bundled theme NAME as the active theme.
+
+    NAME must be one of the names listed by ``devlog theme builtins``.
+    Use ``devlog theme use default`` to reset the active theme to the
+    built-in defaults without removing the file.
+    """
+    try:
+        src = themes.get_builtin_theme_path(name)
+    except themes.ThemeNotFoundError:
+        names = ", ".join(themes.list_builtin_themes())
+        ui.print_error(
+            f'Unknown builtin theme "{name}". Available: {names}'
+        )
+        sys.exit(1)
+
+    raw = _read_theme_source(src)
+    unknown, invalid = themes.validate_source(raw)
+    for key in unknown:
+        ui.print_warning(f"theme role '{key}' is unknown and will be ignored.")
+    for key in invalid:
+        ui.print_warning(
+            f"theme role '{key}' has invalid style {raw[key]!r}; "
+            "this is a bug in the bundled theme, please report it."
+        )
+
+    if invalid:
+        ui.print_error(
+            f"Refusing to install builtin {name!r}: {len(invalid)} invalid role(s)."
+        )
+        sys.exit(1)
+
+    try:
+        active = themes.install_theme_file(src, themes.get_theme_path())
+    except themes.ThemeInstallError as exc:
+        ui.print_error(str(exc))
+        sys.exit(1)
+
+    print(f"Theme '{name}' installed at {themes.get_theme_path()} ({len(active)} roles).")
+
+
+@theme.command("builtins")
+def theme_builtins() -> None:
+    """List all bundled theme names with a short description."""
+    from rich.table import Table
+    from rich.box import ROUNDED
+
+    table = Table(
+        box=ROUNDED,
+        show_header=True,
+        title="Bundled themes",
+        title_justify="left",
+        title_style="bold",
+        header_style="bold",
+        expand=False,
+    )
+    table.add_column("Name", style=ui._s("id_dim"), no_wrap=True)
+    table.add_column("Description", style="default")
+    for name in themes.list_builtin_themes():
+        meta = themes.get_builtin_meta(name)
+        table.add_row(name, meta.get("description", ""))
+    console.print(table)
+
+
+@theme.command("reset")
+@click.confirmation_option(prompt="Remove the active theme file?")
+def theme_reset() -> None:
+    """Remove the active theme file and fall back to the defaults."""
+    path = themes.get_theme_path()
+    if path.exists():
+        try:
+            path.unlink()
+        except OSError as exc:
+            ui.print_error(f"Cannot remove theme file: {exc}")
+            sys.exit(1)
     themes.reset_cache()
+    print(f"Theme file removed (if it existed). Active palette reset to defaults.")
+
+
+@theme.command("edit")
+def theme_edit() -> None:
+    """Open the active theme file in $VISUAL/$EDITOR.
+
+    Creates a starter template at the active theme path if no file
+    exists yet, so the user lands in a pre-populated buffer.
+    """
+    path = themes.get_theme_path()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        themes.write_default_theme(path)
+        themes.reset_cache()
+    try:
+        click.edit(filename=str(path))
+    except click.ClickException as exc:
+        ui.print_error(str(exc))
+        sys.exit(1)
+
+
+@theme.command("diff")
+@click.option(
+    "--default",
+    "show_defaults",
+    is_flag=True,
+    default=False,
+    help="Show roles whose active value matches the default (audit mode).",
+)
+def theme_diff(show_defaults: bool) -> None:
+    """Show the active theme's overrides relative to the defaults.
+
+    With ``--default``, inverts to show roles whose active value
+    matches the default (useful for auditing which roles are still
+    inheriting).
+    """
     active = themes.get_active_theme()
-    print(f"Theme installed at {dst} ({len(active)} roles).")
+    rows = []
+    for role, default in themes._ROLE_DEFAULTS:  # noqa: SLF001 - shared ordering
+        active_value = active.get(role, default)
+        if show_defaults:
+            if active_value == default:
+                rows.append((role, default, active_value, ""))
+        else:
+            if active_value != default:
+                rows.append((role, default, active_value, "!"))
+    if not rows:
+        msg = (
+            "No overrides" if not show_defaults
+            else "All roles match the defaults"
+        )
+        print(msg)
+        return
+
+    from rich.table import Table
+    from rich.box import ROUNDED
+    from rich.text import Text
+
+    table = Table(
+        box=ROUNDED,
+        show_header=True,
+        title="Theme diff" if not show_defaults else "Theme audit (matches default)",
+        title_justify="left",
+        title_style="bold",
+        header_style="bold",
+        expand=False,
+    )
+    table.add_column("Role", style=ui._s("id_dim"), no_wrap=True)
+    table.add_column("Default", style="default")
+    table.add_column("Active", style="default")
+    table.add_column("Δ", no_wrap=True)
+    for role, default, active_value, marker in rows:
+        table.add_row(
+            role,
+            default,
+            active_value,
+            Text(marker, style="yellow" if marker else "dim"),
+        )
+    console.print(table)
+
+
+@theme.command("export")
+@click.option("--stdout", "use_stdout", is_flag=True, default=False, help="Write to STDOUT.")
+@click.option("--output", "output", type=click.Path(dir_okay=False, writable=True), default=None, help="Write to a file path.")
+@click.option("--name", "name", default="exported", show_default=True, help="Value to embed as the exported theme's [meta].name.")
+@click.option("--description", "description", default="Exported active theme", show_default=True, help="Value to embed as the exported theme's [meta].description.")
+def theme_export(use_stdout: bool, output: str | None, name: str, description: str) -> None:
+    """Write the active palette as a complete, uncommented ``theme.toml``.
+
+    The output round-trips losslessly through ``devlog theme set
+    <exported.toml>``. Use ``--stdout`` to print to STDOUT, or
+    ``--output PATH`` to write to a file. Exactly one of ``--stdout``
+    or ``--output`` is required.
+    """
+    if use_stdout and output:
+        ui.print_error("--stdout and --output are mutually exclusive.")
+        sys.exit(1)
+    if not use_stdout and not output:
+        ui.print_error("Specify --stdout or --output PATH.")
+        sys.exit(1)
+    text = themes.export_template(name=name, description=description)
+    if use_stdout:
+        sys.stdout.write(text)
+        return
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(text, encoding="utf-8")
+    print(f"Exported active theme to {out_path}.")
 
 
 @theme.command("path")

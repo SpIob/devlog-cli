@@ -120,6 +120,9 @@ def load_entries() -> List[Entry]:
     except OSError:
         raise StoragePermissionError(path, "read")
 
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+        raise CorruptedStorageError(path)
+
     return [Entry(**item) for item in data["entries"]]
 
 

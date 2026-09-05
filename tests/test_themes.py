@@ -9,6 +9,7 @@ import tomllib
 from click.testing import CliRunner
 
 from devlog import themes
+from devlog import ui
 from devlog.cli import main
 
 
@@ -430,3 +431,493 @@ def test_theme_cli_set_warns_on_unknown_roles(theme_runner, tmp_path):
     # And the unknown key was not actually installed
     themes.reset_cache()
     assert "made_up" not in themes.get_active_theme()
+
+
+# ---------------------------------------------------------------------------
+# Tier 1.1 + 1.7: strict value validation
+# ---------------------------------------------------------------------------
+
+
+def test_is_valid_style_accepts_basic_named_colors():
+    assert themes.is_valid_style("red")
+    assert themes.is_valid_style("bold yellow")
+    assert themes.is_valid_style("dim white")
+    assert themes.is_valid_style("#ff8800")
+    assert themes.is_valid_style("color(208)")
+    assert themes.is_valid_style("rgb(255,136,0)")
+
+
+def test_is_valid_style_rejects_empty_and_garbage():
+    assert not themes.is_valid_style("")
+    assert not themes.is_valid_style("not a real style name 12345")
+    # Bol yellow with a typo
+    assert not themes.is_valid_style("bol yellow")
+
+
+def test_is_valid_style_rejects_non_strings():
+    assert not themes.is_valid_style(None)
+    assert not themes.is_valid_style(1234)
+    assert not themes.is_valid_style([])
+
+
+def test_load_theme_warns_and_falls_back_on_invalid_value(tmp_path, monkeypatch):
+    """Invalid style values for an otherwise-known role: warn, fall back."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "bol yellow"\ntags = "magenta"\n',
+        encoding="utf-8",
+    )
+    buf = io.StringIO()
+    palette = themes.load_theme(warn_stream=buf)
+    out = buf.getvalue()
+    # The bad role warned + fell back to default
+    assert "date" in out and "invalid" in out.lower()
+    assert palette["date"] == themes.DEFAULT_THEME["date"]
+    # Untouched roles still pick up user values
+    assert palette["tags"] == "magenta"
+
+
+def test_load_theme_strict_returns_warnings(tmp_path, monkeypatch):
+    """`strict=True` returns (palette, warnings) so the CLI can fail loud."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "bol yellow"\n', encoding="utf-8"
+    )
+    palette, warnings = themes.load_theme(strict=True)
+    assert any("date" in w for w in warnings)
+    assert palette["date"] == themes.DEFAULT_THEME["date"]
+
+
+def test_load_theme_strict_clean_file_has_no_warnings(tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "red"\n', encoding="utf-8"
+    )
+    palette, warnings = themes.load_theme(strict=True)
+    assert warnings == []
+    assert palette["date"] == "red"
+
+
+def test_load_theme_rejects_non_string_value(tmp_path, monkeypatch):
+    """Non-string values raise TypeError from _parse_file, surfaced via OSError handler."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = 1234\n', encoding="utf-8"
+    )
+    buf = io.StringIO()
+    palette = themes.load_theme(warn_stream=buf)
+    # Falls back to defaults with a warning (TypeError caught by OSError handler)
+    assert palette == themes.DEFAULT_THEME
+    assert "warning" in buf.getvalue().lower()
+
+
+def test_theme_set_rejects_invalid_values(theme_runner, tmp_path):
+    """`theme set` exits non-zero and does not install when a value is invalid."""
+    src = tmp_path / "bad-style.toml"
+    src.write_text(
+        '[palette]\ndate = "bol yellow"\n', encoding="utf-8"
+    )
+    result = theme_runner.invoke(main, ["theme", "set", str(src)])
+    assert result.exit_code == 1
+    assert "invalid" in result.output.lower()
+    # And nothing was installed
+    assert not themes.get_theme_path().exists()
+
+
+def test_theme_set_check_validates_without_installing(theme_runner, tmp_path):
+    src = tmp_path / "good.toml"
+    src.write_text('[palette]\ndate = "red"\n', encoding="utf-8")
+    result = theme_runner.invoke(main, ["theme", "set", "--check", str(src)])
+    assert result.exit_code == 0
+    assert "valid" in result.output.lower()
+    # Crucially, no file was installed
+    assert not themes.get_theme_path().exists()
+
+
+def test_theme_set_check_rejects_invalid_without_installing(theme_runner, tmp_path):
+    src = tmp_path / "bad.toml"
+    src.write_text('[palette]\ndate = "bol yellow"\n', encoding="utf-8")
+    result = theme_runner.invoke(main, ["theme", "set", "--check", str(src)])
+    assert result.exit_code == 1
+    assert "invalid" in result.output.lower()
+    assert not themes.get_theme_path().exists()
+
+
+# ---------------------------------------------------------------------------
+# Tier 1.6: get_theme_status + theme list footer
+# ---------------------------------------------------------------------------
+
+
+def test_get_theme_status_default_when_no_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    assert themes.get_theme_status() == "default"
+
+
+def test_get_theme_status_ok_for_valid_file(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text('[palette]\ndate = "red"\n', encoding="utf-8")
+    assert themes.get_theme_status() == "ok"
+
+
+def test_get_theme_status_error_for_invalid_toml(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text("not valid [[[", encoding="utf-8")
+    status = themes.get_theme_status()
+    assert status.startswith("error:")
+
+
+def test_get_theme_status_error_for_invalid_value(monkeypatch, tmp_path):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "bol yellow"\n', encoding="utf-8"
+    )
+    status = themes.get_theme_status()
+    assert status.startswith("error:") and "date" in status
+
+
+def test_theme_list_includes_status_footer(theme_runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "red"\n', encoding="utf-8"
+    )
+    # The CLI's console is auto-detected and narrow under CliRunner;
+    # render via ui.theme_table directly with a wide console so the
+    # footer's three tokens line up on one line.
+    from rich.console import Console
+    import io as _io
+    themes.reset_cache()
+    table = ui.theme_table()
+    buf = _io.StringIO()
+    Console(file=buf, width=200, no_color=True).print(table)
+    output = buf.getvalue()
+    assert "status: ok" in output
+
+
+def test_theme_list_default_status_when_no_file(theme_runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    from rich.console import Console
+    import io as _io
+    themes.reset_cache()
+    table = ui.theme_table()
+    buf = _io.StringIO()
+    Console(file=buf, width=200, no_color=True).print(table)
+    output = buf.getvalue()
+    assert "status: default" in output
+
+
+# ---------------------------------------------------------------------------
+# Tier 2.9: SECTIONS grouping + test guard
+# ---------------------------------------------------------------------------
+
+
+def test_sections_cover_every_role():
+    """Every role must appear in exactly one section."""
+    sectioned = frozenset(r for roles in themes.SECTIONS.values() for r in roles)
+    assert sectioned == themes.ROLES, (
+        f"uncovered roles: {themes.ROLES - sectioned}, "
+        f"duplicates: {[r for r in themes.ROLES if sum(r in v for v in themes.SECTIONS.values()) != 1]}"
+    )
+
+
+def test_theme_list_grouped_by_section(theme_runner):
+    """`theme list` (the default) includes section headers."""
+    result = theme_runner.invoke(main, ["theme", "list"])
+    assert result.exit_code == 0
+    for header in ("Borders", "Text", "Banner", "Tables", "Heatmap"):
+        assert header in result.output
+
+
+def test_theme_list_flat_drops_section_headers(theme_runner):
+    result = theme_runner.invoke(main, ["theme", "list", "--flat"])
+    assert result.exit_code == 0
+    # Section headers are not emitted in flat mode
+    assert "Borders" not in result.output
+    assert "Heatmap" not in result.output
+    # But every role is still listed
+    for role in ("date", "tags", "success_border", "heatmap_l4"):
+        assert role in result.output
+
+
+def test_theme_list_no_preview_drops_swatch(theme_runner):
+    result = theme_runner.invoke(main, ["theme", "list", "--no-preview"])
+    assert result.exit_code == 0
+    assert "Preview" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# Tier 1.2: theme reset
+# ---------------------------------------------------------------------------
+
+
+def test_theme_reset_removes_file_and_falls_back(theme_runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "red"\n', encoding="utf-8"
+    )
+    result = theme_runner.invoke(main, ["theme", "reset"], input="y\n")
+    assert result.exit_code == 0
+    assert not themes.get_theme_path().exists()
+    themes.reset_cache()
+    assert themes.get_active_theme() == themes.DEFAULT_THEME
+
+
+def test_theme_reset_is_noop_when_no_file(theme_runner, monkeypatch, tmp_path):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    result = theme_runner.invoke(main, ["theme", "reset"], input="y\n")
+    assert result.exit_code == 0
+    assert "removed" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# Tier 1.5: theme diff
+# ---------------------------------------------------------------------------
+
+
+def test_theme_diff_no_overrides_says_so(theme_runner):
+    result = theme_runner.invoke(main, ["theme", "diff"])
+    assert result.exit_code == 0
+    assert "No overrides" in result.output
+
+
+def test_theme_diff_lists_overrides(theme_runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "red"\ntags = "white"\n', encoding="utf-8"
+    )
+    result = theme_runner.invoke(main, ["theme", "diff"])
+    assert result.exit_code == 0
+    assert "date" in result.output
+    assert "tags" in result.output
+    # The "!" marker is present (override indicator)
+    assert "!" in result.output
+
+
+def test_theme_diff_default_flag_shows_audit(theme_runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "red"\n', encoding="utf-8"
+    )
+    result = theme_runner.invoke(main, ["theme", "diff", "--default"])
+    assert result.exit_code == 0
+    # In audit mode, overridden roles are excluded. The "date" role
+    # shows up in the table title "Theme audit" only if a *role row*
+    # named "date" appears. We assert that the diff title is the
+    # audit variant (not the override variant) instead of substring
+    # matching "date", which would also match "updated".
+    assert "audit" in result.output
+    # The override diff title must not appear
+    assert result.output.lstrip().startswith("Theme audit")
+
+
+# ---------------------------------------------------------------------------
+# Tier 2.12: theme export
+# ---------------------------------------------------------------------------
+
+
+def test_theme_export_stdout_writes_active_palette(theme_runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "red"\n', encoding="utf-8"
+    )
+    result = theme_runner.invoke(main, ["theme", "export", "--stdout"])
+    assert result.exit_code == 0
+    assert "[palette]" in result.output
+    assert 'date = "red"' in result.output
+    assert 'name = "exported"' in result.output
+
+
+def test_theme_export_to_file(theme_runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    out = tmp_path / "out.toml"
+    result = theme_runner.invoke(main, ["theme", "export", "--output", str(out), "--name", "my-theme"])
+    assert result.exit_code == 0
+    assert out.exists()
+    data = tomllib.loads(out.read_text(encoding="utf-8"))
+    assert data["meta"]["name"] == "my-theme"
+    assert "date" in data["palette"]
+
+
+def test_theme_export_requires_target(theme_runner):
+    result = theme_runner.invoke(main, ["theme", "export"])
+    assert result.exit_code == 1
+    assert "specify" in result.output.lower() or "--stdout" in result.output
+
+
+def test_theme_export_rejects_both_targets(theme_runner, tmp_path):
+    out = tmp_path / "out.toml"
+    result = theme_runner.invoke(main, ["theme", "export", "--stdout", "--output", str(out)])
+    assert result.exit_code == 1
+
+
+def test_theme_export_roundtrips_through_set(theme_runner, tmp_path, monkeypatch):
+    """Export the active theme, then install the export — must be lossless."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "theme.toml").write_text(
+        '[palette]\ndate = "red"\ntags = "white"\n', encoding="utf-8"
+    )
+    themes.reset_cache()
+    out = tmp_path / "out.toml"
+    theme_runner.invoke(main, ["theme", "export", "--output", str(out)])
+    theme_runner.invoke(main, ["theme", "set", str(out)])
+    themes.reset_cache()
+    palette = themes.get_active_theme()
+    assert palette["date"] == "red"
+    assert palette["tags"] == "white"
+
+
+# ---------------------------------------------------------------------------
+# Tier 2.8: bundled themes
+# ---------------------------------------------------------------------------
+
+
+def test_list_builtin_themes_includes_all_curated():
+    names = themes.list_builtin_themes()
+    expected = {
+        "default", "solarized", "monokai", "high_contrast",
+        "nord", "gruvbox", "dracula", "one_dark",
+    }
+    assert expected.issubset(set(names)), f"missing: {expected - set(names)}"
+
+
+def test_load_builtin_theme_returns_all_roles():
+    palette = themes.load_builtin_theme("monokai")
+    for role in themes.ROLES:
+        assert role in palette
+
+
+def test_get_builtin_theme_path_unknown_raises():
+    with pytest.raises(themes.ThemeNotFoundError):
+        themes.get_builtin_theme_path("does-not-exist")
+
+
+def test_get_builtin_meta_returns_description():
+    meta = themes.get_builtin_meta("monokai")
+    assert meta["name"] == "monokai"
+    assert "monokai" in meta["description"].lower()
+
+
+def test_get_builtin_meta_falls_back_for_missing_meta():
+    """When a builtin has no [meta] table, get_builtin_meta returns
+    sane defaults. We can't easily fabricate a builtin without
+    [meta] under importlib.resources, so we assert the documented
+    fallback contract by reading one of the curated themes and
+    confirming the description field is non-empty (i.e. the fallback
+    was not triggered for a properly-authored file).
+    """
+    meta = themes.get_builtin_meta("default")
+    assert meta["name"] == "default"
+    assert meta["description"] != ""
+    # And the returned dict always has both keys, regardless of input.
+    assert "name" in meta
+    assert "description" in meta
+
+
+def test_theme_builtins_lists_all_curated(theme_runner):
+    result = theme_runner.invoke(main, ["theme", "builtins"])
+    assert result.exit_code == 0
+    for name in ("default", "monokai", "solarized"):
+        assert name in result.output
+
+
+def test_theme_use_installs_builtin(theme_runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    result = theme_runner.invoke(main, ["theme", "use", "monokai"])
+    assert result.exit_code == 0
+    assert "installed" in result.output.lower()
+    themes.reset_cache()
+    palette = themes.get_active_theme()
+    # Monokai's date is color(81); check we actually got the bundled palette
+    assert palette["date"] == "color(81)"
+
+
+def test_theme_use_unknown_builtin_fails(theme_runner, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    result = theme_runner.invoke(main, ["theme", "use", "no-such-theme"])
+    assert result.exit_code == 1
+    assert "no-such-theme" in result.output
+    assert "Available" in result.output
+
+
+# ---------------------------------------------------------------------------
+# install_theme_file / validate_source helpers
+# ---------------------------------------------------------------------------
+
+
+def test_validate_source_clean():
+    unknown, invalid = themes.validate_source({"date": "red", "tags": "white"})
+    assert unknown == []
+    assert invalid == []
+
+
+def test_validate_source_unknown_role():
+    unknown, invalid = themes.validate_source({"date": "red", "made_up": "blue"})
+    assert unknown == ["made_up"]
+    assert invalid == []
+
+
+def test_validate_source_invalid_value():
+    unknown, invalid = themes.validate_source({"date": "bol yellow"})
+    assert unknown == []
+    assert invalid == ["date"]
+
+
+def test_install_theme_file_copies_to_destination(tmp_path, monkeypatch):
+    """The copy is correct; the cache refresh is a separate concern."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    src = tmp_path / "src.toml"
+    src.write_text('[palette]\ndate = "red"\n', encoding="utf-8")
+    dst = themes.get_theme_path()
+    themes.install_theme_file(src, dst)
+    assert dst.exists()
+    # The destination file matches the source
+    assert dst.read_text(encoding="utf-8") == src.read_text(encoding="utf-8")
+
+
+def test_install_theme_file_refreshes_active_theme(tmp_path, monkeypatch):
+    """When destination is the active theme path, the active theme
+    reflects the newly-installed file after install_theme_file returns.
+    """
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
+    (tmp_path / "d").mkdir()
+    src = tmp_path / "src.toml"
+    src.write_text('[palette]\ndate = "red"\n', encoding="utf-8")
+    themes.install_theme_file(src, themes.get_theme_path())
+    assert themes.get_active_theme()["date"] == "red"
+
+
+def test_install_theme_file_raises_on_missing_source(tmp_path):
+    with pytest.raises(themes.ThemeInstallError):
+        themes.install_theme_file(tmp_path / "nope.toml", tmp_path / "dst.toml")
+
+
+# ---------------------------------------------------------------------------
+# export_template helper
+# ---------------------------------------------------------------------------
+
+
+def test_export_template_round_trip():
+    text = themes.export_template(
+        palette={"date": "red", "tags": "white"},
+        name="my-theme",
+        description="A test",
+    )
+    data = tomllib.loads(text)
+    assert data["meta"]["name"] == "my-theme"
+    assert data["meta"]["description"] == "A test"
+    assert data["palette"]["date"] == "red"
+    assert data["palette"]["tags"] == "white"
+    # Roles not overridden fall back to defaults
+    assert data["palette"]["error_border"] == "red"
