@@ -37,8 +37,6 @@ def _validate_tags(raw_tags: tuple[str, ...]) -> list[str]:
     Raises:
         click.UsageError: on any validation failure.
     """
-    import re
-
     seen: list[str] = []
     seen_set: set[str] = set()
 
@@ -111,8 +109,6 @@ def _validate_new_tag(raw: str) -> str:
     Raises:
         click.UsageError: on empty / invalid-chars / over-length input.
     """
-    import re
-
     if not raw or not raw.strip():
         raise click.UsageError("NEW tag cannot be empty.")
     # Pre-validate the *raw* (un-normalised) string so an invalid tag

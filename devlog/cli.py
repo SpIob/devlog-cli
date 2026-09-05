@@ -12,7 +12,6 @@ import json
 import os
 import sys
 import uuid
-from operator import attrgetter
 from pathlib import Path
 from typing import Tuple
 
@@ -26,13 +25,14 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 from devlog import storage
 from devlog import themes
 from devlog import theme_preview
-from devlog import _dates
-from devlog import _tagops
-from devlog import _interactive
 from devlog import _completions
+from devlog import _dates
+from devlog import _filter
 from devlog import _io
 from devlog import _iso
-from devlog.models import Entry
+from devlog import _tagops
+from devlog import _interactive
+from devlog.models import BY_CREATED_AT, Entry
 from devlog.storage import StorageError
 from devlog import ui
 
@@ -94,24 +94,9 @@ def _handle_storage_error(exc: StorageError) -> None:
     sys.exit(2)
 
 
-def _iso_epoch_safe(value: str) -> int:
-    """Parse a stored UTC ISO 8601 string to a POSIX epoch, returning 0 on failure.
-
-    Mirrors the silent-failure contract of the original ``_iso_to_epoch``
-    callsite so unparseable timestamps sort to the bottom instead of
-    crashing ``devlog tags --sort=recent``.
-    """
-    try:
-        return _iso.iso_to_epoch(value)
-    except (ValueError, TypeError, AttributeError):
-        return 0
-
-
-# Module-level sort key for ``Entry.created_at`` — pre-built via
-# :func:`operator.attrgetter` so each sort comparison goes through a
-# C-level attribute fetch instead of a fresh Python lambda invocation.
-# ~20% faster on a 10k-entry sort.
-_BY_CREATED_AT = attrgetter("created_at")
+# Module-level sort key — re-exported from :mod:`devlog.models` so it
+# has a single source of truth across ``cli.py`` and ``_io.py``.
+_BY_CREATED_AT = BY_CREATED_AT
 
 
 def _load_entries_or_exit() -> list[Entry]:
@@ -274,11 +259,11 @@ def add(message: str, tag: Tuple[str, ...], quiet: bool, at: str | None) -> None
         except click.BadParameter as exc:
             ui.print_error(str(exc))
             sys.exit(2)
+        # Always store UTC. The parse step may leave `ts_dt` in a local
+        # zone; normalise here so the on-disk format is always Z-suffixed UTC.
+        ts = ts_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     else:
-        ts_dt = datetime.datetime.now(tz=datetime.timezone.utc)
-    # Always store UTC. The parse step may leave `ts_dt` in a local
-    # zone; normalise here so the on-disk format is always Z-suffixed UTC.
-    ts = ts_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ts = storage.utc_now_iso()
     entry = Entry(
         id=str(uuid.uuid4()),
         message=message,
@@ -329,10 +314,7 @@ def list_entries(
     all_entries = _load_entries_or_exit()
 
     total_all = len(all_entries)
-    filtered = _tagops._filter_by_tags(all_entries, tags)
-    since_dt, until_dt = _dates._parse_since_until(since, until)
-    filtered = _dates._filter_by_date(filtered, since_dt, until_dt)
-    filtered.sort(key=_BY_CREATED_AT, reverse=True)
+    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until)
 
     total_filtered = len(filtered)
     shown = filtered if show_all else filtered[:limit]
@@ -353,10 +335,10 @@ def list_entries(
     if has_filters:
         title = (
             f"Journal · {total_filtered} of {total_all} "
-            f"{ui._plural_noun(total_all, 'entry')}"
+            f"{ui.plural_noun(total_all, 'entry')}"
         )
     else:
-        title = f"Journal · {total_filtered} {ui._plural_noun(total_filtered, 'entry')}"
+        title = f"Journal · {total_filtered} {ui.plural_noun(total_filtered, 'entry')}"
     table = ui.entries_table(shown, total_filtered, title=title)
     console.print(table)
 
@@ -396,11 +378,8 @@ def search(
 
     all_entries = _load_entries_or_exit()
 
-    filtered = _tagops._filter_by_tags(all_entries, tags)
-    since_dt, until_dt = _dates._parse_since_until(since, until)
-    filtered = _dates._filter_by_date(filtered, since_dt, until_dt)
+    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until)
     matched = [e for e in filtered if query.lower() in e.message.lower()]
-    matched.sort(key=_BY_CREATED_AT, reverse=True)
 
     total = len(matched)
     shown = matched[:limit]
@@ -513,8 +492,8 @@ def _edit_resolve_at(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     if new_created_at != match.created_at and not yes:
-        old_h = ui._format_dt(match.created_at)
-        new_h = ui._format_dt(new_created_at)
+        old_h = ui.format_dt(match.created_at)
+        new_h = ui.format_dt(new_created_at)
         if not click.confirm(
             f"Change created_at of {match.short_id} from {old_h} to {new_h}?",
             default=False,
@@ -811,7 +790,7 @@ def tags(sort: str, limit: int, show_all: bool, quiet: bool) -> None:
     elif sort == "name":
         rows.sort(key=lambda r: r[0])
     else:  # recent
-        rows.sort(key=lambda r: (-(_iso_epoch_safe(r[2]) if r[2] else 0), r[0]))
+        rows.sort(key=lambda r: (-(_iso.safe_epoch(r[2]) if r[2] else 0), r[0]))
 
     total_tags = len(rows)
     shown = rows if show_all else rows[:limit]
@@ -938,7 +917,7 @@ def _tag_delete_impl(
             console.print(
                 ui.dry_run_line(
                     f"would remove tag \"{norm_tag}\" from {len(affected)} "
-                    f"{ui._plural_noun(len(affected), 'entry')}."
+                    f"{ui.plural_noun(len(affected), 'entry')}."
                 )
             )
         return
@@ -946,7 +925,7 @@ def _tag_delete_impl(
     if not yes and not quiet:
         prompt = (
             f"Remove tag \"{norm_tag}\" from {len(affected)} "
-            f"{ui._plural_noun(len(affected), 'entry')}?"
+            f"{ui.plural_noun(len(affected), 'entry')}?"
         )
         if not click.confirm(prompt, default=False):
             ui.print_info("Aborted.")
@@ -967,7 +946,7 @@ def _tag_delete_impl(
         console.print(
             ui.success_line(
                 f"Removed tag \"{norm_tag}\" from {len(affected)} "
-                f"{ui._plural_noun(len(affected), 'entry')}."
+                f"{ui.plural_noun(len(affected), 'entry')}."
             )
         )
 
@@ -1008,7 +987,7 @@ def _tag_show_impl(
         for e in shown
     ]
 
-    title = f'Tag · {norm_tag} · {total} {ui._plural_noun(total, "entry")}'
+    title = f'Tag · {norm_tag} · {total} {ui.plural_noun(total, "entry")}'
     table = ui.entries_table(shown_for_display, total, title=title)
     console.print(table)
 
@@ -1530,7 +1509,7 @@ def today(limit: int, quiet: bool) -> None:
         ui.print_info("No entries yet today.")
         return
 
-    title = f"Today · {subtitle} · {total} {ui._plural_noun(total, 'entry')}"
+    title = f"Today · {subtitle} · {total} {ui.plural_noun(total, 'entry')}"
     table = ui.entries_table(shown, total, title=title)
     console.print(table)
 
@@ -1575,7 +1554,7 @@ def yesterday(limit: int, quiet: bool) -> None:
         ui.print_info("No entries yet yesterday.")
         return
 
-    title = f"Yesterday · {subtitle} · {total} {ui._plural_noun(total, 'entry')}"
+    title = f"Yesterday · {subtitle} · {total} {ui.plural_noun(total, 'entry')}"
     table = ui.entries_table(shown, total, title=title)
     console.print(table)
 
@@ -1641,7 +1620,7 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
 
     title = (
         f"Week · {start_date} → {end_date} · {total} "
-        f"{ui._plural_noun(total, 'entry')}"
+        f"{ui.plural_noun(total, 'entry')}"
     )
     table = ui.entries_table(shown, total, title=title)
     console.print(table)
@@ -1708,8 +1687,7 @@ def tail(n: int, tags: Tuple[str, ...], quiet: bool) -> None:
 
     all_entries = _load_entries_or_exit()
 
-    filtered = _tagops._filter_by_tags(all_entries, tags)
-    filtered.sort(key=_BY_CREATED_AT, reverse=True)
+    filtered = _filter.filter_pipeline(all_entries, tags=tags)
     shown = filtered[:n]
     total = len(filtered)
 
@@ -1739,8 +1717,7 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
     """Show a summary of the journal: total entries, date range, top tags, and a 30-day sparkline."""
     all_entries = _load_entries_or_exit()
 
-    since_dt, until_dt = _dates._parse_since_until(since, until)
-    all_entries = _dates._filter_by_date(all_entries, since_dt, until_dt)
+    all_entries = _filter.filter_pipeline(all_entries, since=since, until=until, sort=False)
     # Also drop entries whose created_at cannot be parsed at all, so
     # downstream formatting (which assumes a valid ISO timestamp) never
     # crashes. Other commands go through this filter implicitly via
@@ -1760,7 +1737,6 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
             continue
         local_d = dt.astimezone(tz).date() if tz is not None else dt.date()
         valid_entries.append((entry, local_d))
-
     if not valid_entries:
         ui.print_info("No entries to summarize.")
         return
@@ -1866,7 +1842,7 @@ def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
     if dry_run:
         if not quiet:
             line = ui.dry_run_line(
-                f"would update {len(affected)} {ui._plural_noun(len(affected), 'entry')}: "
+                f"would update {len(affected)} {ui.plural_noun(len(affected), 'entry')}: "
             )
             line.append(f"{old_normalized} → {new_tag}", style="bold")
             console.print(line)
@@ -1886,7 +1862,7 @@ def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
     if not quiet:
         console.print(
             ui.success_line(
-                f"Renamed {old_normalized} → {new_tag} in {len(affected)} {ui._plural_noun(len(affected), 'entry')}."
+                f"Renamed {old_normalized} → {new_tag} in {len(affected)} {ui.plural_noun(len(affected), 'entry')}."
             )
         )
 
@@ -1945,9 +1921,9 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
         added = len(touched) - already_had_new
         if not quiet:
             line = ui.dry_run_line(
-                f"would add {new_tag} to {added} {ui._plural_noun(added, 'entry')}, "
+                f"would add {new_tag} to {added} {ui.plural_noun(added, 'entry')}, "
                 f"remove {old_normalized} from {len(touched)} "
-                f"{ui._plural_noun(len(touched), 'entry')}. "
+                f"{ui.plural_noun(len(touched), 'entry')}. "
             )
             if already_had_new:
                 line.append(
@@ -1972,7 +1948,7 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
         added = len(touched) - already_had_new
         line = ui.success_line(
             f"Merged \"{old_normalized}\" into \"{new_tag}\" across "
-            f"{len(touched)} {ui._plural_noun(len(touched), 'entry')}"
+            f"{len(touched)} {ui.plural_noun(len(touched), 'entry')}"
         )
         if already_had_new:
             line.append(
@@ -2011,183 +1987,6 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
 # ---------------------------------------------------------------------------
 
 
-# Reachable from `devlog repair`: the raw JSON file the validator reads.
-# Kept module-level so the unit tests can target it directly.
-def _read_raw_entries() -> tuple[object, bool]:
-    """Return the parsed JSON payload at the storage path, or raise.
-
-    The second element of the returned tuple is ``True`` when the file
-    was corrupt and we had to fall back to right-truncation to recover
-    a usable JSON object. Callers use this to decide whether to
-    rewrite the file even if no validation issues are reported (the
-    trailing garbage would otherwise stay on disk).
-
-    Raises:
-        FileNotFoundError: when the file does not yet exist.
-        storage.CorruptedStorageError: when the file contains invalid JSON
-            and no recoverable portion can be extracted.
-        storage.StoragePermissionError: when the file is unreadable.
-    """
-    path = storage.get_storage_path()
-    if not path.exists():
-        raise FileNotFoundError(path)
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            return json.load(fh), False
-    except PermissionError as exc:
-        raise storage.StoragePermissionError(path, "read") from exc
-    except OSError as exc:
-        raise storage.StoragePermissionError(path, "read") from exc
-    except json.JSONDecodeError:
-        # Try to recover by truncating to the last valid JSON object
-        # boundary. If that succeeds, return the recovered payload
-        # (which may be missing trailing entries the user added since
-        # the file was last flushed) so doctor/repair can still
-        # surface whatever survived. If recovery fails, raise the
-        # original-style corruption error.
-        recovered = _try_recover_entries_from_corrupt_json(path)
-        if recovered is not None:
-            return recovered, True
-        raise storage.CorruptedStorageError(path)
-
-
-def _try_recover_entries_from_corrupt_json(path: Path) -> object | None:
-    """Best-effort recovery when ``entries.json`` is not valid JSON.
-
-    Walks the file from the end looking for the largest prefix that
-    parses as valid JSON. The most common corruption is a trailing
-    write that didn't finish (e.g. power loss mid-flush), so a
-    right-trim usually recovers the previous good state.
-
-    Returns:
-        The parsed JSON object if recovery succeeded, else ``None``.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    if not text:
-        return None
-
-    # Try right-truncation: only attempt the parse at positions that
-    # end on a JSON-object/array boundary, walking backward from the
-    # end. The first successful parse wins. Bounded by O(n) for
-    # pathological files but typically just a handful of attempts.
-    for end in range(len(text), 0, -1):
-        candidate = text[:end]
-        last = candidate.rstrip()[-1:] if candidate.rstrip() else ""
-        if last not in ("}", "]"):
-            continue
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-    return None
-
-
-def _coerce_entry(item: dict) -> Entry | None:
-    """Best-effort construction of an ``Entry`` from a parsed item.
-
-    Returns ``None`` if any required field is missing or the wrong type.
-    The returned ``Entry`` will *not* have a valid ``created_at`` (we
-    use a placeholder) — the caller is expected to either fix or drop
-    these rows. This helper is only used by ``devlog repair``.
-    """
-    try:
-        eid = item["id"]
-        message = item.get("message", "")
-        created_at = item.get("created_at", "")
-        tags = item.get("tags", [])
-        updated_at = item.get("updated_at")
-    except (KeyError, TypeError):
-        return None
-    if not isinstance(eid, str) or not eid:
-        return None
-    if not isinstance(message, str):
-        return None
-    if not isinstance(tags, list):
-        return None
-    if not isinstance(created_at, str):
-        return None
-    if updated_at is not None and not isinstance(updated_at, str):
-        return None
-    norm_tags = [t for t in tags if isinstance(t, str)]
-    return Entry(
-        id=eid,
-        message=message,
-        tags=norm_tags,
-        created_at=created_at,
-        updated_at=updated_at,
-    )
-
-
-def _build_repair_plan(raw: object) -> tuple[list[Entry], list[storage.Issue]]:
-    """Split a raw payload into (repaired_entries, remaining_issues).
-
-    Strategy:
-
-        * Entries that the validator cannot even build from the item
-          (missing id, wrong root types, etc.) are dropped — counted as
-          ``bad_item`` issues.
-        * Entries with a bad ``created_at`` are dropped (a recoverable
-          timestamp is not inferrable from context).
-        * Entries with one or more invalid tags are *kept*, with the
-          bad tags stripped. The ``bad_tag`` issue is still reported so
-          the user knows which entries were touched.
-        * Duplicate ids keep the *first* occurrence; subsequent ones are
-          reported as ``duplicate_id`` and dropped.
-
-    Args:
-        raw: the value parsed from the JSON file.
-
-    Returns:
-        A 2-tuple ``(entries, issues)`` where ``entries`` is the list of
-        ``Entry`` objects that should be persisted, and ``issues`` is
-        the full list of problems found (including those the plan also
-        fixes, so the user can see them).
-    """
-    issues = storage.validate_entries(raw)
-
-    if not isinstance(raw, dict) or not isinstance(raw.get("entries"), list):
-        return [], issues
-
-    kept: list[Entry] = []
-    seen_ids: set[str] = set()
-    for _i, item in enumerate(raw["entries"]):
-        entry = _coerce_entry(item) if isinstance(item, dict) else None
-        if entry is None:
-            continue  # already covered by `bad_item` / `missing_field` issue
-        if entry.id in seen_ids:
-            continue  # duplicate; issue already reported
-        # Re-check created_at so we drop malformed-but-buildable rows.
-        if not entry.created_at or not _iso.is_valid_iso_timestamp(entry.created_at):
-            continue
-        # Strip any individual bad tags rather than dropping the entry.
-        # Hand-edited files (or migrations from older devlog versions)
-        # can easily have a single bad tag among many good ones — the
-        # entry itself is still useful, so we salvage it.
-        cleaned_tags = [t for t in entry.tags if _tagops._is_valid_tag(t)]
-        if len(cleaned_tags) != len(entry.tags):
-            entry = Entry(
-                id=entry.id,
-                message=entry.message,
-                tags=cleaned_tags,
-                created_at=entry.created_at,
-                updated_at=entry.updated_at,
-            )
-        if entry.updated_at is not None and not _iso.is_valid_iso_timestamp(entry.updated_at):
-            entry = Entry(
-                id=entry.id,
-                message=entry.message,
-                tags=entry.tags,
-                created_at=entry.created_at,
-                updated_at=None,
-            )
-        kept.append(entry)
-        seen_ids.add(entry.id)
-    return kept, issues
-
-
 @main.command()
 @click.option(
     "--dry-run",
@@ -2215,7 +2014,7 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
     ``backups/`` whenever a write happens unless ``--no-backup`` is set.
     """
     try:
-        raw, recovered = _read_raw_entries()
+        raw, recovered = storage.read_raw_entries()
     except FileNotFoundError:
         if not quiet:
             ui.print_info("No journal yet — nothing to repair.")
@@ -2235,7 +2034,7 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
         _handle_storage_error(exc)
         return
 
-    kept, issues = _build_repair_plan(raw)
+    kept, issues = storage.build_repair_plan(raw)
     raw_count = len(raw.get("entries", [])) if isinstance(raw, dict) else 0
     dropped = max(0, raw_count - len(kept))
     # Count how many tags the plan stripped (one per ``bad_tag`` issue
@@ -2289,11 +2088,11 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
             prompt = (
                 f"Repair will strip {tags_stripped} bad tag"
                 f"{ui.plural_s(tags_stripped)} from "
-                f"{len(kept)} {ui._plural_noun(len(kept), 'entry')}. Continue?"
+                f"{len(kept)} {ui.plural_noun(len(kept), 'entry')}. Continue?"
             )
         else:
             prompt = (
-                f"Repair will drop {dropped} {ui._plural_noun(dropped, 'entry')}. Continue?"
+                f"Repair will drop {dropped} {ui.plural_noun(dropped, 'entry')}. Continue?"
             )
         click.confirm(prompt, default=False, abort=True)
 
@@ -2406,7 +2205,7 @@ def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
     # Apply the same repair plan to the backup so a hand-edited or
     # previously-broken backup can still be restored. Issues found in
     # the backup that the repair plan fixes are reported as warnings.
-    new_entries, plan_issues = _build_repair_plan(data)
+    new_entries, plan_issues = storage.build_repair_plan(data)
     skipped_issues = [
         iss for iss in plan_issues
         if iss.kind not in ("bad_root", "bad_field")
@@ -2433,7 +2232,7 @@ def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
     if dry_run:
         if not quiet:
             ui.print_info(
-                f"DRY RUN: would restore {len(new_entries)} {ui._plural_noun(len(new_entries), 'entry')} from {path}."
+                f"DRY RUN: would restore {len(new_entries)} {ui.plural_noun(len(new_entries), 'entry')} from {path}."
             )
         return
 
@@ -2445,7 +2244,7 @@ def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
 
     if not quiet:
         line = ui.success_line(
-            f"Restored {len(new_entries)} {ui._plural_noun(len(new_entries), 'entry')} from "
+            f"Restored {len(new_entries)} {ui.plural_noun(len(new_entries), 'entry')} from "
         )
         line.append(path, style="bold")
         console.print(line)
@@ -2489,7 +2288,7 @@ def _doctor_collect_issues(raw: object) -> tuple[list[dict], list[Entry], bool]:
     valid_entries: list[Entry] = []
     if isinstance(raw, dict) and isinstance(raw.get("entries"), list):
         for item in raw["entries"]:
-            entry = _coerce_entry(item) if isinstance(item, dict) else None
+            entry = storage.coerce_entry(item) if isinstance(item, dict) else None
             if entry is not None and _iso.is_valid_iso_timestamp(entry.created_at):
                 valid_entries.append(entry)
 
@@ -2559,7 +2358,7 @@ def doctor(quiet: bool) -> None:
     report["size_bytes"] = _doctor_probe_size(path)
 
     try:
-        raw, _recovered = _read_raw_entries()
+        raw, _recovered = storage.read_raw_entries()
     except storage.CorruptedStorageError:
         report["ok"] = False
         report["issues"] = [

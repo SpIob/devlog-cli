@@ -85,6 +85,19 @@ def iso_to_epoch(value: str) -> int:
     return int(dt.timestamp())
 
 
+def safe_epoch(value: str) -> int:
+    """Convert a UTC ISO 8601 string to a POSIX epoch, returning 0 on failure.
+
+    Used by sort keys where a single unparseable timestamp must not
+    crash the whole command — instead it lands at the bottom of the
+    ordering (epoch 0 = 1970-01-01).
+    """
+    dt = try_parse_utc_iso(value)
+    if dt is None:
+        return 0
+    return int(dt.timestamp())
+
+
 def is_valid_iso_timestamp(value: str) -> bool:
     """Check if a string is a valid UTC ISO 8601 timestamp.
 

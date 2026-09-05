@@ -1,13 +1,13 @@
 import dataclasses
 import json
 import os
-import re
 from dataclasses import dataclass
 from datetime import date as _date, datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
 from devlog import _iso
+from devlog import _tagops
 from devlog.models import Entry
 
 # ---------------------------------------------------------------------------
@@ -18,10 +18,11 @@ DEFAULT_DATA_DIR = Path.home() / ".devlog"
 ENTRIES_FILE_NAME = "entries.json"
 BACKUPS_DIR_NAME = "backups"
 
-# Tag validation: must match the rules enforced by cli._validate_tags
-# Public so other modules (cli, tests) can use the same rules.
-TAG_RE = re.compile(r"^[a-z0-9\-]+$")
-MAX_TAG_LENGTH = 32
+# Tag validation: re-exported from the canonical home in
+# :mod:`devlog._tagops` so any module that already imports
+# ``storage.TAG_RE`` / ``storage.MAX_TAG_LENGTH`` keeps working.
+TAG_RE = _tagops.TAG_RE
+MAX_TAG_LENGTH = _tagops.MAX_TAG_LENGTH
 
 
 # ---------------------------------------------------------------------------
@@ -557,3 +558,189 @@ def utc_now_iso() -> str:
     the same format and the on-disk contract has one definition.
     """
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ---------------------------------------------------------------------------
+# Coercion, repair plan, and corrupt-file recovery.
+#
+# These live alongside the validator because they implement the
+# *write-side* counterpart of ``validate_entries``: validation reports
+# issues, the repair plan decides what to do about them, the coercion
+# helper rebuilds a row from a raw dict, and the recovery helper makes
+# the best of a half-written file.
+# ---------------------------------------------------------------------------
+
+
+def coerce_entry(item: dict) -> Entry | None:
+    """Best-effort construction of an ``Entry`` from a parsed item.
+
+    Returns ``None`` if any required field is missing or the wrong type.
+    The returned ``Entry`` will *not* have a valid ``created_at`` (we
+    use a placeholder) — the caller is expected to either fix or drop
+    these rows. Used by ``devlog repair`` and ``devlog doctor``.
+    """
+    try:
+        eid = item["id"]
+        message = item.get("message", "")
+        created_at = item.get("created_at", "")
+        tags = item.get("tags", [])
+        updated_at = item.get("updated_at")
+    except (KeyError, TypeError):
+        return None
+    if not isinstance(eid, str) or not eid:
+        return None
+    if not isinstance(message, str):
+        return None
+    if not isinstance(tags, list):
+        return None
+    if not isinstance(created_at, str):
+        return None
+    if updated_at is not None and not isinstance(updated_at, str):
+        return None
+    norm_tags = [t for t in tags if isinstance(t, str)]
+    return Entry(
+        id=eid,
+        message=message,
+        tags=norm_tags,
+        created_at=created_at,
+        updated_at=updated_at,
+    )
+
+
+def build_repair_plan(raw: object) -> tuple[list[Entry], list[Issue]]:
+    """Split a raw payload into ``(repaired_entries, remaining_issues)``.
+
+    Strategy:
+
+        * Entries that the validator cannot even build from the item
+          (missing id, wrong root types, etc.) are dropped — counted as
+          ``bad_item`` issues.
+        * Entries with a bad ``created_at`` are dropped (a recoverable
+          timestamp is not inferrable from context).
+        * Entries with one or more invalid tags are *kept*, with the
+          bad tags stripped. The ``bad_tag`` issue is still reported so
+          the user knows which entries were touched.
+        * Duplicate ids keep the *first* occurrence; subsequent ones are
+          reported as ``duplicate_id`` and dropped.
+
+    Args:
+        raw: the value parsed from the JSON file.
+
+    Returns:
+        A 2-tuple ``(entries, issues)`` where ``entries`` is the list of
+        ``Entry`` objects that should be persisted, and ``issues`` is
+        the full list of problems found (including those the plan also
+        fixes, so the user can see them).
+    """
+    issues = validate_entries(raw)
+
+    if not isinstance(raw, dict) or not isinstance(raw.get("entries"), list):
+        return [], issues
+
+    kept: list[Entry] = []
+    seen_ids: set[str] = set()
+    for _i, item in enumerate(raw["entries"]):
+        entry = coerce_entry(item) if isinstance(item, dict) else None
+        if entry is None:
+            continue  # already covered by `bad_item` / `missing_field` issue
+        if entry.id in seen_ids:
+            continue  # duplicate; issue already reported
+        # Re-check created_at so we drop malformed-but-buildable rows.
+        if not entry.created_at or not _iso.is_valid_iso_timestamp(entry.created_at):
+            continue
+        # Strip any individual bad tags rather than dropping the entry.
+        # Hand-edited files (or migrations from older devlog versions)
+        # can easily have a single bad tag among many good ones — the
+        # entry itself is still useful, so we salvage it.
+        cleaned_tags = [t for t in entry.tags if _tagops._is_valid_tag(t)]
+        if len(cleaned_tags) != len(entry.tags):
+            entry = Entry(
+                id=entry.id,
+                message=entry.message,
+                tags=cleaned_tags,
+                created_at=entry.created_at,
+                updated_at=entry.updated_at,
+            )
+        if entry.updated_at is not None and not _iso.is_valid_iso_timestamp(entry.updated_at):
+            entry = Entry(
+                id=entry.id,
+                message=entry.message,
+                tags=entry.tags,
+                created_at=entry.created_at,
+                updated_at=None,
+            )
+        kept.append(entry)
+        seen_ids.add(entry.id)
+    return kept, issues
+
+
+def _try_recover_entries_from_corrupt_json(path: Path) -> object | None:
+    """Best-effort recovery when ``entries.json`` is not valid JSON.
+
+    Walks the file from the end looking for the largest prefix that
+    parses as valid JSON. The most common corruption is a trailing
+    write that didn't finish (e.g. power loss mid-flush), so a
+    right-trim usually recovers the previous good state.
+
+    Returns:
+        The parsed JSON object if recovery succeeded, else ``None``.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text:
+        return None
+
+    # Try right-truncation: only attempt the parse at positions that
+    # end on a JSON-object/array boundary, walking backward from the
+    # end. The first successful parse wins. Bounded by O(n) for
+    # pathological files but typically just a handful of attempts.
+    for end in range(len(text), 0, -1):
+        candidate = text[:end]
+        last = candidate.rstrip()[-1:] if candidate.rstrip() else ""
+        if last not in ("}", "]"):
+            continue
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def read_raw_entries() -> tuple[object, bool]:
+    """Return the parsed JSON payload at the storage path, or raise.
+
+    The second element of the returned tuple is ``True`` when the file
+    was corrupt and we had to fall back to right-truncation to recover
+    a usable JSON object. Callers use this to decide whether to
+    rewrite the file even if no validation issues are reported (the
+    trailing garbage would otherwise stay on disk).
+
+    Raises:
+        FileNotFoundError: when the file does not yet exist.
+        CorruptedStorageError: when the file contains invalid JSON
+            and no recoverable portion can be extracted.
+        StoragePermissionError: when the file is unreadable.
+    """
+    path = get_storage_path()
+    if not path.exists():
+        raise FileNotFoundError(path)
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            return json.load(fh), False
+    except PermissionError as exc:
+        raise StoragePermissionError(path, "read") from exc
+    except OSError as exc:
+        raise StoragePermissionError(path, "read") from exc
+    except json.JSONDecodeError:
+        # Try to recover by truncating to the last valid JSON object
+        # boundary. If that succeeds, return the recovered payload
+        # (which may be missing trailing entries the user added since
+        # the file was last flushed) so doctor/repair can still
+        # surface whatever survived. If recovery fails, raise the
+        # original-style corruption error.
+        recovered = _try_recover_entries_from_corrupt_json(path)
+        if recovered is not None:
+            return recovered, True
+        raise CorruptedStorageError(path)

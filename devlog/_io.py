@@ -6,23 +6,18 @@ Extracted from cli.py to keep the main CLI module focused on Click wiring.
 from __future__ import annotations
 
 import json
-import re
 import sys
 import uuid
-from operator import attrgetter
 from typing import TYPE_CHECKING
 
 from devlog import _dates
+from devlog import _filter
 from devlog import _tagops
 from devlog import ui
-from devlog.models import Entry
+from devlog.models import BY_CREATED_AT as _BY_CREATED_AT, Entry
 
 if TYPE_CHECKING:
     from devlog import storage
-
-
-# Pre-built sort key — see cli._BY_CREATED_AT for the rationale.
-_BY_CREATED_AT = attrgetter("created_at")
 
 
 def _sniff_import_format(path: str) -> str:
@@ -161,7 +156,7 @@ def _emit_import_summary(
     verb = "would import" if dry_run else "Imported"
     line_factory = ui.dry_run_line if dry_run else ui.success_line
     parts = [
-        f"{verb} {to_add} {ui._plural_noun(to_add, 'entry')}, ",
+        f"{verb} {to_add} {ui.plural_noun(to_add, 'entry')}, ",
         f"skip {skipped} duplicate{ui.plural_s(skipped)}.",
     ]
     if unreadable:
@@ -291,11 +286,7 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
     try:
         from devlog import storage
         existing = storage.load_entries()
-    except ImportError:
-        # Handle case where storage is not available
-        existing = []
     except Exception as exc:
-        # This mirrors the _handle_storage_error behavior
         ui.print_error(str(exc))
         sys.exit(2)
 
@@ -359,10 +350,7 @@ def export(
         ui.print_error(str(exc))
         sys.exit(2)
 
-    filtered = _tagops._filter_by_tags(all_entries, tags)
-    since_dt, until_dt = _dates._parse_since_until(since, until)
-    filtered = _dates._filter_by_date(filtered, since_dt, until_dt)
-    filtered.sort(key=_BY_CREATED_AT, reverse=True)
+    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until)
 
     if not filtered:
         ui.print_warning("Warning: No entries to export.")
@@ -386,7 +374,7 @@ def export(
 
     def _entry_md(entry: Entry) -> str:
         short_id = entry.short_id
-        date_str = ui._format_dt(entry.created_at)
+        date_str = ui.format_dt(entry.created_at)
         tags_str = ", ".join(entry.tags) if entry.tags else ui.TAG_NONE
         # The hidden `<!-- created_at: … -->` line preserves the
         # full-precision timestamp so a Markdown round-trip (export →
@@ -412,7 +400,7 @@ def export(
                 )
             if not quiet:
                 line = ui.success_line(
-                    f"Exported {len(filtered)} {ui._plural_noun(len(filtered), 'entry')} to "
+                    f"Exported {len(filtered)} {ui.plural_noun(len(filtered), 'entry')} to "
                 )
                 line.append(output, style="bold")
                 ui.err_console.print(line)
@@ -431,7 +419,7 @@ def export(
                         fh.write(_entry_md(entry))
                         progress.advance(task)
             line = ui.success_line(
-                f"Exported {len(filtered)} {ui._plural_noun(len(filtered), 'entry')} to "
+                f"Exported {len(filtered)} {ui.plural_noun(len(filtered), 'entry')} to "
             )
             line.append(output, style="bold")
             ui.err_console.print(line)

@@ -153,7 +153,9 @@ __all__ = [
     "TAG_NONE",
     "VERSION",
     "pluralize",
+    "plural_noun",
     "plural_s",
+    "format_dt",
 ]
 
 
@@ -179,25 +181,17 @@ def pluralize(n: int, singular: str, plural: str | None = None) -> str:
     Returns:
         A formatted ``"<n> <word>"`` string. Note: the count is included.
     """
-    if n == 1:
-        return f"{n} {singular}"
-    if plural is None:
-        plural = "entries" if singular == "entry" else f"{singular}s"
-    return f"{n} {plural}"
+    return f"{n} {plural_noun(n, singular, plural)}"
 
 
-def _plural_noun(n: int, singular: str, plural: str | None = None) -> str:
+def plural_noun(n: int, singular: str, plural: str | None = None) -> str:
     """Like :func:`pluralize` but without the count prefix.
 
     Useful inside template strings that already include the count, e.g.
-    ``f"{n} of {total} {_plural_noun(total, 'entry')}"``.
+    ``f"{n} of {total} {plural_noun(total, 'entry')}"``.
 
     For *n* in {0, 1}, returns ``singular`` (so "1 row" not "1 rows").
     """
-    # Delegate to ``pluralize`` so the pluralisation rules (notably the
-    # ``"entry"`` → ``"entries"`` special case) live in one place. The
-    # ``n == 1`` early return just keeps the "1 row" wording intact
-    # without a redundant count prefix.
     if n == 1:
         return singular
     if plural is None:
@@ -341,7 +335,7 @@ def dry_run_line(text: str) -> Text:
 # ---------------------------------------------------------------------------
 
 
-def _format_dt(iso: str, *, tz=None, tz_label: str = "UTC") -> str:
+def format_dt(iso: str, *, tz=None, tz_label: str = "UTC") -> str:
     """Convert a stored ISO 8601 UTC string to display form.
 
     Args:
@@ -437,7 +431,7 @@ def entry_panel(
         if entry.tags
         else Text(TAG_NONE, style="dim")
     )
-    date_text = Text(_format_dt(entry.created_at), style=_s("date"))
+    date_text = Text(format_dt(entry.created_at), style=_s("date"))
 
     rows = [
         _styled_row("Date", date_text),
@@ -718,13 +712,13 @@ def _updated_text(entry: Entry) -> Text:
     stays consistent across freshly-added and edited entries).
     """
     if entry.updated_at:
-        return Text(_format_dt(entry.updated_at), style=_s("updated"))
+        return Text(format_dt(entry.updated_at), style=_s("updated"))
     return Text("—", style="dim")
 
 
 def _date_text(entry: Entry) -> Text:
     """Build a styled "created at" line for entry-detail panels."""
-    return Text(_format_dt(entry.created_at), style=_s("date"))
+    return Text(format_dt(entry.created_at), style=_s("date"))
 
 
 def _raw_terminal_width() -> int:
@@ -933,7 +927,7 @@ def entries_table(
     table.add_column(
         "Message",
         width=widths["message"] + _COL_PADDING,
-        footer=f"Showing {len(entries)} of {total} {_plural_noun(total, 'entry')}.",
+        footer=f"Showing {len(entries)} of {total} {plural_noun(total, 'entry')}.",
         footer_style=_s("table_footer"),
         # Keep short messages left-aligned (Rich centres them by
         # default) and keep the footer flush against the cell's left
@@ -959,9 +953,9 @@ def entries_table(
         id_cell = _short_id(entry, length=6 if very_narrow else None)
         if very_narrow:
             # Strip the trailing "UTC" so the 16-char date format fits.
-            date_cell = _format_dt(entry.created_at)[:16]
+            date_cell = format_dt(entry.created_at)[:16]
         else:
-            date_cell = _format_dt(entry.created_at)
+            date_cell = format_dt(entry.created_at)
         if narrow:
             table.add_row(
                 id_cell,
@@ -971,7 +965,7 @@ def entries_table(
         else:
             table.add_row(
                 _short_id(entry),
-                _format_dt(entry.created_at),
+                format_dt(entry.created_at),
                 _tags_text(entry),
                 msg_cell,
             )
@@ -1103,12 +1097,12 @@ def tags_table(
         "Last used",
         style=_s("date"),
         no_wrap=True,
-        footer=f"Across {total_entries} {_plural_noun(total_entries, 'entry')}.",
+        footer=f"Across {total_entries} {plural_noun(total_entries, 'entry')}.",
         footer_style=_s("table_footer"),
     )
 
     for tag, count, last_used in rows:
-        last_used_text = _format_dt(last_used) if last_used else Text("—", style="dim")
+        last_used_text = format_dt(last_used) if last_used else Text("—", style="dim")
         table.add_row(tag, str(count), last_used_text)
 
     return table
@@ -1324,7 +1318,7 @@ def calendar_panel(per_day: dict, *, year: int, tz=None) -> Panel:
     body_rows.append(
         Text(
             f"{active_days} active day{plural_s(active_days)} · "
-            f"{total} {_plural_noun(total, 'entry')} in {year}",
+            f"{total} {plural_noun(total, 'entry')} in {year}",
             style="dim",
         )
     )
@@ -1372,8 +1366,8 @@ def stats_panel(
     Returns:
         A configured :class:`rich.panel.Panel`.
     """
-    first_str = _format_dt(first_iso, tz=tz, tz_label=tz_label)
-    last_str = _format_dt(last_iso, tz=tz, tz_label=tz_label)
+    first_str = format_dt(first_iso, tz=tz, tz_label=tz_label)
+    last_str = format_dt(last_iso, tz=tz, tz_label=tz_label)
     sparkline_values = [c for _, c in last_30_days]
     sparkline_max = max(sparkline_values) if sparkline_values else 0
 
@@ -1591,7 +1585,7 @@ def repair_summary(
     if dry_run:
         rows.append(Text("DRY RUN — no changes were written.", style=_bold("warning_text")))
     else:
-        parts = [f"Removed {dropped} {_plural_noun(dropped, 'entry')}", f"kept {kept}"]
+        parts = [f"Removed {dropped} {plural_noun(dropped, 'entry')}", f"kept {kept}"]
         if tags_stripped:
             parts.append(
                 f"stripped {tags_stripped} bad tag{plural_s(tags_stripped)}"
@@ -1625,7 +1619,7 @@ def backup_result(path: str, count: int) -> Text:
     success line).
     """
     line = success_line(
-        f"Backed up {count} {_plural_noun(count, 'entry')} to "
+        f"Backed up {count} {plural_noun(count, 'entry')} to "
     )
     line.append(f'"{path}"', style="dim")
     return line
