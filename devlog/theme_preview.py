@@ -47,8 +47,24 @@ def _resolve(role: str, draft: dict[str, str]) -> Style | None:
 
 
 def _style_or_default(role: str, draft: dict[str, str]) -> str:
-    """Return the style string for *role*, or ``"default"`` if missing."""
-    return draft.get(role) or themes.DEFAULT_THEME.get(role, "") or "default"
+    """Return a valid Rich style string for *role*, falling back when needed.
+
+    Mirrors :func:`_resolve` but returns a string rather than a parsed
+    :class:`Style` — used for parameters that take a style string
+    (``border_style=``, ``caption_style=``, ``footer_style=``, ``style=``
+    on a row). If *role* is missing, empty, or fails
+    :func:`rich.style.Style.parse`, the built-in default is used. Only
+    when *every* source fails do we return the literal ``"default"``
+    style. This guarantees :func:`render_preview` never crashes with
+    ``MissingStyle`` even when the caller passes garbage.
+    """
+    value = draft.get(role)
+    if value and themes.is_valid_style(value):
+        return value
+    default = themes.DEFAULT_THEME.get(role, "")
+    if default and themes.is_valid_style(default):
+        return default
+    return "default"
 
 
 def _section(title: str, body: str) -> str:

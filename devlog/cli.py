@@ -1233,16 +1233,17 @@ def theme_edit() -> None:
 @click.option(
     "--name",
     "name",
-    default="custom",
-    show_default=True,
-    help="Value to embed as the new theme's [meta].name.",
+    default=None,
+    help="Value to embed as the new theme's [meta].name. Defaults to "
+    "'custom', or to the seeded builtin's name when --from is given.",
 )
 @click.option(
     "--description",
     "description",
-    default="Custom theme created with `devlog theme create`",
-    show_default=True,
-    help="Value to embed as the new theme's [meta].description.",
+    default=None,
+    help="Value to embed as the new theme's [meta].description. Defaults "
+    "to a generic placeholder, or to the seeded builtin's description "
+    "when --from is given.",
 )
 @click.option(
     "--output",
@@ -1259,20 +1260,25 @@ def theme_edit() -> None:
 )
 def theme_create(
     seed_from: str | None,
-    name: str,
-    description: str,
+    name: str | None,
+    description: str | None,
     output: str | None,
     install: bool | None,
 ) -> None:
     """Interactively create a new theme by walking through every role.
 
     For each of the 28 roles (grouped by Borders / Text / Banner /
-    Tables / Heatmap) the wizard shows the current draft value as a
-    styled swatch and prompts for a replacement. Style values are
-    validated with Rich's Style.parse — empty or unparseable values
-    are rejected with a retry hint. After every section a multi-line
-    preview is rendered using synthetic UI fixtures so the user can
-    confirm the palette before committing.
+    Tables / Heatmap) the wizard prints the current draft value and
+    prompts for a replacement. Style values are validated with Rich's
+    Style.parse — empty or unparseable values are rejected with a retry
+    hint. After every section a multi-line preview is rendered using
+    synthetic UI fixtures so the user can confirm the palette before
+    committing.
+
+    When ``--from <builtin>`` is given, both the palette *and* the
+    ``[meta]`` (name + description) are seeded from the builtin's
+    ``[meta]`` table, so the produced file accurately reflects what was
+    seeded rather than carrying the wizard's placeholder meta.
 
     The new theme is written via ``devlog theme create``'s own writer
     (lossless round-trip through ``devlog theme set <file>``). With
@@ -1281,10 +1287,12 @@ def theme_create(
     if install is None:
         install = output is None
 
-    # Resolve seed palette.
+    # Resolve seed palette (and meta) from a builtin when requested.
+    seed_meta: dict[str, str] | None = None
     if seed_from is not None:
         try:
             seed = themes.load_builtin_theme(seed_from)
+            seed_meta = themes.get_builtin_meta(seed_from)
         except themes.ThemeNotFoundError:
             names = ", ".join(themes.list_builtin_themes())
             ui.print_error(
@@ -1293,6 +1301,26 @@ def theme_create(
             sys.exit(1)
     else:
         seed = dict(themes.get_active_theme())
+
+    # Defaults for [meta]: explicit flag > seeded builtin > generic placeholder.
+    if name is None:
+        name = seed_meta["name"] if seed_meta else "custom"
+    if description is None:
+        description = (
+            seed_meta["description"]
+            if seed_meta
+            else "Custom theme created with `devlog theme create`"
+        )
+
+    # Reject meta that would produce unparseable TOML up front, rather
+    # than waiting until install and poisoning the active theme file.
+    try:
+        themes.build_theme_toml({}, name=name, description=description)
+    except (ValueError, TypeError):
+        ui.print_error(
+            f"Invalid --name/--description: name={name!r} description={description!r}"
+        )
+        sys.exit(1)
 
     draft: dict[str, str] = dict(seed)
 
@@ -1319,7 +1347,7 @@ def theme_create(
             value = click.prompt(
                 role,
                 default=default,
-                show_default=False,
+                show_default=True,
                 value_proc=_validate,
             )
             draft[role] = value
@@ -1330,8 +1358,12 @@ def theme_create(
 
     if output is not None:
         out_path = Path(output)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        out_path.write_text(text, encoding="utf-8")
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            ui.print_error(f"Cannot write output file: {exc}")
+            sys.exit(1)
         click.echo(f"Custom theme '{name}' written to {out_path}.")
         if install:
             try:

@@ -66,13 +66,18 @@ def is_valid_style(value: str) -> bool:
     """Return True iff *value* parses as a Rich style string.
 
     Uses :class:`rich.style.Style` as the source of truth. Empty strings
-    are rejected; a style with no foreground/background is rendered
-    incorrectly by Rich and almost always indicates a user typo.
+    and whitespace-only strings are rejected: ``Style.parse`` accepts
+    them and returns an empty :class:`Style`, but the renderer draws
+    nothing for that style — almost always a user typo. A style must
+    therefore have at least one non-whitespace character.
     """
-    if not isinstance(value, str) or not value:
+    if not isinstance(value, str):
+        return False
+    stripped = value.strip()
+    if not stripped:
         return False
     try:
-        Style.parse(value)
+        Style.parse(stripped)
     except Exception:  # noqa: BLE001 - Rich raises a wide variety of errors
         return False
     return True
@@ -125,6 +130,10 @@ ROLES: frozenset[str] = frozenset(role for role, _ in _ROLE_DEFAULTS)
 #: a test guard (``test_sections_cover_every_role``) enforces this so
 #: adding a role to :data:`_ROLE_DEFAULTS` without assigning it a section
 #: is a test failure.
+#:
+#: Order within each section follows :data:`_ROLE_DEFAULTS` so the
+#: ``theme create`` wizard's prompt sequence matches the order
+#: ``build_theme_toml`` writes the file in.
 SECTIONS: dict[str, tuple[str, ...]] = {
     "Borders": (
         "error_border",
@@ -153,8 +162,8 @@ SECTIONS: dict[str, tuple[str, ...]] = {
     "Tables": (
         "table_caption",
         "table_footer",
-        "zebra_alt",
         "sparkline",
+        "zebra_alt",
     ),
     "Heatmap": (
         "heatmap_base",
@@ -364,11 +373,14 @@ def set_active_theme(theme: Mapping[str, str]) -> None:
 
     Primarily for tests. The provided mapping is validated against
     :data:`ROLES` and any missing roles are filled from the defaults.
+    Values that fail :func:`is_valid_style` are silently dropped (the
+    role falls back to the default), preventing bad input from leaking
+    into renderers that read the active theme.
     """
     global _active_theme
     merged: dict[str, str] = dict(DEFAULT_THEME)
     for role in ROLES:
-        if role in theme:
+        if role in theme and is_valid_style(theme[role]):
             merged[role] = theme[role]
     _active_theme = merged
 
@@ -454,6 +466,27 @@ def _theme_template() -> str:
     return header + body + "\n"
 
 
+def _escape_toml_basic_str(value: str) -> str:
+    """Return *value* escaped for use inside a TOML basic string.
+
+    TOML basic strings (double-quoted) treat ``\\\\`` and ``\\"`` as
+    escapes; every other character is literal. Newlines, tabs, and other
+    control characters must be expressed as ``\\n`` / ``\\t`` / ``\\uXXXX``
+    rather than embedded raw. Without this escaping, a ``name`` like
+    ``"back\\\\slash"`` produces a file ``tomllib`` cannot re-parse, and
+    a *value* containing ``"`` breaks the surrounding quotes.
+
+    Args:
+        value: any string. ``None``-equivalent callers must coerce first.
+
+    Returns:
+        A string safe to drop between double quotes on a single line.
+    """
+    out = value.replace("\\", "\\\\").replace('"', '\\"')
+    out = out.replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r")
+    return out
+
+
 def build_theme_toml(
     palette: Mapping[str, str],
     *,
@@ -469,15 +502,18 @@ def build_theme_toml(
     Args:
         palette: a ``{role: style}`` mapping. Roles not present in
             *palette* fall back to the built-in defaults so the output
-            is always complete (one line per known role).
+            is always complete (one line per known role). Values that
+            are not strings (e.g. ``None``) are coerced to ``""`` so
+            the output is always parseable; the resulting style will be
+            rejected by ``is_valid_style`` and fall back on load.
         name: the ``[meta].name`` to embed.
         description: the ``[meta].description`` to embed.
 
     Returns:
         A TOML string ready to be written to disk or stdout.
     """
-    safe_name = name.replace('"', '\\"')
-    safe_desc = description.replace('"', '\\"')
+    safe_name = _escape_toml_basic_str(name)
+    safe_desc = _escape_toml_basic_str(description)
     lines = [
         "# devlog theme",
         "",
@@ -489,7 +525,9 @@ def build_theme_toml(
     ]
     for role, default in _ROLE_DEFAULTS:
         value = palette.get(role, default)
-        lines.append(f'{role} = "{value}"')
+        if not isinstance(value, str):
+            value = ""
+        lines.append(f'{role} = "{_escape_toml_basic_str(value)}"')
     return "\n".join(lines) + "\n"
 
 
