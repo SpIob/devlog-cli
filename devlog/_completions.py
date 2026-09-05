@@ -41,7 +41,7 @@ _devlog_completion() {{
 for line in sys.stdin: print(json.loads(line)["id"][:8])')" -- "${{cur}}")) ;;
         list|search|tail|export) COMPREPLY=($(compgen -W "--tag --limit --all --quiet --since --until --format --output" -- "${{cur}}")) ;;
         tag) COMPREPLY=($(compgen -W "--delete --dry-run --limit --all --quiet" -- "${{cur}}")) ;;
-        theme) COMPREPLY=($(compgen -W "list show set path reset edit diff export use builtins" -- "${{cur}}")) ;;
+        theme) COMPREPLY=($(compgen -W "list show set path reset edit diff export use builtins create" -- "${{cur}}")) ;;
     esac
 }}
 complete -F _devlog_completion devlog

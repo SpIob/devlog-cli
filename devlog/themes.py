@@ -454,29 +454,28 @@ def _theme_template() -> str:
     return header + body + "\n"
 
 
-def export_template(
-    palette: Mapping[str, str] | None = None,
+def build_theme_toml(
+    palette: Mapping[str, str],
     *,
-    name: str = "exported",
-    description: str = "Exported active theme",
+    name: str = "custom",
+    description: str = "Custom theme",
 ) -> str:
     """Build a complete, uncommented ``theme.toml`` from *palette*.
 
-    Inverse of :func:`_theme_template`. Used by ``devlog theme export``
-    to produce a file that round-trips losslessly through
-    ``devlog theme set <exported.toml>``.
+    Inverse of :func:`_theme_template`. Shared by ``devlog theme export``
+    and ``devlog theme create`` so both produce files that round-trip
+    losslessly through ``devlog theme set <file>.toml``.
 
     Args:
-        palette: a ``{role: style}`` mapping. Defaults to the active
-            theme, which is the common case for ``theme export``.
-        name: the ``[meta].name`` to embed in the export.
+        palette: a ``{role: style}`` mapping. Roles not present in
+            *palette* fall back to the built-in defaults so the output
+            is always complete (one line per known role).
+        name: the ``[meta].name`` to embed.
         description: the ``[meta].description`` to embed.
 
     Returns:
         A TOML string ready to be written to disk or stdout.
     """
-    if palette is None:
-        palette = get_active_theme()
     safe_name = name.replace('"', '\\"')
     safe_desc = description.replace('"', '\\"')
     lines = [
@@ -492,6 +491,33 @@ def export_template(
         value = palette.get(role, default)
         lines.append(f'{role} = "{value}"')
     return "\n".join(lines) + "\n"
+
+
+def export_template(
+    palette: Mapping[str, str] | None = None,
+    *,
+    name: str = "exported",
+    description: str = "Exported active theme",
+) -> str:
+    """Build a complete, uncommented ``theme.toml`` from *palette*.
+
+    Thin wrapper around :func:`build_theme_toml` that defaults *palette*
+    to the active theme. Used by ``devlog theme export`` to produce a
+    file that round-trips losslessly through
+    ``devlog theme set <exported.toml>``.
+
+    Args:
+        palette: a ``{role: style}`` mapping. Defaults to the active
+            theme, which is the common case for ``theme export``.
+        name: the ``[meta].name`` to embed in the export.
+        description: the ``[meta].description`` to embed.
+
+    Returns:
+        A TOML string ready to be written to disk or stdout.
+    """
+    if palette is None:
+        palette = get_active_theme()
+    return build_theme_toml(palette, name=name, description=description)
 
 
 def write_default_theme(destination) -> None:
@@ -694,6 +720,7 @@ __all__ = [
     "get_style",
     "get_bold_style",
     "write_default_theme",
+    "build_theme_toml",
     "export_template",
     "list_builtin_themes",
     "get_builtin_theme_path",

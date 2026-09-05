@@ -24,6 +24,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 
 from devlog import storage
 from devlog import themes
+from devlog import theme_preview
 from devlog import _dates
 from devlog import _tagops
 from devlog import _interactive
@@ -1183,6 +1184,147 @@ def theme_edit() -> None:
     except click.ClickException as exc:
         ui.print_error(str(exc))
         sys.exit(1)
+
+
+@theme.command("create")
+@click.option(
+    "--from",
+    "seed_from",
+    default=None,
+    help="Seed values from a bundled theme (e.g. dracula, nord).",
+)
+@click.option(
+    "--name",
+    "name",
+    default="custom",
+    show_default=True,
+    help="Value to embed as the new theme's [meta].name.",
+)
+@click.option(
+    "--description",
+    "description",
+    default="Custom theme created with `devlog theme create`",
+    show_default=True,
+    help="Value to embed as the new theme's [meta].description.",
+)
+@click.option(
+    "--output",
+    "output",
+    type=click.Path(dir_okay=False, writable=True),
+    default=None,
+    help="Write the new theme to PATH instead of installing it as active.",
+)
+@click.option(
+    "--install/--no-install",
+    "install",
+    default=None,
+    help="After the wizard, install the new theme as active. Defaults to on when --output is not given.",
+)
+def theme_create(
+    seed_from: str | None,
+    name: str,
+    description: str,
+    output: str | None,
+    install: bool | None,
+) -> None:
+    """Interactively create a new theme by walking through every role.
+
+    For each of the 28 roles (grouped by Borders / Text / Banner /
+    Tables / Heatmap) the wizard shows the current draft value as a
+    styled swatch and prompts for a replacement. Style values are
+    validated with Rich's Style.parse — empty or unparseable values
+    are rejected with a retry hint. After every section a multi-line
+    preview is rendered using synthetic UI fixtures so the user can
+    confirm the palette before committing.
+
+    The new theme is written via ``devlog theme create``'s own writer
+    (lossless round-trip through ``devlog theme set <file>``). With
+    no ``--output`` it is also installed as the active theme.
+    """
+    if install is None:
+        install = output is None
+
+    # Resolve seed palette.
+    if seed_from is not None:
+        try:
+            seed = themes.load_builtin_theme(seed_from)
+        except themes.ThemeNotFoundError:
+            names = ", ".join(themes.list_builtin_themes())
+            ui.print_error(
+                f'Unknown builtin theme "{seed_from}". Available: {names}'
+            )
+            sys.exit(1)
+    else:
+        seed = dict(themes.get_active_theme())
+
+    draft: dict[str, str] = dict(seed)
+
+    click.echo(
+        f"Creating theme '{name}'. Press Enter to accept each default, "
+        "or type a new Rich style (e.g. 'bold #ff8800', 'color(208)')."
+    )
+
+    def _validate(value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise click.BadParameter("value cannot be empty")
+        if not themes.is_valid_style(value):
+            raise click.BadParameter(
+                f"{value!r} is not a valid Rich style"
+            )
+        return value
+
+    for section_name, roles in themes.SECTIONS.items():
+        click.echo("")
+        click.echo(f"=== {section_name} ===")
+        for role in roles:
+            default = draft.get(role, themes.DEFAULT_THEME[role])
+            value = click.prompt(
+                role,
+                default=default,
+                show_default=False,
+                value_proc=_validate,
+            )
+            draft[role] = value
+        click.echo("")
+        click.echo(theme_preview.render_preview(draft))
+
+    text = themes.build_theme_toml(draft, name=name, description=description)
+
+    if output is not None:
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(text, encoding="utf-8")
+        click.echo(f"Custom theme '{name}' written to {out_path}.")
+        if install:
+            try:
+                themes.install_theme_file(out_path, themes.get_theme_path())
+            except themes.ThemeInstallError as exc:
+                ui.print_error(str(exc))
+                sys.exit(1)
+            click.echo(
+                f"Installed as the active theme at {themes.get_theme_path()}."
+            )
+        return
+
+    if install:
+        active = themes.get_theme_path()
+        active.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            active.write_text(text, encoding="utf-8")
+        except OSError as exc:
+            ui.print_error(f"Cannot write theme file: {exc}")
+            sys.exit(1)
+        themes.reset_cache()
+        click.echo(
+            f"Custom theme '{name}' installed at {active} "
+            f"({len(themes.get_active_theme())} roles)."
+        )
+    else:
+        click.echo(
+            f"Custom theme '{name}' generated but not installed "
+            "(--no-install with no --output)."
+        )
 
 
 @theme.command("diff")

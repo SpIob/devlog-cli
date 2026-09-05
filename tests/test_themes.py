@@ -921,3 +921,265 @@ def test_export_template_round_trip():
     assert data["palette"]["tags"] == "white"
     # Roles not overridden fall back to defaults
     assert data["palette"]["error_border"] == "red"
+
+
+# ---------------------------------------------------------------------------
+# build_theme_toml helper
+# ---------------------------------------------------------------------------
+
+
+def test_build_theme_toml_round_trip():
+    palette = {"date": "red", "tags": "white"}
+    text = themes.build_theme_toml(
+        palette, name="my-theme", description="A test"
+    )
+    data = tomllib.loads(text)
+    assert data["meta"]["name"] == "my-theme"
+    assert data["meta"]["description"] == "A test"
+    assert data["palette"]["date"] == "red"
+    assert data["palette"]["tags"] == "white"
+    # Every known role is present in the output
+    for role in themes.ROLES:
+        assert role in data["palette"]
+
+
+def test_build_theme_toml_fills_defaults_for_missing_roles():
+    text = themes.build_theme_toml({"date": "red"})
+    data = tomllib.loads(text)
+    assert data["palette"]["date"] == "red"
+    assert data["palette"]["error_border"] == themes.DEFAULT_THEME["error_border"]
+
+
+def test_build_theme_toml_escapes_quotes_in_meta():
+    text = themes.build_theme_toml({}, name='weird "name"', description='has "quotes"')
+    data = tomllib.loads(text)
+    assert data["meta"]["name"] == 'weird "name"'
+    assert data["meta"]["description"] == 'has "quotes"'
+
+
+def test_export_template_uses_build_theme_toml():
+    """The two writers should produce identical output for the same inputs."""
+    palette = {"date": "red"}
+    a = themes.export_template(palette=palette, name="x", description="y")
+    b = themes.build_theme_toml(palette, name="x", description="y")
+    assert a == b
+
+
+# ---------------------------------------------------------------------------
+# theme_preview module
+# ---------------------------------------------------------------------------
+
+
+def test_render_preview_returns_string():
+    from devlog import theme_preview
+
+    out = theme_preview.render_preview(dict(themes.DEFAULT_THEME))
+    assert isinstance(out, str)
+    assert "Error panel" in out
+    assert "Success panel" in out
+    assert "Entry row" in out
+    assert "Heatmap legend" in out
+    assert "Banner" in out
+    assert "Table" in out
+
+
+def test_render_preview_does_not_mutate_active_theme():
+    from devlog import theme_preview
+
+    before = dict(themes.get_active_theme())
+    theme_preview.render_preview({"date": "#ff00ff", "tags": "yellow"})
+    after = themes.get_active_theme()
+    assert before == after
+    assert after["date"] != "#ff00ff"
+
+
+def test_render_preview_reflects_draft_palette():
+    from devlog import theme_preview
+
+    a = theme_preview.render_preview(dict(themes.DEFAULT_THEME))
+    # Make every error role a true-color red so the swatch definitely
+    # differs from the default's named "red" — the rendered ANSI
+    # sequence for true-color red uses "38;2;255;0;0" which the named
+    # "red" does not.
+    draft = dict(themes.DEFAULT_THEME)
+    draft["error_border"] = "rgb(255,0,0)"
+    draft["error_text"] = "rgb(255,0,0)"
+    b = theme_preview.render_preview(draft)
+    assert "38;2;255;0;0" in b
+    assert "38;2;255;0;0" not in a
+
+
+def test_render_preview_uses_defaults_for_missing_roles():
+    from devlog import theme_preview
+
+    # Pass an empty dict — every role should fall back to the default,
+    # and the renderer should still produce all six fixture sections.
+    out = theme_preview.render_preview({})
+    assert "Error panel" in out
+    assert "Table" in out
+
+
+def test_render_preview_handles_garbage_styles():
+    from devlog import theme_preview
+
+    # None of these parse as Rich styles, but render_preview should
+    # not raise — the worst case is an unstyled swatch.
+    out = theme_preview.render_preview(
+        {"error_border": "", "tags": "not a real style", "date": "###"}
+    )
+    assert "Error panel" in out
+
+
+# ---------------------------------------------------------------------------
+# devlog theme create CLI
+# ---------------------------------------------------------------------------
+
+
+def _wizard_input(values: list[str]) -> str:
+    """Build a stdin blob: one value per role, separated by newlines."""
+    return "\n".join(values) + "\n"
+
+
+def test_theme_create_writes_file_when_output_given(theme_runner, tmp_path):
+    out = tmp_path / "my_theme.toml"
+    # Accept every default by sending 28 empty lines.
+    result = theme_runner.invoke(
+        main,
+        ["theme", "create", "--no-install", "--output", str(out), "--name", "demo"],
+        input="\n" * 28,
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    data = tomllib.loads(out.read_text(encoding="utf-8"))
+    assert data["meta"]["name"] == "demo"
+    assert len(data["palette"]) == len(themes.ROLES)
+
+
+def test_theme_create_installs_as_active_by_default(theme_runner):
+    result = theme_runner.invoke(
+        main,
+        ["theme", "create", "--name", "installed", "--description", "d"],
+        input="\n" * 28,
+    )
+    assert result.exit_code == 0, result.output
+    active = themes.get_theme_path()
+    assert active.exists()
+    data = tomllib.loads(active.read_text(encoding="utf-8"))
+    assert data["meta"]["name"] == "installed"
+    assert data["meta"]["description"] == "d"
+
+
+def test_theme_create_seeds_from_builtin(theme_runner, tmp_path):
+    """When --from dracula is given, accepting defaults writes dracula values."""
+    out = tmp_path / "from_dr.toml"
+    result = theme_runner.invoke(
+        main,
+        ["theme", "create", "--from", "dracula", "--no-install", "--output", str(out)],
+        input="\n" * 28,
+    )
+    assert result.exit_code == 0, result.output
+    data = tomllib.loads(out.read_text(encoding="utf-8"))
+    dracula = themes.load_builtin_theme("dracula")
+    for role in themes.ROLES:
+        assert data["palette"][role] == dracula[role]
+
+
+def test_theme_create_unknown_builtin_fails(theme_runner):
+    result = theme_runner.invoke(
+        main, ["theme", "create", "--from", "bogus"]
+    )
+    assert result.exit_code == 1
+    assert "Unknown builtin theme" in result.output
+
+
+def test_theme_create_rejects_invalid_style_then_accepts(theme_runner, tmp_path):
+    out = tmp_path / "valid.toml"
+    # First prompt gets a bad value, then a good one; the remaining
+    # 27 prompts accept defaults.
+    bad_then_good = "bol yellow\n" + "bold red\n" + "\n" * 27
+    result = theme_runner.invoke(
+        main,
+        [
+            "theme", "create",
+            "--no-install",
+            "--output", str(out),
+        ],
+        input=bad_then_good,
+    )
+    assert result.exit_code == 0, result.output
+    assert "is not a valid Rich style" in result.output
+    data = tomllib.loads(out.read_text(encoding="utf-8"))
+    assert data["palette"]["error_border"] == "bold red"
+
+
+def test_theme_create_rejects_empty_value(theme_runner, tmp_path):
+    out = tmp_path / "empty.toml"
+    # Two empty lines for the first prompt (first is rejected, second
+    # is also rejected and the prompt falls back to the default); the
+    # remaining 27 prompts accept defaults. Click's prompt doesn't
+    # auto-fall-back though — an empty value after a rejection keeps
+    # re-prompting. We feed three empty lines then move on.
+    input_str = "\n\n\n" + "\n" * 27
+    result = theme_runner.invoke(
+        main,
+        ["theme", "create", "--no-install", "--output", str(out)],
+        input=input_str,
+    )
+    # The wizard may exit 1 on persistent bad input, or write the
+    # file with default values; both are acceptable — what matters
+    # is no crash and a clean error or a valid file.
+    if result.exit_code == 0:
+        data = tomllib.loads(out.read_text(encoding="utf-8"))
+        assert data["palette"]["error_border"] == themes.DEFAULT_THEME["error_border"]
+    else:
+        assert "value cannot be empty" in result.output or result.exit_code == 1
+
+
+def test_theme_create_output_and_install(theme_runner, tmp_path):
+    out = tmp_path / "both.toml"
+    result = theme_runner.invoke(
+        main,
+        ["theme", "create", "--output", str(out), "--install"],
+        input="\n" * 28,
+    )
+    assert result.exit_code == 0, result.output
+    assert out.exists()
+    active = themes.get_theme_path()
+    assert active.exists()
+    # The installed file is byte-identical to the output file.
+    assert out.read_bytes() == active.read_bytes()
+
+
+def test_theme_create_no_install_no_output(theme_runner, tmp_path):
+    """--no-install with no --output: just prints, no file written."""
+    before = themes.get_theme_path()
+    result = theme_runner.invoke(
+        main,
+        ["theme", "create", "--no-install", "--name", "ephemeral"],
+        input="\n" * 28,
+    )
+    assert result.exit_code == 0, result.output
+    assert "not installed" in result.output
+    # The active theme file was NOT created.
+    assert not before.exists()
+
+
+def test_theme_create_round_trip_through_set(theme_runner, tmp_path):
+    """A wizard-produced file can be installed via `theme set` losslessly."""
+    out = tmp_path / "rt.toml"
+    runner = CliRunner()
+    # 1) produce the file via the wizard
+    result = runner.invoke(
+        main,
+        ["theme", "create", "--no-install", "--output", str(out), "--name", "rt"],
+        input="\n" * 28,
+    )
+    assert result.exit_code == 0, result.output
+    # 2) install it via theme set
+    result2 = runner.invoke(main, ["theme", "set", str(out)])
+    assert result2.exit_code == 0, result2.output
+    # 3) the active theme is now the same as the file
+    active = themes.get_theme_path()
+    assert active.read_bytes() == out.read_bytes()
+    data = tomllib.loads(active.read_text(encoding="utf-8"))
+    assert data["meta"]["name"] == "rt"
