@@ -42,6 +42,25 @@ def theme_runner() -> CliRunner:
     return CliRunner()
 
 
+@pytest.fixture()
+def written_theme(tmp_path, monkeypatch):
+    """Factory: plant a ``theme.toml`` under an isolated DEVLOG_DATA_DIR.
+
+    Returns the tmp directory the file lives in so tests can also
+    write backups, derive a destination path, etc. The autouse
+    ``_clean_theme_cache`` fixture still handles the cache reset.
+    """
+    def _plant(content: str, *, name: str = "theme.toml", dir_name: str = "d") -> Path:
+        d = tmp_path / dir_name
+        d.mkdir(exist_ok=True)
+        (d / name).write_text(content, encoding="utf-8")
+        monkeypatch.setenv("DEVLOG_DATA_DIR", str(d))
+        themes.reset_cache()
+        return d
+
+    return _plant
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -438,26 +457,36 @@ def test_theme_cli_set_warns_on_unknown_roles(theme_runner, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_is_valid_style_accepts_basic_named_colors():
-    assert themes.is_valid_style("red")
-    assert themes.is_valid_style("bold yellow")
-    assert themes.is_valid_style("dim white")
-    assert themes.is_valid_style("#ff8800")
-    assert themes.is_valid_style("color(208)")
-    assert themes.is_valid_style("rgb(255,136,0)")
+@pytest.mark.parametrize(
+    "value",
+    [
+        "red",
+        "bold yellow",
+        "dim white",
+        "#ff8800",
+        "color(208)",
+        "rgb(255,136,0)",
+    ],
+    ids=["named-red", "composite", "dim-white", "hex", "color256", "rgb"],
+)
+def test_is_valid_style_accepts(value):
+    assert themes.is_valid_style(value)
 
 
-def test_is_valid_style_rejects_empty_and_garbage():
-    assert not themes.is_valid_style("")
-    assert not themes.is_valid_style("not a real style name 12345")
-    # Bol yellow with a typo
-    assert not themes.is_valid_style("bol yellow")
-
-
-def test_is_valid_style_rejects_non_strings():
-    assert not themes.is_valid_style(None)
-    assert not themes.is_valid_style(1234)
-    assert not themes.is_valid_style([])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "not a real style name 12345",
+        "bol yellow",
+        None,
+        1234,
+        [],
+    ],
+    ids=["empty", "garbage", "typo", "none", "int", "list"],
+)
+def test_is_valid_style_rejects(value):
+    assert not themes.is_valid_style(value)
 
 
 def test_load_theme_warns_and_falls_back_on_invalid_value(tmp_path, monkeypatch):
@@ -552,34 +581,25 @@ def test_theme_set_check_rejects_invalid_without_installing(theme_runner, tmp_pa
 # ---------------------------------------------------------------------------
 
 
-def test_get_theme_status_default_when_no_file(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "content,predicate",
+    [
+        (None, lambda s: s == "default"),
+        ('[palette]\ndate = "red"\n', lambda s: s == "ok"),
+        ("not valid [[[", lambda s: s.startswith("error:")),
+        (
+            '[palette]\ndate = "bol yellow"\n',
+            lambda s: s.startswith("error:") and "date" in s,
+        ),
+    ],
+    ids=["no-file", "valid", "invalid-toml", "invalid-value"],
+)
+def test_get_theme_status(monkeypatch, tmp_path, content, predicate):
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    assert themes.get_theme_status() == "default"
-
-
-def test_get_theme_status_ok_for_valid_file(monkeypatch, tmp_path):
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "theme.toml").write_text('[palette]\ndate = "red"\n', encoding="utf-8")
-    assert themes.get_theme_status() == "ok"
-
-
-def test_get_theme_status_error_for_invalid_toml(monkeypatch, tmp_path):
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "theme.toml").write_text("not valid [[[", encoding="utf-8")
-    status = themes.get_theme_status()
-    assert status.startswith("error:")
-
-
-def test_get_theme_status_error_for_invalid_value(monkeypatch, tmp_path):
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "theme.toml").write_text(
-        '[palette]\ndate = "bol yellow"\n', encoding="utf-8"
-    )
-    status = themes.get_theme_status()
-    assert status.startswith("error:") and "date" in status
+    if content is not None:
+        (tmp_path / "d").mkdir()
+        (tmp_path / "d" / "theme.toml").write_text(content, encoding="utf-8")
+    assert predicate(themes.get_theme_status())
 
 
 def test_theme_list_includes_status_footer(theme_runner, tmp_path, monkeypatch):
@@ -856,22 +876,19 @@ def test_theme_use_unknown_builtin_fails(theme_runner, tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_validate_source_clean():
-    unknown, invalid = themes.validate_source({"date": "red", "tags": "white"})
-    assert unknown == []
-    assert invalid == []
-
-
-def test_validate_source_unknown_role():
-    unknown, invalid = themes.validate_source({"date": "red", "made_up": "blue"})
-    assert unknown == ["made_up"]
-    assert invalid == []
-
-
-def test_validate_source_invalid_value():
-    unknown, invalid = themes.validate_source({"date": "bol yellow"})
-    assert unknown == []
-    assert invalid == ["date"]
+@pytest.mark.parametrize(
+    "raw,expected_unknown,expected_invalid",
+    [
+        ({"date": "red", "tags": "white"}, [], []),
+        ({"date": "red", "made_up": "blue"}, ["made_up"], []),
+        ({"date": "bol yellow"}, [], ["date"]),
+    ],
+    ids=["clean", "unknown-role", "invalid-value"],
+)
+def test_validate_source(raw, expected_unknown, expected_invalid):
+    unknown, invalid = themes.validate_source(raw)
+    assert unknown == expected_unknown
+    assert invalid == expected_invalid
 
 
 def test_install_theme_file_copies_to_destination(tmp_path, monkeypatch):

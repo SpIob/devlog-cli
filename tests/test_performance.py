@@ -76,6 +76,7 @@ def seeded_journal(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [1000], indirect=True)
 def test_load_entries_1k_is_instant(seeded_journal: Path) -> None:
     """load_entries() must be sub-second on 1k entries (file I/O + parse)."""
@@ -89,6 +90,7 @@ def test_load_entries_1k_is_instant(seeded_journal: Path) -> None:
     )
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [10_000], indirect=True)
 def test_load_entries_10k_acceptable(seeded_journal: Path) -> None:
     """load_entries() must stay well under 15s on 10k entries."""
@@ -107,6 +109,7 @@ def test_load_entries_10k_acceptable(seeded_journal: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [1000], indirect=True)
 def test_list_command_1k_instant(seeded_journal: Path) -> None:
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(seeded_journal)})
@@ -120,6 +123,7 @@ def test_list_command_1k_instant(seeded_journal: Path) -> None:
     )
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [10_000], indirect=True)
 def test_list_command_10k_acceptable(seeded_journal: Path) -> None:
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(seeded_journal)})
@@ -133,6 +137,7 @@ def test_list_command_10k_acceptable(seeded_journal: Path) -> None:
     )
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [1000], indirect=True)
 def test_search_command_1k_instant(seeded_journal: Path) -> None:
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(seeded_journal)})
@@ -147,6 +152,7 @@ def test_search_command_1k_instant(seeded_journal: Path) -> None:
     )
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [10_000], indirect=True)
 def test_search_command_10k_acceptable(seeded_journal: Path) -> None:
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(seeded_journal)})
@@ -160,6 +166,7 @@ def test_search_command_10k_acceptable(seeded_journal: Path) -> None:
     )
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [10_000], indirect=True)
 def test_search_no_match_10k(seeded_journal: Path) -> None:
     """Worst-case substring miss — every entry scanned."""
@@ -178,6 +185,7 @@ def test_search_no_match_10k(seeded_journal: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [1000], indirect=True)
 def test_add_entry_on_1k_acceptable(seeded_journal: Path) -> None:
     """Each `add` rewrites the entire journal — should not balloon with N."""
@@ -189,6 +197,7 @@ def test_add_entry_on_1k_acceptable(seeded_journal: Path) -> None:
     assert elapsed < 5.0, f"`add` on a 1k journal took {elapsed:.3f}s"
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [10_000], indirect=True)
 def test_add_entry_on_10k_acceptable(seeded_journal: Path) -> None:
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(seeded_journal)})
@@ -204,6 +213,7 @@ def test_add_entry_on_10k_acceptable(seeded_journal: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [1000], indirect=True)
 def test_tags_command_1k_instant(seeded_journal: Path) -> None:
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(seeded_journal)})
@@ -216,6 +226,7 @@ def test_tags_command_1k_instant(seeded_journal: Path) -> None:
     )
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [10_000], indirect=True)
 def test_tags_command_10k_acceptable(seeded_journal: Path) -> None:
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(seeded_journal)})
@@ -228,6 +239,7 @@ def test_tags_command_10k_acceptable(seeded_journal: Path) -> None:
     )
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [1000], indirect=True)
 def test_rename_tag_1k(seeded_journal: Path) -> None:
     """rename-tag touches every entry — must scale O(n)."""
@@ -239,6 +251,7 @@ def test_rename_tag_1k(seeded_journal: Path) -> None:
     assert elapsed < 10.0, f"`rename-tag` on 1000 entries took {elapsed:.3f}s"
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [10_000], indirect=True)
 def test_rename_tag_10k(seeded_journal: Path) -> None:
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(seeded_journal)})
@@ -336,6 +349,7 @@ def test_load_scales_linearly(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [10_000], indirect=True)
 def test_find_entry_by_id_10k(seeded_journal: Path) -> None:
     """find_entry_by_id must be O(n) and not degrade to O(n^2)."""
@@ -356,6 +370,7 @@ def test_find_entry_by_id_10k(seeded_journal: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [10_000], indirect=True)
 def test_search_substring_algorithmic(seeded_journal: Path) -> None:
     """Direct call into the search / filter pipeline (no CLI rendering)."""
@@ -368,6 +383,7 @@ def test_search_substring_algorithmic(seeded_journal: Path) -> None:
     assert elapsed < 2.0, f"search filter+sort took {elapsed:.3f}s on 10k entries"
 
 
+@pytest.mark.benchmark
 @pytest.mark.parametrize("seeded_journal", [10_000], indirect=True)
 def test_filter_by_tags_algorithmic(seeded_journal: Path) -> None:
     """`_tagops._filter_by_tags` should be O(n) per filter, not O(n*m)."""
@@ -525,15 +541,7 @@ def test_filter_by_tags_no_per_entry_set_construction() -> None:
         norm_filter = frozenset(t.strip().lower() for t in tags)
         return [e for e in entries if norm_filter.issubset(e.tags)]
 
-    # Run both 5 times, take the median.
-    def median_of(fn, *args):
-        times = []
-        for _ in range(5):
-            t0 = time.perf_counter()
-            fn(*args)
-            times.append(time.perf_counter() - t0)
-        times.sort()
-        return times[2]
+    from tests.conftest import median_of
 
     t_impl = median_of(_tagops._filter_by_tags, entries, ("backend",))
     t_fast = median_of(fast_filter, entries, ("backend",))

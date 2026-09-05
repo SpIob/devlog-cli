@@ -2,7 +2,6 @@
 
 import io
 import os
-import re
 import time
 from datetime import datetime, timezone
 
@@ -12,6 +11,8 @@ from rich.table import Table
 
 from devlog.models import Entry
 from devlog import ui
+
+from tests.conftest import render_to_text, strip_ansi
 
 
 # ---------------------------------------------------------------------------
@@ -28,10 +29,6 @@ def _make_entry(message="hello world", tags=None, iso="2025-05-11T10:22:00Z") ->
     )
 
 
-def _strip_ansi(text: str) -> str:
-    return re.sub(r"\x1b\[[0-9;]*m", "", text)
-
-
 def _capture(fn, *args, **kwargs) -> str:
     """Capture both STDOUT (console) and STDERR (err_console) into a single string."""
     buf = io.StringIO()
@@ -46,7 +43,7 @@ def _capture(fn, *args, **kwargs) -> str:
     finally:
         ui.console = saved_c
         ui.err_console = saved_e
-    return _strip_ansi(buf.getvalue())
+    return strip_ansi(buf.getvalue())
 
 
 # ---------------------------------------------------------------------------
@@ -54,24 +51,19 @@ def _capture(fn, *args, **kwargs) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_print_error_uses_red_x_icon():
-    out = _capture(ui.print_error, "boom")
-    assert "✘" in out
-    assert "boom" in out
-    # Should include the red border style markers
-    assert "Error" in out
-
-
-def test_print_warning_uses_yellow_warning_icon():
-    out = _capture(ui.print_warning, "watch out")
-    assert "⚠" in out
-    assert "watch out" in out
-
-
-def test_print_info_uses_dim_info_icon():
-    out = _capture(ui.print_info, "nothing to see")
-    assert "ℹ" in out
-    assert "nothing to see" in out
+@pytest.mark.parametrize(
+    "fn,icon,msg",
+    [
+        (ui.print_error, "✘", "boom"),
+        (ui.print_warning, "⚠", "watch out"),
+        (ui.print_info, "ℹ", "nothing to see"),
+    ],
+    ids=["error", "warning", "info"],
+)
+def test_print_helper(fn, icon, msg):
+    out = _capture(fn, msg)
+    assert icon in out
+    assert msg in out
 
 
 # ---------------------------------------------------------------------------
@@ -81,13 +73,7 @@ def test_print_info_uses_dim_info_icon():
 
 def test_entry_panel_contains_key_fields():
     entry = _make_entry(message="Fixed auth bug", tags=["backend", "security"])
-    panel = ui.entry_panel(entry)
-
-    # Render the panel via the standard helper but capture into a fresh console.
-    buf = io.StringIO()
-    con = Console(file=buf, no_color=True, width=120)
-    con.print(panel)
-    out = _strip_ansi(buf.getvalue())
+    out = render_to_text(ui.entry_panel(entry))
 
     assert "✔" in out
     assert "Entry added" in out
@@ -100,9 +86,7 @@ def test_entry_panel_contains_key_fields():
 
 def test_entry_panel_without_tags_shows_placeholder():
     entry = _make_entry(message="No tags here", tags=[])
-    buf = io.StringIO()
-    Console(file=buf, no_color=True, width=120).print(ui.entry_panel(entry))
-    out = _strip_ansi(buf.getvalue())
+    out = render_to_text(ui.entry_panel(entry))
     assert "(none)" in out
 
 
@@ -110,9 +94,7 @@ def test_edit_panel_includes_footer_hint():
     """`edit_panel` should show a follow-up hint so the user knows how
     to confirm the change."""
     entry = _make_entry(message="updated")
-    buf = io.StringIO()
-    Console(file=buf, no_color=True, width=120).print(ui.edit_panel(entry))
-    out = _strip_ansi(buf.getvalue())
+    out = render_to_text(ui.edit_panel(entry))
     assert "devlog show" in out
     assert "Entry updated" in out
 
@@ -121,9 +103,7 @@ def test_delete_panel_includes_footer_hint():
     """`delete_panel` should show a follow-up hint so the user knows
     what to do next (verify, or write a replacement)."""
     entry = _make_entry(message="gone")
-    buf = io.StringIO()
-    Console(file=buf, no_color=True, width=120).print(ui.delete_panel(entry))
-    out = _strip_ansi(buf.getvalue())
+    out = render_to_text(ui.delete_panel(entry))
     assert "devlog list" in out
     assert "devlog add" in out
     assert "Entry deleted" in out
@@ -191,10 +171,7 @@ def test_smart_truncate_strips_ansi_unsafe_chars_in_message():
 
 def test_entries_table_renders_columns():
     entries = [_make_entry("hello", ["tag1"])]
-    table = ui.entries_table(entries, total=1)
-    buf = io.StringIO()
-    Console(file=buf, no_color=True, width=120).print(table)
-    out = _strip_ansi(buf.getvalue())
+    out = render_to_text(ui.entries_table(entries, total=1))
     assert "ID" in out
     assert "Date" in out
     assert "Tags" in out
@@ -205,10 +182,7 @@ def test_entries_table_renders_columns():
 def test_entries_table_truncates_long_message_without_query():
     long_msg = "x" * 200
     entries = [_make_entry(long_msg)]
-    table = ui.entries_table(entries, total=1)
-    buf = io.StringIO()
-    Console(file=buf, no_color=True, width=120).print(table)
-    out = _strip_ansi(buf.getvalue())
+    out = render_to_text(ui.entries_table(entries, total=1))
     # Truncated form ends with …
     assert "…" in out
     # Should NOT contain the full 200-char message
@@ -219,11 +193,9 @@ def test_entries_table_with_highlight_smart_truncates():
     long_msg = "y" * 200 + "needle" + "z" * 200
     entries = [_make_entry(long_msg)]
     table = ui.entries_table(entries, total=1, highlight_query="needle")
-    buf = io.StringIO()
     # Capture full ANSI so we can verify the bold+yellow styling was applied
     # to the matched word — not the literal markup tags (Rich consumes them).
-    Console(file=buf, no_color=False, width=120, force_terminal=True).print(table)
-    out = buf.getvalue()
+    out = render_to_text(table, color=True, force_terminal=True)
 
     # The match must be present in the visible cell text.
     assert "needle" in out
@@ -237,12 +209,11 @@ def test_entries_table_with_highlight_smart_truncates():
 
 def test_entries_table_title_and_subtitle():
     entries = [_make_entry("hi")]
-    table = ui.entries_table(
-        entries, total=1, title="Journal · 1 entry", subtitle='Query: "hi"'
+    out = render_to_text(
+        ui.entries_table(
+            entries, total=1, title="Journal · 1 entry", subtitle='Query: "hi"'
+        )
     )
-    buf = io.StringIO()
-    Console(file=buf, no_color=True, width=120).print(table)
-    out = _strip_ansi(buf.getvalue())
     assert "Journal" in out
     assert "Query" in out
 
@@ -303,7 +274,7 @@ def test_short_id_is_eight_chars():
 
 
 def test_format_dt_human_readable():
-    out = ui._format_dt("2025-05-11T10:22:00Z")
+    out = ui.format_dt("2025-05-11T10:22:00Z")
     assert out == "2025-05-11 10:22 UTC"
 
 
@@ -326,10 +297,10 @@ def test_pluralize_special_case_for_entry():
 
 
 def test_plural_noun():
-    """_plural_noun returns just the noun, not the count prefix."""
-    assert ui._plural_noun(0, "entry") == "entries"
-    assert ui._plural_noun(1, "entry") == "entry"
-    assert ui._plural_noun(2, "entry") == "entries"
+    """plural_noun returns just the noun, not the count prefix."""
+    assert ui.plural_noun(0, "entry") == "entries"
+    assert ui.plural_noun(1, "entry") == "entry"
+    assert ui.plural_noun(2, "entry") == "entries"
 
 
 def test_plural_s():
@@ -376,7 +347,7 @@ def test_no_off_by_one_plural_in_captured_outputs():
         ):
             result = runner.invoke(cli_mod.main, argv)
             assert result.exit_code == 0
-            outputs.append(_strip_ansi(result.output))
+            outputs.append(strip_ansi(result.output))
 
         # Common mistakes we want to catch. "1 entries", "2 entry",
         # "0 entry" are the well-known English off-by-one errors.
@@ -432,27 +403,17 @@ def test_export_progress_is_rich_progress():
 
 
 def test_version_banner_contains_version_string():
-    buf = io.StringIO()
-    saved = ui.console
-    ui.console = Console(file=buf, no_color=True, width=120)
-    try:
-        ui.version_banner()
-    finally:
-        ui.console = saved
-    out = _strip_ansi(buf.getvalue())
+    from tests.conftest import capture_console
+
+    out = capture_console(ui.version_banner)
     assert "devlog, version" in out
     assert ui.VERSION in out
 
 
 def test_root_banner_lists_all_commands():
-    buf = io.StringIO()
-    saved = ui.console
-    ui.console = Console(file=buf, no_color=True, width=120)
-    try:
-        ui.root_banner()
-    finally:
-        ui.console = saved
-    out = _strip_ansi(buf.getvalue())
+    from tests.conftest import capture_console
+
+    out = capture_console(ui.root_banner)
     for cmd in (
         "add",
         "show",
@@ -485,14 +446,9 @@ def test_root_banner_lists_all_commands():
 def test_root_banner_includes_version():
     """The root banner must include the version so new users can see it
     without running ``--version``."""
-    buf = io.StringIO()
-    saved = ui.console
-    ui.console = Console(file=buf, no_color=True, width=120)
-    try:
-        ui.root_banner()
-    finally:
-        ui.console = saved
-    out = _strip_ansi(buf.getvalue())
+    from tests.conftest import capture_console
+
+    out = capture_console(ui.root_banner)
     # The first line carries the version ("devlog  ·  v1.5.0  ·  ...").
     first_line = next(l for l in out.splitlines() if l.strip())
     assert f"v{ui.VERSION}" in first_line
@@ -553,7 +509,7 @@ def test_ui_uses_custom_theme(monkeypatch):
         assert "themed" in out
         assert "x" in out
         # Strip ANSI to verify plain text is intact (no markup leak)
-        plain = _strip_ansi(out)
+        plain = strip_ansi(out)
         assert "Entry added" in plain
         assert "themed" in plain
     finally:
@@ -564,10 +520,7 @@ def test_theme_table_renders_all_roles():
     """theme_table must include every key in ROLES."""
     from devlog import themes
 
-    table = ui.theme_table()
-    buf = io.StringIO()
-    Console(file=buf, no_color=True, width=120).print(table)
-    out = _strip_ansi(buf.getvalue())
+    out = render_to_text(ui.theme_table())
     for role in themes.ROLES:
         assert role in out, f"theme_table is missing role: {role}"
 
@@ -577,16 +530,19 @@ def test_theme_table_renders_all_roles():
 # ---------------------------------------------------------------------------
 
 
-def test_success_line_includes_check_icon():
-    line = ui.success_line("Did the thing.")
-    assert "✔" in line.plain
-    assert "Did the thing." in line.plain
-
-
-def test_destructive_line_includes_cross_icon():
-    line = ui.destructive_line("Removed the thing.")
-    assert "✘" in line.plain
-    assert "Removed the thing." in line.plain
+@pytest.mark.parametrize(
+    "fn,needle",
+    [
+        (ui.success_line, "✔"),
+        (ui.destructive_line, "✘"),
+    ],
+    ids=["success", "destructive"],
+)
+def test_icon_line_includes_icon(fn, needle):
+    msg = "Did the thing."
+    line = fn(msg)
+    assert needle in line.plain
+    assert msg in line.plain
 
 
 def test_dry_run_line_starts_with_dry_run():

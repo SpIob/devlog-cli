@@ -19,7 +19,6 @@ in the middle of an id is not.
 from __future__ import annotations
 
 import io
-import re
 import shutil
 from typing import Iterator
 
@@ -28,6 +27,8 @@ from rich.console import Console
 
 from devlog import ui
 from devlog.models import Entry
+
+from tests.conftest import render_to_text, strip_ansi
 
 
 # ---------------------------------------------------------------------------
@@ -50,16 +51,10 @@ def _make_entry(
     )
 
 
-def _strip_ansi(text: str) -> str:
-    return re.sub(r"\x1b\[[0-9;]*m", "", text)
-
-
 def _render(entries, total: int = 1, *, query: str = "") -> str:
     """Build the entries table and return its rendered plain text."""
     table = ui.entries_table(entries, total=total, highlight_query=query)
-    buf = io.StringIO()
-    Console(file=buf, no_color=True, width=ui.console.width).print(table)
-    return _strip_ansi(buf.getvalue())
+    return render_to_text(table, width=ui.console.width)
 
 
 @pytest.fixture()
@@ -111,7 +106,7 @@ def test_date_display_len_matches_actual_format():
     A previous off-by-one (19 vs 20) caused the date column to clip the
     final ``C`` of ``UTC`` at narrow widths.
     """
-    rendered = ui._format_dt("2025-05-11T10:22:00Z")
+    rendered = ui.format_dt("2025-05-11T10:22:00Z")
     assert len(rendered) == ui.DATE_DISPLAY_LEN
     assert rendered == "2025-05-11 10:22 UTC"
 
@@ -194,20 +189,21 @@ def test_search_match_visible_in_narrow_column(width, monkeypatch, fixed_termina
     assert "needle" in rendered, f"search match 'needle' missing:\n{rendered}"
 
 
-def test_ellipsis_picks_unicode_on_utf8():
-    """``_ellipsis_for_encoding`` returns ``…`` for UTF-8 (the modern default)."""
-    assert ui._ellipsis_for_encoding("utf-8") == "\u2026"
-    assert ui._ellipsis_for_encoding("UTF-8") == "\u2026"
-    assert ui._ellipsis_for_encoding("utf-16") == "\u2026"
-
-
-def test_ellipsis_picks_dots_on_legacy_cp1252():
-    """``_ellipsis_for_encoding`` returns ``...`` on legacy encodings where
-    ``…`` would render as ``?`` (e.g. Windows cp1252 console hosts)."""
-    assert ui._ellipsis_for_encoding("cp1252") == "..."
-    assert ui._ellipsis_for_encoding("ascii") == "..."
-    assert ui._ellipsis_for_encoding(None) == "..."
-    assert ui._ellipsis_for_encoding("") == "..."
+@pytest.mark.parametrize(
+    "encoding,expected",
+    [
+        ("utf-8", "\u2026"),
+        ("UTF-8", "\u2026"),
+        ("utf-16", "\u2026"),
+        ("cp1252", "..."),
+        ("ascii", "..."),
+        (None, "..."),
+        ("", "..."),
+    ],
+    ids=["utf8", "utf8-upper", "utf16", "cp1252", "ascii", "none", "empty"],
+)
+def test_ellipsis_picks(encoding, expected):
+    assert ui._ellipsis_for_encoding(encoding) == expected
 
 
 def test_left_truncate_uses_ellipsis_helper(monkeypatch):
@@ -244,30 +240,29 @@ def test_search_match_is_ansi_styled(monkeypatch, fixed_terminal_width):
 # ---------------------------------------------------------------------------
 
 
-def test_column_widths_sum_fits_terminal(monkeypatch, fixed_terminal_width):
+@pytest.mark.parametrize("width", [80, 100, 120, 140, 160])
+def test_column_widths_fit_terminal(monkeypatch, fixed_terminal_width, width):
     """``_column_widths`` must return widths that fit in the terminal."""
-    for width in (80, 100, 120, 140, 160):
-        ui.console = Console(no_color=True, width=width)
-        widths = ui._column_widths()
-        # Sum of (content width + 2 padding) plus 5 box borders.
-        total = sum(widths.values()) + 4 * ui._COL_PADDING + 5
-        assert total <= width, (
-            f"column widths {widths} require {total} chars but "
-            f"terminal is {width} wide"
-        )
+    ui.console = Console(no_color=True, width=width)
+    widths = ui._column_widths()
+    total = sum(widths.values()) + 4 * ui._COL_PADDING + 5
+    assert total <= width, (
+        f"column widths {widths} require {total} chars but "
+        f"terminal is {width} wide"
+    )
 
 
-def test_column_widths_preserve_id_and_date(monkeypatch, fixed_terminal_width):
+@pytest.mark.parametrize("width", [80, 100, 120, 140, 160])
+def test_column_widths_preserve_id_and_date(monkeypatch, fixed_terminal_width, width):
     """ID and date widths must always equal their full display lengths."""
-    for width in (80, 100, 120, 140, 160):
-        ui.console = Console(no_color=True, width=width)
-        widths = ui._column_widths()
-        assert widths["id"] == ui.ID_DISPLAY_LEN, (
-            f"id width clipped to {widths['id']} at terminal width {width}"
-        )
-        assert widths["date"] == ui.DATE_DISPLAY_LEN, (
-            f"date width clipped to {widths['date']} at terminal width {width}"
-        )
+    ui.console = Console(no_color=True, width=width)
+    widths = ui._column_widths()
+    assert widths["id"] == ui.ID_DISPLAY_LEN, (
+        f"id width clipped to {widths['id']} at terminal width {width}"
+    )
+    assert widths["date"] == ui.DATE_DISPLAY_LEN, (
+        f"date width clipped to {widths['date']} at terminal width {width}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +281,7 @@ def test_stats_panel_renders_all_sections():
     )
     buf = io.StringIO()
     Console(file=buf, no_color=True, width=120).print(panel)
-    out = _strip_ansi(buf.getvalue())
+    out = strip_ansi(buf.getvalue())
     for marker in (
         "Total",
         "First",
@@ -350,7 +345,7 @@ def test_stats_panel_anchors_scale_labels_to_sparkline_width():
     )
     buf = io.StringIO()
     Console(file=buf, no_color=True, width=120).print(panel)
-    out = _strip_ansi(buf.getvalue())
+    out = strip_ansi(buf.getvalue())
     # Both labels must appear in the panel; the render itself is
     # left to Rich but the values must survive end-to-end.
     assert "0" in out
@@ -376,7 +371,7 @@ def test_repair_panel_uses_repair_icon():
     )
     buf = io.StringIO()
     Console(file=buf, no_color=True, width=120).print(panel)
-    out = _strip_ansi(buf.getvalue())
+    out = strip_ansi(buf.getvalue())
     assert "⚒" in out
     assert "✎" not in out
     assert "Repair" in out
@@ -387,39 +382,24 @@ def test_repair_panel_uses_repair_icon():
 # ---------------------------------------------------------------------------
 
 
-def test_version_banner_has_no_rule():
-    """The version banner must not emit a trailing horizontal rule."""
-    buf = io.StringIO()
-    saved = ui.console
-    ui.console = Console(file=buf, no_color=True, width=120)
-    try:
-        ui.version_banner()
-    finally:
-        ui.console = saved
-    out = _strip_ansi(buf.getvalue())
-    assert "devlog, version" in out
-    # A horizontal rule is a long run of ``─`` with no text. The
-    # version line has text, so we look for the absence of an
-    # all-dashes line.
+@pytest.mark.parametrize(
+    "fn,extra_assert",
+    [
+        (ui.version_banner, lambda out: "devlog, version" in out),
+        (ui.root_banner, lambda out: True),
+    ],
+    ids=["version", "root"],
+)
+def test_banner_has_no_rule(fn, extra_assert):
+    """Both the version and root help banners must not emit a trailing
+    horizontal rule (a long run of ``─`` with no text)."""
+    from tests.conftest import capture_console
+
+    out = capture_console(fn)
+    assert extra_assert(out)
     for line in out.splitlines():
         assert not (len(line) >= 40 and set(line) == {"─"}), (
-            f"version banner still emits a decorative rule: {line!r}"
-        )
-
-
-def test_root_banner_has_no_rule():
-    """The root help banner must not emit a trailing horizontal rule."""
-    buf = io.StringIO()
-    saved = ui.console
-    ui.console = Console(file=buf, no_color=True, width=120)
-    try:
-        ui.root_banner()
-    finally:
-        ui.console = saved
-    out = _strip_ansi(buf.getvalue())
-    for line in out.splitlines():
-        assert not (len(line) >= 40 and set(line) == {"─"}), (
-            f"root banner still emits a decorative rule: {line!r}"
+            f"banner still emits a decorative rule: {line!r}"
         )
 
 
@@ -428,16 +408,19 @@ def test_root_banner_has_no_rule():
 # ---------------------------------------------------------------------------
 
 
-def test_is_narrow_terminal_true_below_minimum():
-    """A 60-col terminal is narrower than the 80-col minimum."""
-    ui.console = Console(no_color=True, width=60, force_terminal=True)
-    assert ui._is_narrow_terminal() is True
-
-
-def test_is_narrow_terminal_false_at_minimum():
-    """80 cols is the threshold; we drop Tags only when strictly narrower."""
-    ui.console = Console(no_color=True, width=ui.MIN_TERMINAL_WIDTH, force_terminal=True)
-    assert ui._is_narrow_terminal() is False
+@pytest.mark.parametrize(
+    "width,expected",
+    [
+        (60, True),
+        (None, False),  # None → MIN_TERMINAL_WIDTH
+    ],
+    ids=["below-min", "at-min"],
+)
+def test_is_narrow_terminal(width, expected):
+    """A terminal narrower than ``MIN_TERMINAL_WIDTH`` is "narrow"."""
+    target = width if width is not None else ui.MIN_TERMINAL_WIDTH
+    ui.console = Console(no_color=True, width=target, force_terminal=True)
+    assert ui._is_narrow_terminal() is expected
 
 
 def test_narrow_terminal_drops_tags_column(monkeypatch, fixed_terminal_width):
@@ -484,7 +467,7 @@ def test_narrow_terminal_warning_fires(monkeypatch, fixed_terminal_width):
     try:
         e = _make_entry()
         ui.entries_table([e], total=1)
-        err_out = _strip_ansi(err_buf.getvalue())
+        err_out = strip_ansi(err_buf.getvalue())
         assert "narrower than" in err_out
         assert "Tags" in err_out
     finally:

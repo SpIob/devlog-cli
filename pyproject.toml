@@ -23,3 +23,9 @@ include = ["devlog*"]
 
 [tool.setuptools]
 package-dir = {"" = "."}
+
+[tool.pytest.ini_options]
+markers = [
+    "benchmark: wall-clock performance benchmarks; skipped by default, run with `pytest -m benchmark`",
+]
+addopts = "-m 'not benchmark'"

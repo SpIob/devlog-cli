@@ -10,27 +10,7 @@ from devlog.cli import main
 from devlog.models import Entry
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def runner(tmp_path):
-    return CliRunner(env={"DEVLOG_DATA_DIR": str(tmp_path)})
-
-
-@pytest.fixture()
-def data_dir(monkeypatch, tmp_path):
-    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
-    return tmp_path
-
-
-def _write_raw(tmp_path, payload):
-    """Overwrite the entries.json with an arbitrary payload (possibly broken)."""
-    path = tmp_path / "entries.json"
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    return path
+# `runner`, `data_dir`, and `write_entries` come from tests/conftest.py.
 
 
 # ---------------------------------------------------------------------------
@@ -78,51 +58,35 @@ def test_validate_item_not_dict():
     assert issues[0].index == 0
 
 
-def test_validate_missing_id():
-    payload = {"entries": [{"message": "x", "tags": [], "created_at": "2025-01-01T00:00:00Z"}]}
-    issues = storage.validate_entries(payload)
-    assert any(i.kind == "missing_field" and i.field == "id" for i in issues)
-
-
-def test_validate_missing_message():
-    payload = {
-        "entries": [
-            {"id": "a", "tags": [], "created_at": "2025-01-01T00:00:00Z"}
-        ]
+@pytest.mark.parametrize(
+    "field,bad_value,expected_kind",
+    [
+        ("id", None, "missing_field"),
+        ("message", None, "missing_field"),
+        ("created_at", "not-a-date", "bad_timestamp"),
+        ("updated_at", "garbage", "bad_timestamp"),
+    ],
+    ids=["missing-id", "missing-message", "bad-created-at", "bad-updated-at"],
+)
+def test_validate_field_problems(field, bad_value, expected_kind):
+    """Per-field validation: each row of this table drives a small
+    payload past the validator and asserts the expected issue kind+field.
+    """
+    base = {
+        "id": "a",
+        "message": "x",
+        "tags": [],
+        "created_at": "2025-01-01T00:00:00Z",
+        "updated_at": None,
     }
-    issues = storage.validate_entries(payload)
-    assert any(i.kind == "missing_field" and i.field == "message" for i in issues)
-
-
-def test_validate_bad_timestamp():
-    payload = {
-        "entries": [
-            {
-                "id": "a",
-                "message": "x",
-                "tags": [],
-                "created_at": "not-a-date",
-            }
-        ]
-    }
-    issues = storage.validate_entries(payload)
-    assert any(i.kind == "bad_timestamp" and i.field == "created_at" for i in issues)
-
-
-def test_validate_bad_updated_at():
-    payload = {
-        "entries": [
-            {
-                "id": "a",
-                "message": "x",
-                "tags": [],
-                "created_at": "2025-01-01T00:00:00Z",
-                "updated_at": "garbage",
-            }
-        ]
-    }
-    issues = storage.validate_entries(payload)
-    assert any(i.kind == "bad_timestamp" and i.field == "updated_at" for i in issues)
+    if bad_value is None:
+        base.pop(field, None)
+    else:
+        base[field] = bad_value
+    issues = storage.validate_entries({"entries": [base]})
+    assert any(
+        i.kind == expected_kind and i.field == field for i in issues
+    ), f"expected {expected_kind} on field {field!r}; got {[i.kind for i in issues]}"
 
 
 def test_validate_bad_tag():
@@ -169,9 +133,8 @@ def test_validate_duplicate_id():
 # ---------------------------------------------------------------------------
 
 
-def test_repair_clean_store_is_a_noop(runner, tmp_path):
-    _write_raw(
-        tmp_path,
+def test_repair_clean_store_is_a_noop(runner, tmp_path, write_entries):
+    write_entries(tmp_path,
         {
             "entries": [
                 {
@@ -191,15 +154,14 @@ def test_repair_clean_store_is_a_noop(runner, tmp_path):
     assert len(data["entries"]) == 1
 
 
-def test_repair_strips_invalid_tags_keeps_entry(runner, tmp_path):
+def test_repair_strips_invalid_tags_keeps_entry(runner, tmp_path, write_entries):
     """An entry with one bad tag should keep the entry and lose the tag.
 
     Previously the whole entry was dropped — that was heavy-handed
     for the common case of a hand-edited ``entries.json`` with a
     single typo. Repair now scrubs bad tags and retains the row.
     """
-    _write_raw(
-        tmp_path,
+    write_entries(tmp_path,
         {
             "entries": [
                 {
@@ -235,10 +197,9 @@ def test_repair_strips_invalid_tags_keeps_entry(runner, tmp_path):
     assert "stripped 1 bad tag" in result.output
 
 
-def test_repair_drops_entries_with_bad_timestamp(runner, tmp_path):
+def test_repair_drops_entries_with_bad_timestamp(runner, tmp_path, write_entries):
     """A bad ``created_at`` is unrecoverable so the entry is dropped."""
-    _write_raw(
-        tmp_path,
+    write_entries(tmp_path,
         {
             "entries": [
                 {
@@ -262,9 +223,8 @@ def test_repair_drops_entries_with_bad_timestamp(runner, tmp_path):
     assert {e["id"] for e in data["entries"]} == {"good"}
 
 
-def test_repair_dedupes_duplicate_ids(runner, tmp_path):
-    _write_raw(
-        tmp_path,
+def test_repair_dedupes_duplicate_ids(runner, tmp_path, write_entries):
+    write_entries(tmp_path,
         {
             "entries": [
                 {
@@ -290,9 +250,8 @@ def test_repair_dedupes_duplicate_ids(runner, tmp_path):
     assert data["entries"][0]["message"] == "first"
 
 
-def test_repair_dry_run_does_not_write(runner, tmp_path):
-    _write_raw(
-        tmp_path,
+def test_repair_dry_run_does_not_write(runner, tmp_path, write_entries):
+    write_entries(tmp_path,
         {
             "entries": [
                 {
@@ -312,11 +271,10 @@ def test_repair_dry_run_does_not_write(runner, tmp_path):
     assert before == after
 
 
-def test_repair_writes_backup_before_writing(runner, tmp_path):
+def test_repair_writes_backup_before_writing(runner, tmp_path, write_entries):
     """A backup is written whenever repair touches the file — even if
     the only change is a tag strip (no entry drop)."""
-    _write_raw(
-        tmp_path,
+    write_entries(tmp_path,
         {
             "entries": [
                 {
@@ -340,10 +298,9 @@ def test_repair_writes_backup_before_writing(runner, tmp_path):
     assert "Backup written to" in result.output
 
 
-def test_repair_drops_unrecoverable_writes_backup(runner, tmp_path):
+def test_repair_drops_unrecoverable_writes_backup(runner, tmp_path, write_entries):
     """A drop counts as a write too, so a backup is still produced."""
-    _write_raw(
-        tmp_path,
+    write_entries(tmp_path,
         {
             "entries": [
                 {
@@ -361,9 +318,8 @@ def test_repair_drops_unrecoverable_writes_backup(runner, tmp_path):
     assert len(backups) == 1
 
 
-def test_repair_no_backup_flag_skips_backup(runner, tmp_path):
-    _write_raw(
-        tmp_path,
+def test_repair_no_backup_flag_skips_backup(runner, tmp_path, write_entries):
+    write_entries(tmp_path,
         {
             "entries": [
                 {
@@ -453,9 +409,8 @@ def test_repair_quiet_no_issues(runner, tmp_path):
     assert result.output.strip() == ""
 
 
-def test_repair_quiet_with_issues(runner, tmp_path):
-    _write_raw(
-        tmp_path,
+def test_repair_quiet_with_issues(runner, tmp_path, write_entries):
+    write_entries(tmp_path,
         {
             "entries": [
                 {
