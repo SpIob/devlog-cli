@@ -135,7 +135,7 @@ def test_tag_delete_removes_from_all_matching(runner, data_dir):
     _seed("66666666-aaaa-bbbb-cccc-666666666666", "be1", _utc_iso(now), ["backend"])
     _seed("77777777-aaaa-bbbb-cccc-777777777777", "be2", _utc_iso(now), ["backend", "extra"])
     _seed("88888888-aaaa-bbbb-cccc-888888888888", "fe", _utc_iso(now), ["frontend"])
-    result = runner.invoke(main, ["tag", "backend", "--delete"])
+    result = runner.invoke(main, ["tag", "backend", "--delete", "-y"])
     assert result.exit_code == 0
     # The first two entries must no longer have `backend`; `fe` is untouched.
     entries = storage.load_entries()
@@ -150,7 +150,7 @@ def test_tag_delete_removes_from_all_matching(runner, data_dir):
 def test_tag_delete_sets_updated_at(runner, data_dir):
     now = datetime.now(tz=timezone.utc)
     _seed("99999999-aaaa-bbbb-cccc-999999999999", "x", _utc_iso(now), ["x"])
-    result = runner.invoke(main, ["tag", "x", "--delete"])
+    result = runner.invoke(main, ["tag", "x", "--delete", "-y"])
     assert result.exit_code == 0
     entries = storage.load_entries()
     assert entries[0].updated_at is not None
@@ -160,7 +160,7 @@ def test_tag_delete_sets_updated_at(runner, data_dir):
 def test_tag_delete_no_op_when_absent(runner, data_dir):
     now = datetime.now(tz=timezone.utc)
     _seed("aaaaaaaa-aaaa-bbbb-cccc-aaaaaaaaaaaa", "x", _utc_iso(now), ["y"])
-    result = runner.invoke(main, ["tag", "z", "--delete"])
+    result = runner.invoke(main, ["tag", "z", "--delete", "-y"])
     assert result.exit_code == 0
     assert 'No entries with tag "z"' in result.output
 
@@ -192,13 +192,48 @@ def test_tag_delete_dry_run_with_quiet_is_silent(runner, data_dir):
 def test_tag_delete_quiet(runner, data_dir):
     now = datetime.now(tz=timezone.utc)
     _seed("cccccccc-aaaa-bbbb-cccc-cccccccccccc", "x", _utc_iso(now), ["x"])
-    result = runner.invoke(main, ["tag", "x", "--delete", "--quiet"])
+    result = runner.invoke(main, ["tag", "x", "--delete", "-y", "--quiet"])
     assert result.exit_code == 0
     # No success line under --quiet.
     assert "Removed" not in result.output
     # Tag is still removed.
     entries = storage.load_entries()
     assert "x" not in entries[0].tags
+
+
+def test_tag_delete_quiet_skips_prompt(runner, data_dir):
+    """`--quiet` with `--delete` must skip the confirmation prompt entirely.
+
+    Otherwise piped/scripted usage would hang on `click.confirm`.
+    """
+    now = datetime.now(tz=timezone.utc)
+    _seed("eeeeeeee-aaaa-bbbb-cccc-eeeeeeeeeeee", "x", _utc_iso(now), ["x"])
+    result = runner.invoke(main, ["tag", "x", "--delete", "--quiet"])
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    assert "x" not in entries[0].tags
+
+
+def test_tag_delete_yes_skips_prompt(runner, data_dir):
+    """`--yes` must skip the confirmation prompt and apply the change."""
+    now = datetime.now(tz=timezone.utc)
+    _seed("ffffffff-aaaa-bbbb-cccc-ffffffffffff", "x", _utc_iso(now), ["x"])
+    result = runner.invoke(main, ["tag", "x", "--delete", "--yes"])
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    assert "x" not in entries[0].tags
+
+
+def test_tag_delete_aborted_on_no(runner, data_dir):
+    """Without `-y`, answering 'n' to the confirm prompt must abort."""
+    now = datetime.now(tz=timezone.utc)
+    _seed("abcdefab-aaaa-bbbb-cccc-abcdefabcdef", "x", _utc_iso(now), ["x"])
+    result = runner.invoke(main, ["tag", "x", "--delete"], input="n\n")
+    assert result.exit_code == 0
+    assert "Aborted" in result.output
+    # Tag must still be present.
+    entries = storage.load_entries()
+    assert "x" in entries[0].tags
 
 
 def test_tag_delete_invalid_name(runner, data_dir):

@@ -40,7 +40,7 @@ _devlog_completion() {{
         edit|delete|show) COMPREPLY=($(compgen -W "$(devlog list --quiet 2>/dev/null | python3 -c 'import sys,json
 for line in sys.stdin: print(json.loads(line)["id"][:8])')" -- "${{cur}}")) ;;
         list|search|tail|export) COMPREPLY=($(compgen -W "--tag --limit --all --quiet --since --until --format --output" -- "${{cur}}")) ;;
-        tag) COMPREPLY=($(compgen -W "--delete --dry-run --limit --all --quiet" -- "${{cur}}")) ;;
+        tag) COMPREPLY=($(compgen -W "--delete --yes --dry-run --limit --all --quiet" -- "${{cur}}")) ;;
         theme) COMPREPLY=($(compgen -W "list show set path reset edit diff export use builtins create" -- "${{cur}}")) ;;
     esac
 }}

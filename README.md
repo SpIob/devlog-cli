@@ -13,7 +13,7 @@ $ devlog add "Rewrote auth middleware to use JWT refresh tokens" -t backend -t s
 │ Tags  : backend, security                                                                        │
 │ Note  : Rewrote auth middleware to use JWT refresh tokens                                        │
 │                                                                                                  │
-│ Run `devlog list` to see all entries.                                                            │
+│ Use `devlog show a1b2c3d4` to view it again, or `devlog edit a1b2c3d4` to amend it.             │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 $ devlog list
@@ -332,6 +332,7 @@ devlog delete ID [OPTIONS]
 | `ID` | — | string | Yes | — | The 8-char short id, the full UUID, or a unique prefix. |
 | `--yes` | `-y` | flag | No | False | Skip the confirmation prompt. |
 | `--quiet` | `-q` | flag | No | False | Suppress the success panel. |
+| `--ignore-missing` | — | flag | No | False | Exit 0 (not 1) when the given ID does not exist. Useful in scripts where `delete` should be idempotent. |
 
 **Notes:**
 
@@ -341,9 +342,10 @@ devlog delete ID [OPTIONS]
 **Examples:**
 
 ```bash
-devlog delete a1b2c3d4       # confirm interactively
-devlog delete a1b2c3d4 -y    # skip prompt
-devlog delete a1b2 -y        # delete by unique prefix
+devlog delete a1b2c3d4              # confirm interactively
+devlog delete a1b2c3d4 -y           # skip prompt
+devlog delete a1b2 -y               # delete by unique prefix
+devlog delete a1b2c3d4 -y --ignore-missing   # idempotent: no error if absent
 ```
 
 ---
@@ -389,16 +391,31 @@ devlog theme SUBCOMMAND
 
 | Subcommand | Description |
 |------------|-------------|
-| `devlog theme list` | Print every role and its current style as a two-column table. |
+| `devlog theme list` | Print every role and its current style as a two-column table (with section grouping and preview swatches by default). |
 | `devlog theme show [ROLE]` | Print the value of a single role, or dump a starter `theme.toml` (all roles commented out) to STDOUT. |
-| `devlog theme set PATH` | Validate and install a theme file as the active theme. Unknown roles are dropped with a warning. |
+| `devlog theme set PATH` | Validate and install a theme file as the active theme. Unknown roles are dropped with a warning. Add `--check` to validate without installing. |
+| `devlog theme use NAME` | Install a bundled theme by name (e.g. `devlog theme use dracula`). Use `devlog theme use default` to reset to the built-in defaults. |
+| `devlog theme builtins` | List all bundled theme names with their short description. |
+| `devlog theme reset` | Remove the active theme file and fall back to the defaults. Prompts for confirmation. |
+| `devlog theme edit` | Open the active theme file in `$VISUAL`/`$EDITOR`. Creates a starter template if no file exists yet. |
+| `devlog theme create` | Interactively walk through every role, preview the palette, and install it as the active theme (or write to `--output PATH`). |
+| `devlog theme diff` | Show the active theme's overrides relative to the built-in defaults. With `--default`, inverts to show roles that still match the defaults. |
+| `devlog theme export` | Write the active palette as a complete, uncommented `theme.toml` to `--output PATH` or `--stdout`. |
 | `devlog theme path` | Print the absolute path to the active theme file. |
+
+**Notes:**
+
+- `theme list` accepts `--flat` (disable section grouping) and `--no-preview` (hide the preview swatch column).
+- `theme set` accepts `--check` to validate a theme file without installing it (exits 1 on any error).
+- `theme create` accepts `--from BUNDLED_NAME` to seed values from a built-in theme, `--name`/`--description` for `[meta]`, `--output PATH` to write to a file instead of installing, and `--install`/`--no-install` to control installation explicitly.
+- `theme export` requires exactly one of `--stdout` or `--output PATH`.
 
 **Examples:**
 
 ```bash
-# See every color role
+# See every color role (grouped, with preview swatches)
 devlog theme list
+devlog theme list --flat --no-preview   # compact, single column
 
 # Read a single role's value
 devlog theme show date
@@ -408,17 +425,32 @@ devlog theme show date
 devlog theme show > ~/my-theme.toml
 $EDITOR ~/my-theme.toml   # uncomment and tweak the roles you want to change
 devlog theme set ~/my-theme.toml
+devlog theme set ~/my-theme.toml --check   # validate only, don't install
+
+# Try a bundled theme
+devlog theme builtins
+devlog theme use dracula
+devlog theme use default                   # reset to built-in defaults
 
 # Find the active theme path (useful for `ln -s` workflows)
 devlog theme path
 # → /Users/you/.devlog/theme.toml
+
+# Edit the active theme in your $EDITOR
+devlog theme edit
+
+# Build a new theme interactively
+devlog theme create --from nord --name "My Nord Variant"
+devlog theme create --output ~/my-theme.toml --no-install
+
+# Audit your overrides
+devlog theme diff          # show only roles that differ from defaults
+devlog theme diff --default    # show only roles that still match defaults
+
+# Export the active palette
+devlog theme export --output ~/devlog-palette.toml
+devlog theme export --stdout > ~/devlog-palette.toml
 ```
-
-**Notes:**
-
-- A missing or malformed `theme.toml` is non-fatal: devlog warns once on STDERR and falls back to the built-in default palette.
-- Unknown role keys in the file are dropped with a per-key warning, not a hard error.
-- Changes take effect on the next `devlog` invocation.
 
 ---
 
@@ -558,7 +590,7 @@ devlog stats [OPTIONS]
 │    devops  : 12                                       │
 │    refactor: 9                                        │
 │                                                       │
-│  Last 30 days (each ▏ = 1 entry)                      │
+│  Last 30 days (entries per day)                          │
 │  ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁█▁▁█▁█                     │
 ╰───────────────────────────────────────────────────────╯
 ```
@@ -583,7 +615,8 @@ devlog tag NAME [OPTIONS]
 | Argument / Option | Short | Type | Required | Default | Description |
 |-------------------|-------|------|----------|---------|-------------|
 | `NAME` | — | string | Yes | — | The tag to inspect. Normalised to lowercase. |
-| `--delete` | — | flag | False | Strip the tag from every entry that has it. |
+| `--delete` | — | flag | False | Strip the tag from every entry that has it (prompts for confirmation; use `-y` to skip). |
+| `--yes` | `-y` | flag | False | With `--delete`: skip the confirmation prompt. |
 | `--dry-run` | — | flag | False | With `--delete`: show what would change without writing. |
 | `--limit` | `-n` | integer | 20 | Show mode: max entries to list. |
 | `--all` | — | flag | False | Show mode: override `--limit` and list every entry. |
@@ -592,6 +625,8 @@ devlog tag NAME [OPTIONS]
 **Notes:**
 
 - `NAME` is validated with the same rules as `devlog add` (lowercase, `[a-z0-9-]`, ≤ 32 chars).
+- `devlog tag NAME --delete` asks `Remove tag "NAME" from N entries?` by default — pass `-y`/`--yes` to skip, or combine with `--quiet` to skip the prompt in scripts.
+- `devlog tag NAME --delete --dry-run` previews the change without writing.
 - Use `devlog merge-tag A B` if you want to *combine* two tags instead of just inspecting or removing one.
 
 **Examples:**
@@ -758,7 +793,7 @@ Launch a minimal line-based REPL for browsing and adding entries without leaving
 
 ```
 devlog --interactive
-devlog -- -i
+devlog -i
 DEVLOG_INTERACTIVE=1 devlog
 ```
 
@@ -773,10 +808,15 @@ DEVLOG_INTERACTIVE=1 devlog
 | `edit <id> [-m msg] [-t tag]` | Edit an entry. |
 | `delete <id> [-y]` | Delete an entry. |
 | `today` | Show today's entries. |
+| `y \| yesterday` | Show yesterday's entries. |
+| `w \| week` | Show the current week. |
 | `tail [N]` | Show the N most recent entries. |
 | `tags` | List tags with usage counts. |
 | `stats` | Summarize the journal. |
-| `theme` | View or change the active color theme (sub: `list`, `show`, `set`, `path`). |
+| `tag <name>` | List entries with a tag (or `--delete -y` to remove the tag from every entry). |
+| `merge-tag <old> <new>` | Rename one tag everywhere. |
+| `calendar` | Year-grid heatmap of journal activity. |
+| `theme` | View or change the active color theme (sub: `list`, `show`, `set`, `path`, `reset`, `edit`, `diff`, `export`, `use`, `builtins`, `create`). |
 | `rename-tag <old> <new>` | Rename a tag. |
 | `import <path>` | Import entries. |
 | `completions <shell>` | Print a shell completion script. |
@@ -1207,28 +1247,57 @@ pytest
 devlog-cli/
 ├── devlog/
 │   ├── __init__.py
-│   ├── cli.py          ← Click entry point, all command definitions
-│   ├── ui.py           ← Rich rendering helpers (panels, tables, errors)
-│   ├── themes.py       ← Theme loader and role contract
-│   ├── storage.py      ← File I/O, JSON read/write, atomic write logic
-│   └── models.py       ← Entry dataclass / TypedDict definition
+│   ├── cli.py            ← Click entry point, all command definitions
+│   ├── ui.py             ← Rich rendering helpers (panels, tables, errors)
+│   ├── themes.py         ← Theme loader, role contract, palette helpers
+│   ├── theme_preview.py  ← Synthetic UI fixture for theme create previews
+│   ├── storage.py        ← File I/O, JSON read/write, atomic write logic
+│   ├── models.py         ← Entry dataclass / TypedDict definition
+│   ├── _completions.py   ← Bash / zsh / fish completion script generators
+│   ├── _dates.py         ← Date-range parsing, week boundaries, TZ helpers
+│   ├── _interactive.py   ← Line-based REPL dispatcher
+│   ├── _io.py            ← Export/import readers and writers
+│   ├── _iso.py           ← ISO-8601 parsing / formatting helpers
+│   ├── _tagops.py        ← Tag normalisation, validation, merge helpers
+│   └── builtins/         ← Bundled theme files (default, dracula, nord, …)
+│       ├── __init__.py
+│       ├── default.toml
+│       ├── dracula.toml
+│       ├── gruvbox.toml
+│       ├── high_contrast.toml
+│       ├── monokai.toml
+│       ├── nord.toml
+│       ├── one_dark.toml
+│       └── solarized.toml
 ├── tests/
+│   ├── conftest.py
 │   ├── test_add.py
-│   ├── test_list.py
-│   ├── test_search.py
-│   ├── test_export.py
-│   ├── test_show.py
-│   ├── test_edit.py
-│   ├── test_delete.py
-│   ├── test_tags.py
-│   ├── test_today_tail_stats.py
-│   ├── test_rename_import_completions_tui.py
-│   ├── test_themes.py
-│   ├── test_ui.py
-│   ├── test_date_range.py
-│   ├── test_repair.py
 │   ├── test_backup_restore.py
-│   └── test_doctor.py
+│   ├── test_calendar.py
+│   ├── test_completions.py
+│   ├── test_date_range.py
+│   ├── test_delete.py
+│   ├── test_doctor.py
+│   ├── test_edit.py
+│   ├── test_export.py
+│   ├── test_import.py
+│   ├── test_interactive.py
+│   ├── test_limit_validation.py
+│   ├── test_list.py
+│   ├── test_merge_tag.py
+│   ├── test_performance.py
+│   ├── test_rename_tag.py
+│   ├── test_repair.py
+│   ├── test_search.py
+│   ├── test_show.py
+│   ├── test_tag_command.py
+│   ├── test_tags.py
+│   ├── test_themes.py
+│   ├── test_timezone.py
+│   ├── test_today_tail_stats.py
+│   ├── test_ui_columns.py
+│   ├── test_ui.py
+│   └── test_week_yesterday.py
 ├── pyproject.toml
 └── README.md
 ```
