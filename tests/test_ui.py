@@ -163,7 +163,14 @@ def test_smart_truncate_strips_ansi_unsafe_chars_in_message():
 # ---------------------------------------------------------------------------
 
 
-def test_entries_table_renders_columns():
+def test_entries_table_renders_columns(monkeypatch):
+    # Pin the detected terminal width: the table drops its Tags column
+    # below 80 cols, and the ambient width resolves narrow on Windows CI
+    # (no TTY, platform-default COLUMNS). Both the narrow check and the
+    # layout read ``ui._raw_terminal_width``, so pinning it is enough —
+    # same mechanism as the ``fixed_terminal_width`` fixture in
+    # test_ui_columns.py.
+    monkeypatch.setattr(ui, "_raw_terminal_width", lambda: 120)
     entries = [_make_entry("hello", ["tag1"])]
     out = render_to_text(ui.entries_table(entries, total=1))
     assert "ID" in out

@@ -197,7 +197,7 @@ def test_stats_does_not_crash_on_unparseable_created_at(runner, data_dir):
             },
         ]
     }
-    (data_dir / "entries.json").write_text(json.dumps(payload))
+    (data_dir / "entries.json").write_text(json.dumps(payload), encoding="utf-8")
 
     result = runner.invoke(main, ["stats"])
     assert result.exit_code == 0

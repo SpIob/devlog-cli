@@ -6,9 +6,15 @@ regression will surface as a test failure.
 """
 import os
 import stat
+import sys
 from pathlib import Path
 
-import tomllib
+import pytest
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    import tomli as tomllib
 from click.testing import CliRunner
 
 from devlog import theme_preview, themes
@@ -172,6 +178,10 @@ def test_bug7_render_preview_whitespace_border_does_not_crash():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="relies on POSIX chmod semantics (read-only dir is still writable on Windows)",
+)
 def test_bug9_output_write_failure_no_traceback(tmp_path):
     ro_dir = tmp_path / "readonly"
     ro_dir.mkdir()

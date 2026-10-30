@@ -32,7 +32,7 @@ def test_import_json(runner, data_dir, tmp_path):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file)])
     assert result.exit_code == 0
     assert "Imported 2 entries" in result.output
@@ -52,7 +52,7 @@ def test_import_markdown(runner, data_dir, tmp_path):
         "imported two\n\n"
         "**Tags:** frontend\n\n"
         "---\n"
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file)])
     assert result.exit_code == 0
     assert "Imported 2 entries" in result.output
@@ -83,7 +83,7 @@ def test_import_idempotent(runner, data_dir, tmp_path, seed_entry):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file)])
     assert result.exit_code == 0
     assert "Imported 1 entry" in result.output
@@ -105,7 +105,7 @@ def test_import_dry_run(runner, data_dir, tmp_path):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file), "--dry-run"])
     assert result.exit_code == 0
     assert "DRY RUN" in result.output
@@ -129,7 +129,7 @@ def test_import_dry_run_with_quiet_is_silent(runner, data_dir, tmp_path):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file), "--dry-run", "--quiet"])
     assert result.exit_code == 0
     assert result.output.strip() == ""
@@ -137,7 +137,7 @@ def test_import_dry_run_with_quiet_is_silent(runner, data_dir, tmp_path):
 
 def test_import_malformed_json(runner, data_dir, tmp_path):
     import_file = tmp_path / "bad.json"
-    import_file.write_text("{not valid json")
+    import_file.write_text("{not valid json", encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file)])
     assert result.exit_code != 0
     assert "Invalid JSON" in result.output
@@ -150,13 +150,13 @@ def test_import_auto_detect_format(runner, data_dir, tmp_path):
         json.dumps(
             {"entries": [{"id": "x", "message": "json", "tags": [], "created_at": "2025-01-01T00:00:00Z"}]}
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file), "--format", "auto", "--quiet"])
     assert result.exit_code == 0
 
     # .md extension → markdown
     import_file = tmp_path / "import.md"
-    import_file.write_text("## 2025-01-01 00:00 UTC — x\n\nmsg\n\n**Tags:** t\n\n---\n")
+    import_file.write_text("## 2025-01-01 00:00 UTC — x\n\nmsg\n\n**Tags:** t\n\n---\n", encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file), "--format", "auto", "--quiet"])
     assert result.exit_code == 0
 
@@ -166,12 +166,12 @@ def test_import_sniffs_format_for_extensionless_file(runner, data_dir, tmp_path)
         json.dumps(
             {"entries": [{"id": "x", "message": "json", "tags": [], "created_at": "2025-01-01T00:00:00Z"}]}
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file), "--format", "auto", "--quiet"])
     assert result.exit_code == 0
 
     import_file = tmp_path / "import"
-    import_file.write_text("## 2025-01-01 00:00 UTC — x\n\nmsg\n\n**Tags:** t\n\n---\n")
+    import_file.write_text("## 2025-01-01 00:00 UTC — x\n\nmsg\n\n**Tags:** t\n\n---\n", encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file), "--format", "auto", "--quiet"])
     assert result.exit_code == 0
 
@@ -193,7 +193,7 @@ def test_import_preserves_stable_ids(runner, data_dir, tmp_path):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["import", str(import_file), "--quiet"])
     assert result.exit_code == 0
     entries = storage.load_entries()

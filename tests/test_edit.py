@@ -1,6 +1,7 @@
 """Tests for the `devlog edit` command."""
 
 import re
+import sys
 
 import pytest
 from click.testing import CliRunner
@@ -111,11 +112,12 @@ def test_edit_no_op_with_quiet_suppresses_noop_message(runner, data_dir):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX editor fixtures (.sh scripts)")
 def test_edit_with_editor_existing_text(runner, data_dir, tmp_path, monkeypatch):
     """When no flags are passed, the editor is opened on the current message."""
     monkeypatch.setenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", "1")  # drive editor in a pipe
     editor_script = tmp_path / "fake_editor.sh"
-    editor_script.write_text("#!/bin/sh\necho 'edited via script' > \"$1\"\n")
+    editor_script.write_text("#!/bin/sh\necho 'edited via script' > \"$1\"\n", encoding="utf-8")
     editor_script.chmod(0o755)
     monkeypatch.setenv("EDITOR", str(editor_script))
 
@@ -130,7 +132,7 @@ def test_edit_editor_non_zero_exit(runner, data_dir, tmp_path, monkeypatch):
     """An editor that exits non-zero must surface an error and NOT save."""
     monkeypatch.setenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", "1")  # drive editor in a pipe
     editor_script = tmp_path / "bad_editor.sh"
-    editor_script.write_text("#!/bin/sh\nexit 1\n")
+    editor_script.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
     editor_script.chmod(0o755)
     monkeypatch.setenv("EDITOR", str(editor_script))
 
@@ -193,6 +195,7 @@ def test_edit_rejects_whitespace_only_message_flag(runner, data_dir):
     assert storage.load_entries()[0].message == "original"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX editor fixtures (.sh scripts)")
 def test_edit_editor_path_can_produce_empty_message(
     runner, data_dir, tmp_path, monkeypatch
 ):
@@ -203,7 +206,7 @@ def test_edit_editor_path_can_produce_empty_message(
     """
     monkeypatch.setenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", "1")  # drive editor in a pipe
     editor_script = tmp_path / "blank_editor.sh"
-    editor_script.write_text('#!/bin/sh\n: > "$1"\n')  # truncate
+    editor_script.write_text('#!/bin/sh\n: > "$1"\n', encoding="utf-8")  # truncate
     editor_script.chmod(0o755)
     monkeypatch.setenv("EDITOR", str(editor_script))
 
@@ -235,6 +238,7 @@ def test_edit_no_flags_in_non_tty_errors(runner, data_dir, monkeypatch):
     assert "needs a TTY" in result.output
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX editor fixtures (.sh scripts)")
 def test_edit_no_flags_in_non_tty_with_force_env_works(
     runner, data_dir, tmp_path, monkeypatch
 ):
@@ -243,7 +247,7 @@ def test_edit_no_flags_in_non_tty_with_force_env_works(
     """
     monkeypatch.setenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", "1")
     editor_script = tmp_path / "fake_editor.sh"
-    editor_script.write_text('#!/bin/sh\necho "edited via pipe" > "$1"\n')
+    editor_script.write_text('#!/bin/sh\necho "edited via pipe" > "$1"\n', encoding="utf-8")
     editor_script.chmod(0o755)
     monkeypatch.setenv("EDITOR", str(editor_script))
 

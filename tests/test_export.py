@@ -1,6 +1,7 @@
 """Tests for the `devlog export` command."""
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -104,6 +105,10 @@ def test_export_quiet_prints_path(runner, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="relies on POSIX chmod semantics (read-only dir is still writable on Windows)",
+)
 def test_export_unwritable_path(runner, tmp_path):
     _add(runner, "Something")
     # Make the parent read-only so the write fails. Use a tmp_path

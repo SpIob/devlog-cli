@@ -97,7 +97,7 @@ def test_doctor_detects_bad_tags(runner, data_dir, tmp_path):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 1
     assert "attention" in result.output
@@ -119,7 +119,7 @@ def test_doctor_quiet_with_issues(runner, data_dir, tmp_path):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["doctor", "--quiet"])
     assert result.exit_code == 1
     obj = json.loads(result.output.strip())
@@ -270,7 +270,7 @@ def test_doctor_lists_specific_issues_inline(runner, data_dir):
             },
         ]
     }
-    (data_dir / "entries.json").write_text(json.dumps(payload))
+    (data_dir / "entries.json").write_text(json.dumps(payload), encoding="utf-8")
 
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 1
@@ -308,7 +308,7 @@ def test_doctor_truncates_long_issue_lists(runner, data_dir):
         "created_at": "2026-08-29T00:00:00Z",
         "updated_at": None,
     })
-    (data_dir / "entries.json").write_text(json.dumps({"entries": entries}))
+    (data_dir / "entries.json").write_text(json.dumps({"entries": entries}), encoding="utf-8")
 
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 1

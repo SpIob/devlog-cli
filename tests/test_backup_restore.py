@@ -2,8 +2,10 @@
 
 import json
 import os
+import sys
 from datetime import datetime
 
+import pytest
 from click.testing import CliRunner
 
 from devlog import storage
@@ -124,7 +126,7 @@ def test_restore_writes_entries(runner, data_dir, tmp_path):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["restore", str(backup_file), "-y"])
     assert result.exit_code == 0
     assert "Restored" in result.output
@@ -160,7 +162,7 @@ def test_restore_salvages_invalid_rows(runner, data_dir, tmp_path):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["restore", str(backup_file), "-y"])
     assert result.exit_code == 0
     assert "Skipped" in result.output
@@ -193,7 +195,7 @@ def test_restore_drops_unrecoverable_rows(runner, data_dir, tmp_path):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["restore", str(backup_file), "-y"])
     assert result.exit_code == 0
     assert "Skipped" in result.output
@@ -217,7 +219,7 @@ def test_restore_prompts_when_existing(runner, data_dir, tmp_path, seed_entry):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     # Without -y: the default is "no" → abort
     result = runner.invoke(main, ["restore", str(backup_file)], input="n\n")
     assert result.exit_code == 1  # Click abort=True → SystemExit(1) when user says no
@@ -242,6 +244,10 @@ def test_restore_structural_invalid_errors(runner, tmp_path):
     assert "structurally invalid" in result.output
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="relies on POSIX chmod semantics (0o000 file stays readable on Windows)",
+)
 def test_restore_unreadable_path(runner, tmp_path):
     # Create a path that's unreadable
     unreadable = tmp_path / "unreadable.json"
@@ -270,7 +276,7 @@ def test_restore_dry_run_does_not_write(runner, data_dir, tmp_path, seed_entry):
                 ]
             }
         )
-    )
+    , encoding="utf-8")
     result = runner.invoke(main, ["restore", str(backup_file), "--dry-run"])
     assert result.exit_code == 0
     assert "DRY RUN" in result.output
@@ -281,7 +287,7 @@ def test_restore_dry_run_does_not_write(runner, data_dir, tmp_path, seed_entry):
 
 def test_restore_empty_backup(runner, data_dir, tmp_path):
     backup_file = tmp_path / "b.json"
-    backup_file.write_text(json.dumps({"entries": []}))
+    backup_file.write_text(json.dumps({"entries": []}), encoding="utf-8")
     result = runner.invoke(main, ["restore", str(backup_file), "-y"])
     assert result.exit_code == 0
     assert "no valid entries" in result.output
