@@ -1,8 +1,8 @@
 # devlog-cli
 
 [![CI](https://github.com/SpIob/devlog-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/SpIob/devlog-cli/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/devlog-cli)](https://pypi.org/project/devlog-cli/)
-[![Python](https://img.shields.io/pypi/pyversions/devlog-cli)](https://pypi.org/project/devlog-cli/)
+[![PyPI](https://img.shields.io/pypi/v/devlog-tool)](https://pypi.org/project/devlog-tool/)
+[![Python](https://img.shields.io/pypi/pyversions/devlog-tool)](https://pypi.org/project/devlog-tool/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/SpIob/devlog-cli/blob/main/LICENSE)
 
 A terminal-based developer journal — log, search, filter, and export daily progress entries without leaving the command line.
@@ -54,13 +54,13 @@ $ devlog search "auth"
 **With pipx (recommended — keeps devlog isolated):**
 
 ```bash
-pipx install devlog-cli
+pipx install devlog-tool
 ```
 
 **With pip:**
 
 ```bash
-pip install devlog-cli
+pip install devlog-tool
 ```
 
 **From source:**
