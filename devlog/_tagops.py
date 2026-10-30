@@ -6,7 +6,6 @@ Centralises all tag-related logic that was previously in ``cli.py``.
 from __future__ import annotations
 
 import re
-from typing import Tuple
 
 import click
 

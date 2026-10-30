@@ -3,8 +3,6 @@
 import json
 import re
 
-import pytest
-
 from devlog.cli import main
 
 

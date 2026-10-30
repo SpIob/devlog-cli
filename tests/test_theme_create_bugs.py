@@ -6,15 +6,13 @@ regression will surface as a test failure.
 """
 import os
 import stat
-import tomllib
 from pathlib import Path
 
-import pytest
+import tomllib
 from click.testing import CliRunner
 
-from devlog import themes, theme_preview
+from devlog import theme_preview, themes
 from devlog.cli import main
-
 
 # ---------------------------------------------------------------------------
 # Bug 1: --from <builtin> ignored the builtin's meta (name + description)

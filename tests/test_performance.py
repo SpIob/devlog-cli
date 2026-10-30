@@ -23,7 +23,6 @@ from devlog import storage
 from devlog.cli import main
 from devlog.models import Entry
 
-
 # Loose bounds chosen to fail loudly on real regressions but tolerate
 # noisy CI machines. The spec calls for "instant" (sub-second) on 1k
 # entries; we allow some headroom.

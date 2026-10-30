@@ -1,0 +1,75 @@
+name: Release
+
+# Publishes to PyPI via trusted publishing (OIDC — no API token stored).
+# Prerequisite (one-time, PyPI web UI): add a "pending publisher" for
+# devlog-cli with owner=SpIob, repo=devlog-cli, workflow=release.yml,
+# environment=release.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  build:
+    name: build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Build
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  pypi-publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    # One-time enablement (PyPI web UI): add a pending trusted publisher
+    # for devlog-cli (owner=SpIob, repo=devlog-cli, workflow=release.yml,
+    # environment=release), then set the repo variable
+    # PYPI_PUBLISH_READY=true (Settings -> Secrets and variables -> Actions
+    # -> Variables). Until then this job skips instead of failing red.
+    if: vars.PYPI_PUBLISH_READY == 'true'
+    permissions:
+      # Trusted publishing: exchange the workflow's OIDC token for a
+      # short-lived PyPI API token. No secret is configured or stored.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

@@ -11,7 +11,6 @@ from __future__ import annotations
 import io
 import json
 import re
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -127,6 +126,20 @@ def write_entries():
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     return _write
+
+
+@pytest.fixture(autouse=True)
+def _isolate_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    """Force an isolated DEVLOG_DATA_DIR for every test.
+
+    Autouse + function-scoped so an ambient ``DEVLOG_DATA_DIR`` (e.g.
+    exported in the developer's shell) can never leak into the suite —
+    neither polluting the user's real ``~/.devlog`` journal nor making
+    theme-dependent assertions pass/fail on whatever theme happens to be
+    installed there. Tests that need a specific dir override it via the
+    ``runner``/``data_dir`` fixtures.
+    """
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "isolated-data"))
 
 
 @pytest.fixture()

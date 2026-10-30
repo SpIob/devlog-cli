@@ -3,12 +3,9 @@
 import json
 
 import pytest
-from click.testing import CliRunner
 
 from devlog import storage
 from devlog.cli import main
-from devlog.models import Entry
-
 
 # `runner`, `data_dir`, and `write_entries` come from tests/conftest.py.
 

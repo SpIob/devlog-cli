@@ -14,13 +14,11 @@ from typing import TYPE_CHECKING
 
 import click
 
-from devlog import _iso
-from devlog import storage
-from devlog import ui
+from devlog import _iso, storage, ui
 from devlog.models import Entry
 
 if TYPE_CHECKING:
-    import zoneinfo
+    pass
 
 # Supported --since / --until input forms. ``None`` means "no bound".
 _RELATIVE_DAY_RE = re.compile(r"^(\d+)\s*d$")
@@ -325,7 +323,7 @@ def _parse_since_until(
 
 def _filter_by_local_window(
     entries: list[Entry],
-    end_date: "datetime.date",
+    end_date: datetime.date,
     days: int,
     tz,
 ) -> list[Entry]:

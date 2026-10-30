@@ -1,9 +1,7 @@
 """Tests for the `devlog completions` command."""
 
-import pytest
 
 from devlog.cli import main
-
 
 # ---------------------------------------------------------------------------
 # completions

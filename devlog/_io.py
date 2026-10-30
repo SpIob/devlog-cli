@@ -10,14 +10,11 @@ import sys
 import uuid
 from typing import TYPE_CHECKING
 
-from devlog import _dates
-from devlog import _filter
-from devlog import _tagops
-from devlog import ui
-from devlog.models import BY_CREATED_AT as _BY_CREATED_AT, Entry
+from devlog import _filter, ui
+from devlog.models import Entry
 
 if TYPE_CHECKING:
-    from devlog import storage
+    pass
 
 
 def _sniff_import_format(path: str) -> str:
@@ -43,7 +40,7 @@ def _sniff_import_format(path: str) -> str:
     # Try to sniff format from the first non-blank character so users
     # can pipe from stdin or import extensionless files.
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             sniff = fh.read(64)
     except OSError:
         sniff = ""
@@ -72,7 +69,7 @@ def _read_import_payload(path: str, fmt: str) -> tuple[list[Entry], int]:
         succeeds or returns zero (it does not surface partial failures).
     """
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             content = fh.read()
     except (PermissionError, OSError) as exc:
         ui.print_error(f"Cannot read {path}: {exc}")
@@ -336,13 +333,11 @@ def export(
     quiet: bool,
 ) -> None:
     """Export entries to a Markdown or JSON file."""
-    import datetime
     import dataclasses
+    import datetime
     import json
 
-    from devlog import storage
-    from devlog import ui
-    from devlog.models import Entry
+    from devlog import storage, ui
 
     try:
         all_entries = storage.load_entries()

@@ -11,10 +11,9 @@ copy-paste across ``test_list``, ``test_search``, ``test_tags``,
 import pytest
 from click.testing import CliRunner
 
-from devlog.cli import main
 from devlog import storage
+from devlog.cli import main
 from devlog.models import Entry
-
 
 _LIMIT_COMMANDS = [
     ["list"],
@@ -46,7 +45,7 @@ def _seed_entry(monkeypatch, tmp_path):
 def test_limit_must_be_positive(argv, tmp_path):
     """Every limit-accepting command rejects 0 with the same message."""
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(tmp_path)})
-    result = runner.invoke(main, argv + ["--limit", "0"])
+    result = runner.invoke(main, [*argv, "--limit", "0"])
     assert result.exit_code == 1
     assert "--limit must be a positive integer" in result.output
 
@@ -56,7 +55,7 @@ def test_limit_negative_rejected(argv, tmp_path):
     """Negative values are also rejected — covers the ``< 0`` branch
     in :func:`devlog.cli._require_positive_int`."""
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(tmp_path)})
-    result = runner.invoke(main, argv + ["--limit", "-3"])
+    result = runner.invoke(main, [*argv, "--limit", "-3"])
     assert result.exit_code == 1
     assert "--limit must be a positive integer" in result.output
 

@@ -33,8 +33,8 @@ from __future__ import annotations
 
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
 
 from rich.style import Style
 
@@ -78,7 +78,7 @@ def is_valid_style(value: str) -> bool:
         return False
     try:
         Style.parse(stripped)
-    except Exception:  # noqa: BLE001 - Rich raises a wide variety of errors
+    except Exception:
         return False
     return True
 
@@ -740,28 +740,28 @@ def get_builtin_meta(name: str) -> dict[str, str]:
 
 
 __all__ = [
+    "DEFAULT_THEME",
     "ROLES",
     "SECTIONS",
-    "DEFAULT_THEME",
-    "ThemeValueError",
     "ThemeInstallError",
     "ThemeNotFoundError",
-    "is_valid_style",
-    "validate_source",
-    "install_theme_file",
-    "get_theme_path",
-    "get_theme_status",
-    "load_theme",
-    "get_active_theme",
-    "set_active_theme",
-    "reset_cache",
-    "get_style",
-    "get_bold_style",
-    "write_default_theme",
+    "ThemeValueError",
     "build_theme_toml",
     "export_template",
-    "list_builtin_themes",
-    "get_builtin_theme_path",
-    "load_builtin_theme",
+    "get_active_theme",
+    "get_bold_style",
     "get_builtin_meta",
+    "get_builtin_theme_path",
+    "get_style",
+    "get_theme_path",
+    "get_theme_status",
+    "install_theme_file",
+    "is_valid_style",
+    "list_builtin_themes",
+    "load_builtin_theme",
+    "load_theme",
+    "reset_cache",
+    "set_active_theme",
+    "validate_source",
+    "write_default_theme",
 ]

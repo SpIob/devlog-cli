@@ -10,7 +10,6 @@ from devlog import storage
 from devlog.cli import main
 from devlog.models import Entry
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

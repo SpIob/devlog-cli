@@ -2,10 +2,8 @@
 
 import re
 
-import pytest
-
-from devlog.cli import main
 from devlog import storage
+from devlog.cli import main
 
 
 def _add(runner, message, *tags):

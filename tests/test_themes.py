@@ -1,17 +1,14 @@
 """Tests for the devlog.themes module."""
 
 import io
-import os
 from pathlib import Path
 
 import pytest
 import tomllib
 from click.testing import CliRunner
 
-from devlog import themes
-from devlog import ui
+from devlog import themes, ui
 from devlog.cli import main
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -240,6 +237,7 @@ def test_theme_set_warns_about_unknown_role_keys(tmp_path, monkeypatch):
     role keys. Users see the warning once, at the moment of the typo.
     """
     from click.testing import CliRunner
+
     from devlog.cli import main
 
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
@@ -611,8 +609,9 @@ def test_theme_list_includes_status_footer(theme_runner, tmp_path, monkeypatch):
     # The CLI's console is auto-detected and narrow under CliRunner;
     # render via ui.theme_table directly with a wide console so the
     # footer's three tokens line up on one line.
-    from rich.console import Console
     import io as _io
+
+    from rich.console import Console
     themes.reset_cache()
     table = ui.theme_table()
     buf = _io.StringIO()
@@ -623,8 +622,9 @@ def test_theme_list_includes_status_footer(theme_runner, tmp_path, monkeypatch):
 
 def test_theme_list_default_status_when_no_file(theme_runner, tmp_path, monkeypatch):
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
-    from rich.console import Console
     import io as _io
+
+    from rich.console import Console
     themes.reset_cache()
     table = ui.theme_table()
     buf = _io.StringIO()

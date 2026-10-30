@@ -26,7 +26,6 @@ from rich.text import Text
 
 from . import themes
 
-
 _HEADER_RULE = "─" * 60
 
 
@@ -42,7 +41,7 @@ def _resolve(role: str, draft: dict[str, str]) -> Style | None:
         return None
     try:
         return Style.parse(value)
-    except Exception:  # noqa: BLE001 - Rich raises a wide variety
+    except Exception:
         return None
 
 

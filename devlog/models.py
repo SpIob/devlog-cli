@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
 import datetime as _dt
 from dataclasses import dataclass, field
 from operator import attrgetter
-from typing import List, Optional
 
 from devlog import _iso
 
@@ -18,8 +18,41 @@ class Entry:
     id: str
     message: str
     created_at: str  # ISO 8601 UTC string
-    tags: List[str] = field(default_factory=list)
-    updated_at: Optional[str] = None  # ISO 8601 UTC string, or None
+    tags: list[str] = field(default_factory=list)
+    updated_at: str | None = None  # ISO 8601 UTC string, or None
+
+    @classmethod
+    def from_dict(cls, item: dict) -> Entry:
+        """Build an :class:`Entry` from a stored JSON object, tolerantly.
+
+        This is the deserialization counterpart of ``dataclasses.asdict``:
+        unknown keys (fields added by a *newer* devlog version) are
+        ignored instead of raising, so a future schema can never make
+        every command crash on ``Entry(**item)``. The three identity
+        fields — ``id``, ``message``, ``created_at`` — remain required;
+        a missing one raises ``ValueError`` naming the field.
+
+        Args:
+            item: a dict as found in the ``entries`` array of
+                ``entries.json``.
+
+        Returns:
+            Entry: the reconstructed entry.
+
+        Raises:
+            TypeError: if *item* is not a dict.
+            ValueError: if a required field is missing (the message
+                names the first missing field).
+        """
+        if not isinstance(item, dict):
+            raise TypeError(
+                f"Entry payload must be a dict, got {type(item).__name__}"
+            )
+        missing = [k for k in ("id", "message", "created_at") if k not in item]
+        if missing:
+            raise ValueError(f"Entry is missing required field(s): {', '.join(missing)}")
+        known = {f.name for f in dataclasses.fields(cls)}
+        return cls(**{k: v for k, v in item.items() if k in known})
 
     @property
     def short_id(self) -> str:

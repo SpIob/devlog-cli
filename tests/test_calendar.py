@@ -9,11 +9,9 @@ from datetime import datetime, timezone
 import pytest
 from click.testing import CliRunner
 
+from devlog import storage, themes, ui
 from devlog.cli import main
-from devlog import storage
 from devlog.models import Entry
-from devlog import themes
-from devlog import ui
 
 
 @pytest.fixture()

@@ -1,19 +1,13 @@
 """Tests for the devlog.ui rendering helpers."""
 
 import io
-import os
-import time
-from datetime import datetime, timezone
 
 import pytest
 from rich.console import Console
-from rich.table import Table
 
-from devlog.models import Entry
 from devlog import ui
-
+from devlog.models import Entry
 from tests.conftest import render_to_text, strip_ansi
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -243,6 +237,7 @@ def test_no_color_env_disables_color(monkeypatch):
     monkeypatch.setenv("NO_COLOR", "1")
     # Force a fresh import by reloading the module.
     import importlib
+
     import devlog.ui as ui_mod
 
     importlib.reload(ui_mod)
@@ -253,6 +248,7 @@ def test_no_color_env_disables_color(monkeypatch):
 def test_console_no_color_emits_no_ansi(monkeypatch):
     monkeypatch.setenv("NO_COLOR", "1")
     import importlib
+
     import devlog.ui as ui_mod
 
     importlib.reload(ui_mod)
@@ -317,10 +313,9 @@ def test_no_off_by_one_plural_in_captured_outputs():
     string contains a malformed number+word pairing like
     "1 entries", "2 entry", or "0 entry".
     """
-    import json
-    import os
     import shutil
     import tempfile
+
     from click.testing import CliRunner
 
     from devlog import cli as cli_mod
@@ -450,7 +445,7 @@ def test_root_banner_includes_version():
 
     out = capture_console(ui.root_banner)
     # The first line carries the version ("devlog  ·  v1.5.0  ·  ...").
-    first_line = next(l for l in out.splitlines() if l.strip())
+    first_line = next(ln for ln in out.splitlines() if ln.strip())
     assert f"v{ui.VERSION}" in first_line
 
 

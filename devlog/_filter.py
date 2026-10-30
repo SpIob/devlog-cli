@@ -8,8 +8,7 @@ untouched.
 
 from __future__ import annotations
 
-from devlog import _dates
-from devlog import _tagops
+from devlog import _dates, _tagops
 from devlog.models import BY_CREATED_AT, Entry
 
 

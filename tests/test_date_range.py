@@ -1,15 +1,12 @@
 """Tests for the shared date-range parser and filter (`--since` / `--until`)."""
 
 import datetime
-import json
 
 import pytest
 
 from devlog._dates import _filter_by_date, _parse_date_bound
 from devlog.cli import main
-from devlog import storage
 from devlog.models import Entry
-
 
 # ---------------------------------------------------------------------------
 # Local helpers for unit tests (testing _filter_by_date directly)

@@ -83,7 +83,7 @@ def test_list_quiet(runner):
     _add(runner, "JSON entry", "api")
     result = runner.invoke(main, ["list", "--quiet"])
     assert result.exit_code == 0
-    lines = [l for l in result.output.strip().splitlines() if l]
+    lines = [ln for ln in result.output.strip().splitlines() if ln]
     obj = json.loads(lines[0])
     assert obj["message"] == "JSON entry"
 

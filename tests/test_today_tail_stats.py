@@ -7,8 +7,8 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from click.testing import CliRunner
 
-from devlog.cli import main
 from devlog import storage
+from devlog.cli import main
 from devlog.models import Entry
 
 

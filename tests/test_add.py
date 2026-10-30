@@ -1,14 +1,10 @@
 """Tests for the `devlog add` command."""
 
 import json
-from pathlib import Path
 from unittest.mock import patch
-
-import pytest
 
 from devlog.cli import main
 from devlog.storage import StoragePermissionError
-
 
 # ---------------------------------------------------------------------------
 # Happy paths
@@ -136,8 +132,9 @@ def test_add_at_iso_timestamp(runner, tmp_path, monkeypatch):
 
 def test_add_at_relative_hours(runner, tmp_path, monkeypatch):
     """`--at 2h` should be roughly 2 hours before now (UTC)."""
+    from datetime import datetime, timedelta, timezone
+
     from devlog import storage
-    from datetime import datetime, timezone, timedelta
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
     before = datetime.now(tz=timezone.utc)
     result = runner.invoke(main, ["add", "x", "--at", "2h"])
@@ -150,8 +147,9 @@ def test_add_at_relative_hours(runner, tmp_path, monkeypatch):
 
 def test_add_at_relative_minutes(runner, tmp_path, monkeypatch):
     """`--at 30m` should be roughly 30 minutes before now."""
+    from datetime import datetime, timedelta, timezone
+
     from devlog import storage
-    from datetime import datetime, timezone, timedelta
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
     before = datetime.now(tz=timezone.utc)
     result = runner.invoke(main, ["add", "x", "--at", "30m"])

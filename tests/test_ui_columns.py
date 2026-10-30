@@ -20,16 +20,14 @@ from __future__ import annotations
 
 import io
 import shutil
-from typing import Iterator
+from collections.abc import Iterator
 
 import pytest
 from rich.console import Console
 
 from devlog import ui
 from devlog.models import Entry
-
 from tests.conftest import render_to_text, strip_ansi
-
 
 # ---------------------------------------------------------------------------
 # Helpers

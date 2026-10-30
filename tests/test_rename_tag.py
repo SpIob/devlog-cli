@@ -1,10 +1,8 @@
 """Tests for the `devlog rename-tag` command."""
 
-import pytest
 
-from devlog.cli import main
 from devlog import storage
-
+from devlog.cli import main
 
 # ---------------------------------------------------------------------------
 # rename-tag

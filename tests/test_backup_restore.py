@@ -2,15 +2,12 @@
 
 import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime
 
-import pytest
 from click.testing import CliRunner
 
 from devlog import storage
 from devlog.cli import main
-from devlog.models import Entry
-
 
 # ---------------------------------------------------------------------------
 # backup

@@ -1,13 +1,33 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "devlog-cli"
-version = "1.5.0"
+version = "1.6.0"
 description = "A terminal-based developer journal tool"
 readme = "README.md"
-requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Mico Arenga" }]
+keywords = ["journal", "cli", "developer-tools", "diary", "devlog", "notes"]
+requires-python = ">=3.10"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+    "Topic :: Utilities",
+]
 dependencies = [
     "click>=8.0",
     "rich>=13.0",
@@ -18,11 +38,38 @@ dependencies = [
 [project.scripts]
 devlog = "devlog.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/SpIob/devlog-cli"
+Repository = "https://github.com/SpIob/devlog-cli"
+Issues = "https://github.com/SpIob/devlog-cli/issues"
+Changelog = "https://github.com/SpIob/devlog-cli/blob/main/CHANGELOG.md"
+
 [tool.setuptools.packages.find]
 include = ["devlog*"]
 
+[tool.setuptools.package-data]
+# Bundled themes are read via importlib.resources at runtime; without
+# this they are missing from the wheel and every `devlog theme` command
+# crashes on an installed copy (source checkouts never noticed).
+"devlog.builtins" = ["*.toml"]
+
 [tool.setuptools]
 package-dir = {"" = "."}
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+# Gate for CI: pyflakes-equivalent (E4/E7/E9/F) plus import order (I),
+# typing modernization (UP/FA) and ruff-specific consistency (RUF).
+# SIM/BLE/PIE/FURB are deliberately not selected: they flag deliberate
+# best-effort excepts in the import/repair paths (see _io.py) and
+# style opinions beyond this project's lint contract.
+select = ["E4", "E7", "E9", "F", "I", "UP", "FA", "RUF"]
+# ℹ and × are intentional output glyphs (info icons, calendar heatmap),
+# not lookalike-ASCII typos.
+allowed-confusables = ["ℹ", "×"]
 
 [tool.pytest.ini_options]
 markers = [

@@ -1,5 +1,10 @@
 # devlog-cli
 
+[![CI](https://github.com/SpIob/devlog-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/SpIob/devlog-cli/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/devlog-cli)](https://pypi.org/project/devlog-cli/)
+[![Python](https://img.shields.io/pypi/pyversions/devlog-cli)](https://pypi.org/project/devlog-cli/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/SpIob/devlog-cli/blob/main/LICENSE)
+
 A terminal-based developer journal — log, search, filter, and export daily progress entries without leaving the command line.
 
 ---
@@ -46,19 +51,27 @@ $ devlog search "auth"
 
 ## Installation
 
-**With pip:**
-
-```bash
-pip install .
-```
-
 **With pipx (recommended — keeps devlog isolated):**
 
 ```bash
-pipx install .
+pipx install devlog-cli
+```
+
+**With pip:**
+
+```bash
+pip install devlog-cli
+```
+
+**From source:**
+
+```bash
+pipx install git+https://github.com/SpIob/devlog-cli.git
 ```
 
 After installation, the `devlog` command is available globally in your terminal.
+
+Requires Python 3.10+.
 
 ---
 
@@ -906,7 +919,7 @@ devlog repair [OPTIONS]
 - A backup is written *before* the file is rewritten, so you can always undo a repair with `devlog restore <backup-file>`.
 - Validation rules match the storage contract: every entry must have a non-empty `id` and `message`, a parseable `created_at` (ISO 8601 UTC), and tags that match `^[a-z0-9-]+$` with at most 32 characters.
 - Duplicate ids keep the first occurrence; subsequent duplicates are reported and dropped.
-- Exit code is `0` when nothing was dropped, `1` when entries were dropped (or when issues were found in dry-run mode? — no, dry-run is always `0`).
+- Exit code is `0` when nothing was dropped, `1` when entries were dropped.
 - A corrupted JSON file (invalid syntax) is not repairable; the command exits with code 2 and tells you to restore from a backup.
 
 **Examples:**

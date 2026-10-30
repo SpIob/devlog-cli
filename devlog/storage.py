@@ -1,13 +1,14 @@
+from __future__ import annotations
+
 import dataclasses
 import json
 import os
 from dataclasses import dataclass
-from datetime import date as _date, datetime, timezone
+from datetime import date as _date
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
 
-from devlog import _iso
-from devlog import _tagops
+from devlog import _iso, _tagops
 from devlog.models import Entry
 
 # ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ def ensure_storage_dir() -> None:
 # ---------------------------------------------------------------------------
 
 
-def load_entries() -> List[Entry]:
+def load_entries() -> list[Entry]:
     """Load all entries from disk.
 
     Returns an empty list when the file does not yet exist.
@@ -124,10 +125,10 @@ def load_entries() -> List[Entry]:
     if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
         raise CorruptedStorageError(path)
 
-    return [Entry(**item) for item in data["entries"]]
+    return [Entry.from_dict(item) for item in data["entries"]]
 
 
-def save_entries(entries: List[Entry]) -> None:
+def save_entries(entries: list[Entry]) -> None:
     """Persist all entries to disk atomically.
 
     Writes to a .tmp file first, then uses os.replace for an atomic swap so a
@@ -170,7 +171,7 @@ def add_entry(new_entry: Entry) -> None:
     save_entries(entries)
 
 
-def find_entry_by_id(entries: List[Entry], id_prefix: str) -> Entry | None:
+def find_entry_by_id(entries: list[Entry], id_prefix: str) -> Entry | None:
     """Find an entry by exact id or unique short-id prefix.
 
     Search order:
@@ -211,7 +212,7 @@ def find_entry_by_id(entries: List[Entry], id_prefix: str) -> Entry | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def find_entry_id_prefix_matches(entries: List[Entry], id_prefix: str) -> List[Entry]:
+def find_entry_id_prefix_matches(entries: list[Entry], id_prefix: str) -> list[Entry]:
     """Return all entries whose id starts with the given prefix (case-insensitive)."""
     if not id_prefix:
         return []
@@ -280,9 +281,9 @@ class Issue:
     """
     kind: str
     message: str
-    entry_id: Optional[str] = None
+    entry_id: str | None = None
     index: int = -1
-    field: Optional[str] = None
+    field: str | None = None
 
 
 def _validate_tag_values(tags: object) -> list[str]:
@@ -479,7 +480,7 @@ def get_backups_dir() -> Path:
     return get_storage_path().parent / BACKUPS_DIR_NAME
 
 
-def default_backup_filename(now: Optional[datetime] = None) -> str:
+def default_backup_filename(now: datetime | None = None) -> str:
     """Return a timestamped backup filename (e.g. ``entries-20260129-153045.json``).
 
     Args:
@@ -497,7 +498,7 @@ def default_backup_filename(now: Optional[datetime] = None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def local_date_for(iso: str, tz) -> "date":
+def local_date_for(iso: str, tz) -> _date:
     """Return the local date for a stored UTC ISO 8601 timestamp.
 
     Args:

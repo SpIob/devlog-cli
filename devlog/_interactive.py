@@ -14,7 +14,7 @@ from click.testing import CliRunner
 from devlog import ui
 
 if TYPE_CHECKING:
-    from devlog.cli import main as MainType
+    pass
 
 
 def _interactive_repl(main_cli) -> None:
@@ -91,7 +91,7 @@ def _interactive_repl(main_cli) -> None:
         except SystemExit:
             # Click's sys.exit() bubbles up here; swallow so the REPL keeps going.
             pass
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             ui.print_error(str(exc))
 
 

@@ -7,8 +7,6 @@ import pytest
 from click.testing import CliRunner
 
 from devlog.cli import main
-from devlog import storage
-from devlog.models import Entry
 
 
 @pytest.fixture()

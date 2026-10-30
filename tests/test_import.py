@@ -1,12 +1,9 @@
 """Tests for the `devlog import` command."""
 
 import json
-import pytest
 
-from devlog.cli import main
 from devlog import storage
-from devlog.models import Entry
-
+from devlog.cli import main
 
 # ---------------------------------------------------------------------------
 # import

@@ -22,7 +22,7 @@ import os
 import re
 import shutil
 import sys
-from typing import Mapping, Sequence
+from collections.abc import Mapping, Sequence
 
 from rich.box import ROUNDED, SIMPLE
 from rich.console import Console, Group
@@ -38,8 +38,7 @@ from rich.progress import (
 from rich.table import Table
 from rich.text import Text
 
-from devlog import _iso
-from devlog import themes
+from devlog import _iso, themes
 from devlog.models import Entry
 
 
@@ -56,7 +55,7 @@ def _bold(role: str) -> str:
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "1.5.0"
+VERSION = "1.6.0"
 
 MSG_TRUNCATE_LEN = 60
 ID_DISPLAY_LEN = 8
@@ -115,47 +114,47 @@ err_console = Console(stderr=True, no_color=not _color_enabled(sys.stderr))
 
 
 __all__ = [
-    "console",
-    "err_console",
-    "print_error",
-    "print_warning",
-    "print_info",
-    "success_line",
-    "destructive_line",
-    "dry_run_line",
-    "entry_panel",
-    "entries_table",
-    "tags_table",
-    "theme_table",
-    "show_panel",
-    "edit_panel",
-    "delete_panel",
-    "smart_truncate",
-    "highlight_message",
-    "export_progress",
-    "version_banner",
-    "root_banner",
-    "command_table",
-    "repair_summary",
-    "backup_result",
-    "doctor_report",
-    "stats_panel",
-    "sparkline",
-    "Group",
-    "Padding",
-    "Text",
-    "Panel",
-    "Table",
-    "Progress",
-    "themes",
     "ID_DISPLAY_LEN",
     "MSG_TRUNCATE_LEN",
     "TAG_NONE",
     "VERSION",
-    "pluralize",
+    "Group",
+    "Padding",
+    "Panel",
+    "Progress",
+    "Table",
+    "Text",
+    "backup_result",
+    "command_table",
+    "console",
+    "delete_panel",
+    "destructive_line",
+    "doctor_report",
+    "dry_run_line",
+    "edit_panel",
+    "entries_table",
+    "entry_panel",
+    "err_console",
+    "export_progress",
+    "format_dt",
+    "highlight_message",
     "plural_noun",
     "plural_s",
-    "format_dt",
+    "pluralize",
+    "print_error",
+    "print_info",
+    "print_warning",
+    "repair_summary",
+    "root_banner",
+    "show_panel",
+    "smart_truncate",
+    "sparkline",
+    "stats_panel",
+    "success_line",
+    "tags_table",
+    "theme_table",
+    "themes",
+    "version_banner",
 ]
 
 
@@ -1034,7 +1033,7 @@ def delete_panel(entry: Entry) -> Panel:
         body,
         border_role="delete_border",
         title=title,
-        footer_hint=f"Run `devlog list` to verify, or `devlog add` to write a new one.",
+        footer_hint="Run `devlog list` to verify, or `devlog add` to write a new one.",
     )
 
 
@@ -1555,7 +1554,6 @@ def repair_summary(
     Returns:
         A configured :class:`rich.panel.Panel`.
     """
-    from devlog.storage import Issue
 
     rows: list[Text] = []
     if not issues:

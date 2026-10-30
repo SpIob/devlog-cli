@@ -1,13 +1,12 @@
 """Tests for the `devlog edit` command."""
 
-import json
 import re
 
 import pytest
 from click.testing import CliRunner
 
-from devlog.cli import main
 from devlog import storage
+from devlog.cli import main
 
 
 @pytest.fixture()
@@ -283,7 +282,7 @@ def test_edit_at_with_yes_changes_created_at(runner, data_dir):
     # updated_at is set to the new "now".
     assert entry.updated_at is not None
     # updated_at is recent (within the last 60 seconds).
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
     upd = datetime.strptime(entry.updated_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     assert (datetime.now(tz=timezone.utc) - upd) < timedelta(seconds=60)
 
@@ -318,12 +317,11 @@ def test_edit_at_prompts_and_accept_writes(runner, data_dir):
 
 def test_edit_at_relative(runner, data_dir):
     """`--at 2h` works on edit too."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta, timezone
     sid = _add(runner, "msg")
     before = datetime.now(tz=timezone.utc)
     result = runner.invoke(main, ["edit", sid, "--at", "2h", "--yes"])
     assert result.exit_code == 0
-    after = datetime.now(tz=timezone.utc)
     entry = storage.load_entries()[0]
     ts = datetime.strptime(entry.created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     assert abs((before - ts) - timedelta(hours=2)) < timedelta(seconds=5)
