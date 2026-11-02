@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import date as _date
 from datetime import datetime, timezone
@@ -10,6 +11,47 @@ from pathlib import Path
 
 from devlog import _iso, _tagops
 from devlog.models import Entry
+
+# File locking - cross-platform
+if sys.platform == "win32":
+    import msvcrt
+    def _lock_file(fh, exclusive: bool) -> None:
+        """Lock a file handle (Windows)."""
+        if exclusive:
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBRLCK, 1)
+
+    def _unlock_file(fh) -> None:
+        """Unlock a file handle (Windows)."""
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+else:
+    import fcntl
+    def _lock_file(fh, exclusive: bool) -> None:
+        """Lock a file handle (Unix)."""
+        if exclusive:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        else:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_SH)
+
+    def _unlock_file(fh) -> None:
+        """Unlock a file handle (Unix)."""
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+# ---------------------------------------------------------------------------
+# Backend selection
+# ---------------------------------------------------------------------------
+
+
+def _get_backend() -> str:
+    """Return the active backend name: 'json' or 'sqlite'."""
+    return os.environ.get("DEVLOG_BACKEND", "json").lower()
+
+
+def _is_sqlite_backend() -> bool:
+    """Check if SQLite backend is active."""
+    return _get_backend() == "sqlite"
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -96,17 +138,11 @@ def ensure_storage_dir() -> None:
 
 
 def load_entries() -> list[Entry]:
-    """Load all entries from disk.
-
-    Returns an empty list when the file does not yet exist.
-
-    Returns:
-        List[Entry]: list of Entry dataclass instances.
-
-    Raises:
-        StoragePermissionError: if the file cannot be read due to permissions.
-        CorruptedStorageError: if the file contains invalid JSON.
-    """
+    """Load all entries from the active backend (JSON or SQLite)."""
+    if _is_sqlite_backend():
+        from devlog.sqlite_storage import load_entries as sqlite_load_entries
+        return sqlite_load_entries()
+    
     path = get_storage_path()
 
     if not path.exists():
@@ -114,7 +150,12 @@ def load_entries() -> list[Entry]:
 
     try:
         with path.open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
+            # Acquire shared lock for reading
+            _lock_file(fh, exclusive=False)
+            try:
+                data = json.load(fh)
+            finally:
+                _unlock_file(fh)
     except PermissionError:
         raise StoragePermissionError(path, "read")
     except json.JSONDecodeError:
@@ -129,17 +170,11 @@ def load_entries() -> list[Entry]:
 
 
 def save_entries(entries: list[Entry]) -> None:
-    """Persist all entries to disk atomically.
-
-    Writes to a .tmp file first, then uses os.replace for an atomic swap so a
-    crash mid-write cannot corrupt the real storage file.
-
-    Args:
-        entries: complete list of Entry objects to persist.
-
-    Raises:
-        StoragePermissionError: if the file or its directory cannot be written.
-    """
+    """Persist all entries to the active backend atomically."""
+    if _is_sqlite_backend():
+        from devlog.sqlite_storage import save_entries as sqlite_save_entries
+        return sqlite_save_entries(entries)
+    
     ensure_storage_dir()
     path = get_storage_path()
     tmp_path = path.with_suffix(".tmp")
@@ -148,7 +183,14 @@ def save_entries(entries: list[Entry]) -> None:
 
     try:
         with tmp_path.open("w", encoding="utf-8") as fh:
-            json.dump(payload, fh, indent=2, ensure_ascii=False)
+            # Acquire exclusive lock for writing
+            _lock_file(fh, exclusive=True)
+            try:
+                json.dump(payload, fh, indent=2, ensure_ascii=False)
+                fh.flush()
+                os.fsync(fh.fileno())
+            finally:
+                _unlock_file(fh)
     except (PermissionError, OSError):
         raise StoragePermissionError(path, "write")
 
@@ -159,13 +201,11 @@ def save_entries(entries: list[Entry]) -> None:
 
 
 def add_entry(new_entry: Entry) -> None:
-    """Append a single entry to persistent storage.
-
-    Loads the current entries, appends the new one, and saves the full list.
-
-    Args:
-        new_entry: the Entry to persist.
-    """
+    """Append a single entry to persistent storage."""
+    if _is_sqlite_backend():
+        from devlog.sqlite_storage import add_entry as sqlite_add_entry
+        return sqlite_add_entry(new_entry)
+    
     entries = load_entries()
     entries.append(new_entry)
     save_entries(entries)
@@ -232,6 +272,10 @@ def update_entry(updated: Entry) -> bool:
     Raises:
         StoragePermissionError: if the file cannot be written.
     """
+    if _is_sqlite_backend():
+        from devlog.sqlite_storage import update_entry as sqlite_update_entry
+        return sqlite_update_entry(updated)
+    
     entries = load_entries()
     for i, e in enumerate(entries):
         if e.id == updated.id:
@@ -253,6 +297,10 @@ def delete_entry(entry_id: str) -> bool:
     Raises:
         StoragePermissionError: if the file cannot be written.
     """
+    if _is_sqlite_backend():
+        from devlog.sqlite_storage import delete_entry as sqlite_delete_entry
+        return sqlite_delete_entry(entry_id)
+    
     entries = load_entries()
     new_entries = [e for e in entries if e.id != entry_id]
     if len(new_entries) == len(entries):
@@ -729,7 +777,11 @@ def read_raw_entries() -> tuple[object, bool]:
         raise FileNotFoundError(path)
     try:
         with path.open("r", encoding="utf-8") as fh:
-            return json.load(fh), False
+            _lock_file(fh, exclusive=False)
+            try:
+                return json.load(fh), False
+            finally:
+                _unlock_file(fh)
     except PermissionError as exc:
         raise StoragePermissionError(path, "read") from exc
     except OSError as exc:

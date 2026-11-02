@@ -6,6 +6,7 @@ import pytest
 
 from devlog import storage
 from devlog.cli import main
+from tests.conftest import active_backend
 
 # `runner`, `data_dir`, and `write_entries` come from tests/conftest.py.
 
@@ -130,6 +131,10 @@ def test_validate_duplicate_id():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 def test_repair_clean_store_is_a_noop(runner, tmp_path, write_entries):
     write_entries(tmp_path,
         {
@@ -149,6 +154,10 @@ def test_repair_clean_store_is_a_noop(runner, tmp_path, write_entries):
     # File untouched
     data = json.loads((tmp_path / "entries.json").read_text())
     assert len(data["entries"]) == 1
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_strips_invalid_tags_keeps_entry(runner, tmp_path, write_entries):
@@ -192,6 +201,10 @@ def test_repair_strips_invalid_tags_keeps_entry(runner, tmp_path, write_entries)
     assert by_id["bad-tag"]["tags"] == ["ok-tag"]
     # User can see what was changed
     assert "stripped 1 bad tag" in result.output
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_drops_entries_with_bad_timestamp(runner, tmp_path, write_entries):
@@ -218,6 +231,10 @@ def test_repair_drops_entries_with_bad_timestamp(runner, tmp_path, write_entries
     assert result.exit_code == 1
     data = json.loads((tmp_path / "entries.json").read_text())
     assert {e["id"] for e in data["entries"]} == {"good"}
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_dedupes_duplicate_ids(runner, tmp_path, write_entries):
@@ -245,6 +262,10 @@ def test_repair_dedupes_duplicate_ids(runner, tmp_path, write_entries):
     # First occurrence wins
     assert len(data["entries"]) == 1
     assert data["entries"][0]["message"] == "first"
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_dry_run_does_not_write(runner, tmp_path, write_entries):
@@ -266,6 +287,10 @@ def test_repair_dry_run_does_not_write(runner, tmp_path, write_entries):
     assert "DRY RUN" in result.output
     after = (tmp_path / "entries.json").read_text()
     assert before == after
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_writes_backup_before_writing(runner, tmp_path, write_entries):
@@ -293,6 +318,10 @@ def test_repair_writes_backup_before_writing(runner, tmp_path, write_entries):
     assert payload["entries"][0]["id"] == "bad"
     # Repair report mentions the backup
     assert "Backup written to" in result.output
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_drops_unrecoverable_writes_backup(runner, tmp_path, write_entries):
@@ -332,6 +361,10 @@ def test_repair_no_backup_flag_skips_backup(runner, tmp_path, write_entries):
     # No drop happened (bad tag was stripped in place), so exit is 0.
     assert result.exit_code == 0
     assert not (tmp_path / "backups").exists() or not list((tmp_path / "backups").glob("*.json"))
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_no_file_is_noop(runner, tmp_path):
@@ -341,6 +374,10 @@ def test_repair_no_file_is_noop(runner, tmp_path):
     assert result.exit_code == 0
     assert "No journal yet" in result.output
     assert not (tmp_path / "entries.json").exists()
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_corrupt_json_errors(runner, tmp_path):
@@ -357,6 +394,10 @@ def test_repair_corrupt_json_errors(runner, tmp_path):
     # through the "Cannot repair:" prefix, only one colon boundary
     # should remain visible to the user.
     assert result.output.count("Error:") <= 1
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_recovers_truncated_trailing_garbage(runner, tmp_path):
@@ -385,6 +426,10 @@ def test_repair_recovers_truncated_trailing_garbage(runner, tmp_path):
     assert result.exit_code == 0
     data = json.loads((tmp_path / "entries.json").read_text())
     assert [e["id"] for e in data["entries"]] == ["good"]
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_recovery_fails_when_no_valid_object(runner, tmp_path):
@@ -404,6 +449,10 @@ def test_repair_quiet_no_issues(runner, tmp_path):
     result = runner.invoke(main, ["repair", "--quiet"])
     assert result.exit_code == 0
     assert result.output.strip() == ""
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
+)
 
 
 def test_repair_quiet_with_issues(runner, tmp_path, write_entries):

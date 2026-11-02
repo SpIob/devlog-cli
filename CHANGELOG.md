@@ -5,6 +5,54 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Tier 2 — data & integrations (SQLite backend, git mode, competitor importers).
+
+### Added
+
+- **SQLite storage backend** — opt-in via `DEVLOG_BACKEND=sqlite`. Stores entries
+  in `<data-dir>/entries.db` (WAL journal mode, 5s busy timeout, index on
+  `created_at`, schema-version table for future migrations). `add` is a single
+  INSERT instead of a full-file rewrite, so write cost no longer grows with
+  journal size. All commands work unchanged; switch back by unsetting the var.
+- **Cross-process file locking for the JSON backend** — shared locks on reads,
+  exclusive locks + `fsync` before the atomic `os.replace` on writes
+  (`flock` on POSIX, `msvcrt.locking` on Windows). Concurrent devlog processes
+  can no longer clobber each other.
+- **Git integration** — new `devlog git` command group:
+  `devlog git status` (repo/branch/remote/dirty state, `--json` for scripts),
+  `devlog git sync` (`git add -A` + commit of the repo containing the data
+  dir), and `devlog git log [--oneline] [-n N]`. Keeps the journal inside an
+  existing repo in sync + gives free history; see the README recipe.
+- **`devlog add --from-commit <ref>`** — create an entry from a git commit:
+  message from the subject line, tags from a conventional-commit scope
+  (`feat(auth):` → `auth`) or `[tag]` prefix plus a `commit-<short-hash>` tag,
+  `created_at` from the author date (normalised to UTC). Any MESSAGE argument
+  becomes a note prefix; `-t` tags merge in front.
+- **Competitor importers** — `devlog import --format jrnl|dayone` for jrnl and
+  Day One JSON exports (auto-detected from file content when `--format auto`).
+  Reuses the existing dedupe path: ids and `(created_at, message)`
+  fingerprints are respected, so re-imports are no-ops. jrnl's `starred` flag
+  becomes a `starred` tag; Day One uuids and tags are preserved (tags
+  lowercased, spaces → hyphens).
+- **`devlog on <date>`** — entries for a specific day: `today`, `yesterday`,
+  `Nd` days ago, or `YYYY-MM-DD` (local-zone bucketing when `DEVLOG_TZ` is
+  set). The missing sibling of `today`/`yesterday`/`week`.
+- **Smarter search** — multiple space-separated terms now AND together,
+  `"quoted phrases"` match as a single term, and `--regex` interprets the
+  query as a case-insensitive regular expression (invalid patterns exit 2).
+  Plain single-term substring search is unchanged and still the default.
+- **`--at Nd` / `--at Nw`** — `add --at` and `edit --at` now accept relative
+  day/week forms, matching what `--since`/`--until` already supported.
+
+### Changed
+
+- `doctor` and `repair` are backend-aware: on SQLite they report/repair the
+  `entries.db` store (corrupt-JSON right-truncation recovery remains a
+  JSON-backend concept); `restore`'s overwrite prompt now triggers when the
+  active backend's store exists, not just `entries.json`.
+
 ## [1.6.1] - 2026-10-30
 
 ### Changed

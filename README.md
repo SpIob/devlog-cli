@@ -235,16 +235,17 @@ devlog search QUERY [OPTIONS]
 
 | Argument / Option | Short | Type | Required | Default | Description |
 |-------------------|-------|------|----------|---------|-------------|
-| `QUERY` | — | string | Yes | — | Search term. Case-insensitive substring match against the message field. |
+| `QUERY` | — | string | Yes | — | Search term. Case-insensitive substring match against the message field. Multiple space-separated terms require ALL of them (AND). Wrap a phrase in quotes to match it exactly. With `--regex`, QUERY is a regular expression. |
 | `--tag` | `-t` | string | No | None | Narrow results to entries that also carry these tags. Repeatable; AND logic. |
 | `--limit` | `-n` | integer | No | 20 | Maximum number of results to display. |
 | `--since` | — | string | No | None | Only show entries on or after this date. See [Date filters](#date-filters). |
 | `--until` | — | string | No | None | Only show entries on or before this date. See [Date filters](#date-filters). |
+| `--regex` | — | flag | No | False | Interpret `QUERY` as a case-insensitive regular expression. Invalid patterns exit with code 2. |
 | `--quiet` | `-q` | flag | No | False | Output raw JSON lines to STDOUT instead of the Rich table. |
 
 **Notes:**
 
-- Matching substrings are highlighted in bold yellow in the Message column.
+- Matching substrings are highlighted in bold yellow in the Message column (single-term queries only; highlighting is skipped for multi-term and regex queries).
 - An empty or whitespace-only `QUERY` is rejected with `QUERY cannot be empty.` and exits with code 1.
 - If no results are found, prints `No entries matched "<query>".` and exits with code 0.
 - Tag filters and the search term both apply simultaneously (AND logic).
@@ -253,10 +254,43 @@ devlog search QUERY [OPTIONS]
 
 ```bash
 devlog search "null pointer"
+devlog search auth login              # AND: both terms required
+devlog search "login bug" auth        # quoted phrase + term
+devlog search "^Fix bug #[0-9]+$" --regex
 devlog search "cache" -t backend
 devlog search "deploy" --limit 10
 devlog search "refactor" --since 7d
 devlog search "refactor" --quiet | jq '.'
+```
+
+---
+
+### `devlog on`
+
+Show entries for a specific date — the missing sibling of `today` / `yesterday` / `week`.
+
+```
+devlog on DATE [OPTIONS]
+```
+
+| Argument / Option | Short | Type | Required | Default | Description |
+|-------------------|-------|------|----------|---------|-------------|
+| `DATE` | — | string | Yes | — | `today`, `yesterday`, `Nd` (N days ago, e.g. `3d`), or an absolute `YYYY-MM-DD`. |
+| `--limit` | `-n` | integer | No | 50 | Maximum entries to show. |
+| `--quiet` | `-q` | flag | No | False | Output raw JSON lines. |
+
+**Notes:**
+
+- The day bucket is the local date when `DEVLOG_TZ` is set, otherwise UTC — same rule as `today`/`yesterday`/`week`.
+- An unparseable `DATE` exits with code 2.
+
+**Examples:**
+
+```bash
+devlog on today
+devlog on yesterday
+devlog on 3d                # three days ago
+devlog on 2025-05-10
 ```
 
 ---
@@ -742,7 +776,7 @@ devlog merge-tag bugfix fix --dry-run
 
 ### `devlog import`
 
-Import entries from a JSON file (the native `entries.json` shape) or from a Markdown file produced by `devlog export`.
+Import entries from a JSON file (the native `entries.json` shape), from a Markdown file produced by `devlog export`, or from a **jrnl** or **Day One** JSON export.
 
 ```
 devlog import PATH [OPTIONS]
@@ -751,7 +785,7 @@ devlog import PATH [OPTIONS]
 | Argument / Option | Short | Type | Required | Default | Description |
 |-------------------|-------|------|----------|---------|-------------|
 | `PATH` | — | path | Yes | — | Input file. Must exist and be readable. |
-| `--format` | `-f` | choice | `auto` | One of `auto`, `json`, `markdown`. `auto` picks by file extension. |
+| `--format` | `-f` | choice | `auto` | One of `auto`, `json`, `markdown`, `jrnl`, `dayone`. `auto` picks by file extension, then by content sniffing. |
 | `--dry-run` | — | flag | False | Show what would be imported without writing. |
 | `--quiet` | `-q` | flag | False | Suppress the summary line. |
 
@@ -761,6 +795,8 @@ devlog import PATH [OPTIONS]
 - Stable `id` values in the source JSON are preserved across re-imports, so a `devlog export` → `devlog import` round-trip keeps short ids stable for cross-referencing. If the source row omits `id`, devlog mints a fresh one.
 - Unreadable rows in a JSON import (non-dict items or entries missing required fields) are reported in the summary line as `Ignored N unreadable rows.`
 - Auto-detect sniffs the first non-blank character when the file extension is missing, so pipes and extensionless files work: leading `{` → JSON, leading `#` → Markdown.
+- **jrnl** format: an object with an `entries` array whose items carry `text`/`date`/`starred`. `text` becomes the message, `date` (naive timestamps are treated as UTC) becomes `created_at`, `tags` carry over, and a starred entry gains a `starred` tag. Re-imports dedupe by fingerprint since jrnl rows have no stable ids.
+- **Day One** format: an object with an `entries` array whose items carry `creationDate`/`text`. The Day One `uuid` is preserved as the entry id; tags are lowercased with spaces converted to hyphens.
 - If the file format cannot be detected and `--format` was not given, exits with code 2.
 - Malformed JSON or markdown that contains no `## …` headings exits with code 2.
 
@@ -769,7 +805,97 @@ devlog import PATH [OPTIONS]
 ```bash
 devlog import ~/notes/old-log.md
 devlog import /tmp/entries.json --format json
+devlog import ~/.jrnl/journal.json --format jrnl     # or just: devlog import ~/.jrnl/journal.json
+devlog import ~/Downloads/Day\\ One.json              # auto-detects Day One
 devlog import /tmp/entries.json --dry-run
+```
+
+---
+
+### `devlog git`
+
+Git integration for keeping your journal inside a repository (sync + history for free).
+
+```
+devlog git {status|sync|log} [OPTIONS]
+```
+
+| Command | Option | Type | Default | Description |
+|---------|--------|------|---------|-------------|
+| `git status` | `--json` | flag | False | Emit the full status (repo root, branch, remote, clean flag, changed files) as one JSON object. |
+| `git sync` | `--message` / `-m` | string | `devlog: journal update` | Commit message used when changes are found. |
+| `git sync` | `--quiet` / `-q` | flag | False | Suppress output. |
+| `git log` | `--oneline` | flag | False | One commit per line. |
+| `git log` | `--limit` / `-n` | integer | 20 | Maximum commits to show. |
+
+**Notes:**
+
+- Commands resolve the repository containing your data dir (`DEVLOG_DATA_DIR` or `~/.devlog`) — the data dir itself does not need to be the repo root; a journal subdirectory inside a repo works.
+- `git status` reports `is_git_repo: false` (exit 0) when no repository is found.
+- `git sync` runs `git add -A` + `git commit` only when `git status --porcelain` is non-empty; a clean repo is a no-op. Exits 1 when the data dir is not inside a repository.
+- `git log` prints the repository's commit log (not filtered to journal files). A repository with no commits exits 1 with git's `does not have any commits yet` error.
+
+**Example recipe — journal inside an existing repo:**
+
+```bash
+# Keep the journal in a private repo and commit after each entry.
+export DEVLOG_DATA_DIR="$HOME/Dropbox/devlog-repo"
+git -C "$HOME/Dropbox/devlog-repo" init   # once
+
+devlog add "shipped the thing"
+devlog git sync                            # commits journal changes
+devlog git status                          # dirty state at a glance
+```
+
+**Example recipe — auto-commit after every write (shell hook):**
+
+```bash
+# In your shell rc: sync the journal whenever devlog writes to it.
+devlog() {
+  command devlog "$@" || return $?
+  case "$1" in
+    add|edit|delete|import|restore|merge-tag|rename-tag) command devlog git sync -q ;;
+  esac
+}
+```
+
+---
+
+### Git-native entries: `devlog add --from-commit`
+
+Turn a commit into a journal entry — the message, tags, and timestamp come from the commit itself.
+
+```
+devlog add [NOTE] --from-commit REF
+```
+
+| Argument / Option | Short | Type | Required | Default | Description |
+|-------------------|-------|------|----------|---------|-------------|
+| `NOTE` | — | string | Yes* | — | Optional note prefixed to the commit subject. Pass an empty string (`""`) to use the commit message alone. *Required by the parser; `""` is the "no note" idiom. |
+| `--from-commit` | — | git ref | — | None | Any ref `git show` accepts: `HEAD`, `HEAD~1`, a sha, a branch name. |
+| `--tag` / `-t` | — | string | No | None | Extra tags, merged in front of the ones extracted from the commit. |
+| `--at` | — | timestamp | No | author date | Override the entry timestamp (same formats as a plain `add --at`). |
+
+**Notes:**
+
+- Message: the commit subject (first line) is used; a NOTE argument is prefixed as `NOTE\n\n<subject>`.
+- Tags: a conventional-commit scope (`feat(auth): …`, `fix(api): …`) becomes the tag `auth`/`api`; a `[tag]` message prefix also becomes a tag; a `commit-<short-hash>` tag is always added for cross-referencing back to `git log`.
+- Timestamp: the commit's author date, normalised to UTC.
+- Must be run inside a git repository; exits 1 outside one or with an unresolvable ref.
+
+**Examples:**
+
+```bash
+# Journal the commit you just shipped
+devlog add "" --from-commit HEAD
+
+# With a note and extra tags
+devlog add "reviewed with the team" --from-commit HEAD~2 -t retro
+
+# Journal the whole day's work from git history
+for ref in $(git log --since=midnight --format=%h); do
+  devlog add "" --from-commit "$ref" -q
+done
 ```
 
 ---
@@ -1132,6 +1258,37 @@ You can make the variable permanent by adding it to your shell configuration:
 # ~/.zshrc or ~/.bashrc
 export DEVLOG_DATA_DIR="$HOME/Dropbox/devlog"
 ```
+
+### `DEVLOG_BACKEND`
+
+Select the storage backend: `json` (default) or `sqlite`.
+
+```bash
+export DEVLOG_BACKEND=sqlite
+devlog add "hello from SQLite"
+```
+
+| | `json` (default) | `sqlite` |
+|---|---|---|
+| Store | `<data-dir>/entries.json` | `<data-dir>/entries.db` |
+| Write pattern | Full-file rewrite (atomic tmp + `os.replace`) | Single-row INSERT/UPDATE/DELETE in a transaction |
+| Concurrency | Cross-process `flock`/`msvcrt` locking | WAL journal mode + 5s busy timeout |
+| Sweet spot | Journals up to ~10k entries | 10k+ entries, multiple simultaneous processes |
+| Corrupt-file recovery | `repair` right-truncation recovery | Not applicable (live database with its own crash safety) |
+
+**Notes:**
+
+- Both backends implement the same command surface; switch by changing the env var — no migration command needed.
+- `backup` always writes a JSON snapshot regardless of backend, so `backup` → switch backend → `restore` migrates a journal between backends:
+
+```bash
+# Migrate JSON → SQLite
+DEVLOG_BACKEND=json devlog backup -q            # prints the snapshot path
+export DEVLOG_BACKEND=sqlite
+devlog restore <path-from-above> -y
+```
+
+- `doctor` and `repair` are backend-aware and report the active store's path and health.
 
 ### `DEVLOG_TZ`
 

@@ -55,6 +55,7 @@ COMMANDS: list[tuple[str, str]] = [
     ("today", "Show today's entries"),
     ("yesterday", "Show yesterday's entries"),
     ("week", "Show the last 7 days"),
+    ("on", "Show entries for a specific date"),
     ("tail", "Show the N most recent entries"),
     ("tags", "List tags with usage counts"),
     ("tag", "Show or delete entries with a tag"),
@@ -177,6 +178,28 @@ def _require_positive_int(name: str, value: int) -> None:
         sys.exit(1)
 
 
+def _parse_search_query(query: str) -> list[str]:
+    """Parse a search query into terms, respecting quoted phrases.
+
+    - Split on whitespace
+    - Quoted phrases ("...") are kept as a single term
+    - Empty result for empty/whitespace-only input
+
+    Args:
+        query: raw query string from the user
+
+    Returns:
+        List of terms (strings) to match with AND logic
+    """
+    import shlex
+    try:
+        # shlex.split handles quoted strings properly
+        return shlex.split(query)
+    except ValueError:
+        # Fallback for unbalanced quotes - treat as simple split
+        return query.split()
+
+
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
@@ -217,6 +240,13 @@ def main(ctx: click.Context, version: bool, interactive: bool) -> None:
 # command lookup and help order stay identical to the pre-split CLI.
 _theme_cli.register(main)
 
+# The git group lives in _git_cli.py; attach it at import time
+try:
+    from devlog import _git_cli
+    _git_cli.register(main)
+except ImportError:
+    pass  # _git_cli not available yet
+
 
 # ---------------------------------------------------------------------------
 # add
@@ -247,11 +277,83 @@ _theme_cli.register(main)
         "inputs are interpreted in that zone."
     ),
 )
-def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None) -> None:
-    """Add a new journal entry."""
+@click.option(
+    "--from-commit",
+    "from_commit",
+    default=None,
+    help=(
+        "Create entry from a git commit. Prefills message, tags, and date "
+        "from the commit. The message argument becomes a prefix/note."
+    ),
+)
+def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_commit: str | None) -> None:
+    """Add a new journal entry.
+
+    Pass `-` as the message to read from stdin (e.g., `git log -1 --format=%B | devlog add -`).
+    Use `--from-commit HEAD` to create an entry from the latest git commit.
+    """
+    # Handle --from-commit
+    if from_commit is not None:
+        from devlog._gitops import create_entry_from_commit, get_git_repo_root
+        
+        # Find git repo
+        cwd = Path.cwd()
+        repo_root = get_git_repo_root(cwd)
+        if repo_root is None:
+            ui.print_error("Not in a git repository (or any parent directory).")
+            sys.exit(1)
+        
+        entry = create_entry_from_commit(from_commit, repo_root)
+        if entry is None:
+            ui.print_error(f"Could not get info for commit '{from_commit}'.")
+            sys.exit(1)
+        
+        # Use provided message as prefix/note when non-empty ("-" and
+        # "" both mean "no prefix" — the commit message stands alone).
+        if message not in ("-", ""):
+            entry.message = f"{message}\n\n{entry.message}"
+        
+        # Merge tags
+        norm_tags = _validate_tags_or_exit(tag)
+        if norm_tags:
+            entry.tags = list(dict.fromkeys(norm_tags + entry.tags))  # preserve order, dedupe
+        
+        # Override timestamp if --at is also provided
+        if at is not None:
+            try:
+                ts_dt = _dates._parse_timestamp(at, tz=_dates._resolve_local_tz())
+                ts = ts_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                entry.created_at = ts
+            except click.BadParameter as exc:
+                ui.print_error(str(exc))
+                sys.exit(2)
+        
+        # Ensure entry has an ID
+        if not entry.id:
+            entry.id = str(uuid.uuid4())
+        
+        try:
+            storage.add_entry(entry)
+        except StorageError as exc:
+            _handle_storage_error(exc)
+        
+        if not quiet:
+            console.print(ui.entry_panel(entry))
+        return
+    
     if not message or not message.strip():
         ui.print_error("MESSAGE cannot be empty.")
         sys.exit(1)
+
+    # Read from stdin if message is "-"
+    if message == "-":
+        if sys.stdin.isatty():
+            ui.print_error("stdin is a TTY; nothing to read. Provide a message or pipe input.")
+            sys.exit(1)
+        message = sys.stdin.read()
+        if not message or not message.strip():
+            ui.print_error("stdin is empty. Provide a message via pipe or redirect.")
+            sys.exit(1)
 
     norm_tags = _validate_tags_or_exit(tag)
 
@@ -358,6 +460,7 @@ def list_entries(
 )
 @click.option("--since", default=None, help="Only show entries on/after this date (UTC).")
 @click.option("--until", default=None, help="Only show entries on/before this date (UTC).")
+@click.option("--regex", is_flag=True, help="Interpret QUERY as a regex pattern.")
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
 def search(
     query: str,
@@ -365,9 +468,15 @@ def search(
     limit: int,
     since: str | None,
     until: str | None,
+    regex: bool,
     quiet: bool,
 ) -> None:
-    """Search entry messages for QUERY (case-insensitive substring)."""
+    """Search entry messages for QUERY.
+
+    Default: case-insensitive substring match. Multiple space-separated
+    terms require ALL terms (AND logic). Wrap a phrase in quotes to
+    match it exactly. Use --regex for full regex patterns.
+    """
     # `click.argument` does not reject empty strings at the parser
     # level, so without an explicit guard `devlog search ""` would
     # match every entry and emit the awkward subtitle `Query: ""`.
@@ -381,7 +490,29 @@ def search(
     all_entries = _load_entries_or_exit()
 
     filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until)
-    matched = [e for e in filtered if query.lower() in e.message.lower()]
+
+    if regex:
+        import re
+        try:
+            pattern = re.compile(query, re.IGNORECASE)
+        except re.error as exc:
+            ui.print_error(f"Invalid regex: {exc}")
+            sys.exit(2)
+        matched = [e for e in filtered if pattern.search(e.message)]
+        # For regex, show the pattern in the subtitle
+        display_query = f"regex: {query}"
+    else:
+        # Parse query: split on spaces, respecting quoted phrases
+        terms = _parse_search_query(query)
+        if not terms:
+            ui.print_error("QUERY cannot be empty.")
+            sys.exit(1)
+        matched = [
+            e
+            for e in filtered
+            if all(term.lower() in e.message.lower() for term in terms)
+        ]
+        display_query = query
 
     total = len(matched)
     shown = matched[:limit]
@@ -391,14 +522,15 @@ def search(
         return
 
     if total == 0:
-        ui.print_info(f'No entries matched "{query}".')
+        ui.print_info(f'No entries matched "{display_query}".')
         return
 
     match_word = "match" if total == 1 else "matches"
     title = f"Journal · {total} {match_word}"
-    subtitle = f'Query: "{query}"'
+    subtitle = f'Query: "{display_query}"'
+    highlight = query if not regex else None
     table = ui.entries_table(
-        shown, total, highlight_query=query, title=title, subtitle=subtitle
+        shown, total, highlight_query=highlight or "", title=title, subtitle=subtitle
     )
     console.print(table)
 
@@ -1151,6 +1283,58 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# on
+# ---------------------------------------------------------------------------
+
+
+@main.command()
+@click.argument("date", required=True)
+@click.option(
+    "--limit", "-n", type=int, default=50, show_default=True, help="Max entries to show."
+)
+@click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
+def on(date: str, limit: int, quiet: bool) -> None:
+    """Show entries for a specific date.
+
+    DATE can be:
+    - "today" / "yesterday" (local zone when DEVLOG_TZ is set)
+    - YYYY-MM-DD (absolute date)
+    - Nd (relative days ago, e.g. "3d")
+    
+    The bucket is computed in the DEVLOG_TZ zone when set, otherwise UTC.
+    """
+    _require_positive_int("--limit", limit)
+
+    all_entries = _load_entries_or_exit()
+
+    tz = _dates._resolve_local_tz()
+    target_date = _dates._parse_on_date(date, tz=tz)
+    
+    if target_date is None:
+        ui.print_error(f"Invalid date: {date}")
+        sys.exit(2)
+
+    on_entries = _dates._filter_by_local_window(all_entries, end_date=target_date, days=0, tz=tz)
+    subtitle = target_date.strftime("%Y-%m-%d")
+
+    on_entries.sort(key=_BY_CREATED_AT, reverse=True)
+    total = len(on_entries)
+    shown = on_entries[:limit]
+
+    if quiet:
+        _print_jsonl(shown)
+        return
+
+    if total == 0:
+        ui.print_info(f"No entries on {subtitle}.")
+        return
+
+    title = f"On · {subtitle} · {total} {ui.plural_noun(total, 'entry')}"
+    table = ui.entries_table(shown, total, title=title)
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
 # calendar
 # ---------------------------------------------------------------------------
 
@@ -1494,16 +1678,72 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
     "--format",
     "-f",
     "fmt",
-    type=click.Choice(["auto", "json", "markdown"], case_sensitive=False),
+    type=click.Choice(
+        ["auto", "json", "markdown", "jrnl", "dayone"], case_sensitive=False
+    ),
     default="auto",
     show_default=True,
-    help="Input format. 'auto' detects by file extension (.json, .md).",
+    help="Input format. 'auto' detects by file extension/content. 'jrnl' and 'dayone' import from those journal formats.",
 )
 @click.option("--dry-run", is_flag=True, help="Show what would be imported; do not write.")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress preview output.")
 def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
-    """Import entries from a JSON or Markdown export file."""
-    _io.import_cmd(path, fmt, dry_run, quiet)
+    """Import entries from a JSON, Markdown, jrnl, or Day One export file."""
+    from devlog import _importers, _io, storage, ui
+
+    if fmt == "auto":
+        fmt = _importers.detect_format(path)
+
+    if fmt in ("jrnl", "dayone"):
+        if fmt == "jrnl":
+            candidates = _importers.import_jrnl_json(path)
+        else:
+            candidates = _importers.import_dayone_json(path)
+        unreadable_rows = 0
+    elif fmt == "json":
+        # Use JSON importer directly (not through _io.import_cmd to preserve exit codes)
+        candidates, unreadable_rows = _io._read_import_payload(path, "json")
+    else:
+        # Use existing JSON/Markdown importer via _io
+        _io.import_cmd(path, fmt, dry_run, quiet)
+        return
+
+    try:
+        existing = storage.load_entries()
+    except Exception as exc:
+        ui.print_error(str(exc))
+        sys.exit(2)
+
+    to_add, skipped = _io._dedup_against_existing(candidates, existing)
+
+    if dry_run:
+        if not quiet:
+            _io._emit_import_summary(len(to_add), skipped, unreadable_rows, dry_run=True)
+        return
+
+    if to_add:
+        try:
+            existing.extend(to_add)
+            storage.save_entries(existing)
+        except Exception as exc:
+            ui.print_error(str(exc))
+            sys.exit(2)
+
+    if not quiet:
+        if to_add:
+            _io._emit_import_summary(len(to_add), skipped, unreadable_rows, dry_run=False)
+        else:
+            if skipped or unreadable_rows:
+                parts = []
+                if skipped:
+                    parts.append(f"{skipped} duplicate{ui.plural_s(skipped)} skipped")
+                if unreadable_rows:
+                    parts.append(
+                        f"{unreadable_rows} unreadable row{ui.plural_s(unreadable_rows)} ignored"
+                    )
+                ui.print_info(f"No new entries to import ({', '.join(parts)}).")
+            else:
+                ui.print_info("No entries to import.")
 
 
 # ---------------------------------------------------------------------------
@@ -1532,11 +1772,71 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
 def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
     """Inspect and repair the on-disk journal store.
 
-    Validates every entry in ``entries.json`` against the schema, then
-    either reports the issues (``--dry-run``) or rewrites the file with
-    the malformed rows removed. The original file is preserved in
-    ``backups/`` whenever a write happens unless ``--no-backup`` is set.
+    Validates every entry against the schema, then either reports the
+    issues (``--dry-run``) or rewrites the store with malformed rows
+    removed. The original store is preserved in ``backups/`` whenever a
+    write happens unless ``--no-backup`` is set.
     """
+    if storage._is_sqlite_backend():
+        # SQLite backend: the store is a live database, not a flat file,
+        # so the corrupt-JSON recovery path does not apply. Rows were
+        # already validated at insert time; running the same validator
+        # over the payload still catches hand-edited (post-migration)
+        # drift, but there is no "repair" beyond dropping bad rows.
+        from devlog.sqlite_storage import get_sqlite_path, read_raw_entries_sqlite
+
+        if not get_sqlite_path().exists():
+            if not quiet:
+                ui.print_info("No journal yet — nothing to repair.")
+            return
+
+        raw, recovered = read_raw_entries_sqlite()
+        kept, issues = storage.build_repair_plan(raw)
+        raw_count = len(raw.get("entries", []))
+        dropped = max(0, raw_count - len(kept))
+        tags_stripped = sum(1 for i in issues if i.kind == "bad_tag")
+
+        if not issues:
+            if not quiet:
+                ui.print_info("No issues found. Nothing to repair.")
+            return
+
+        backup_path: str | None = None
+        if not dry_run and backup:
+            try:
+                storage.ensure_storage_dir()
+                backups_dir = storage.get_backups_dir()
+                backups_dir.mkdir(parents=True, exist_ok=True)
+                backup_path = str(backups_dir / storage.default_backup_filename())
+                with open(backup_path, "w", encoding="utf-8") as fh:
+                    json.dump(raw, fh, indent=2, ensure_ascii=False)
+            except (OSError, PermissionError) as exc:
+                ui.print_error(f"Could not write backup: {exc}")
+                sys.exit(2)
+
+        if not dry_run:
+            try:
+                storage.save_entries(kept)
+            except StorageError as exc:
+                _handle_storage_error(exc)
+                return
+
+        if not quiet:
+            console.print(
+                ui.repair_summary(
+                    issues=issues,
+                    dropped=dropped,
+                    kept=len(kept),
+                    dry_run=dry_run,
+                    backup_path=backup_path,
+                    tags_stripped=tags_stripped,
+                )
+            )
+        if not dry_run and dropped > 0:
+            sys.exit(1)
+        return
+
+    # JSON backend: read the raw file (with right-truncation recovery).
     try:
         raw, recovered = storage.read_raw_entries()
     except FileNotFoundError:
@@ -1744,8 +2044,14 @@ def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
             short = (iss.entry_id[:8] + "…") if iss.entry_id and len(iss.entry_id) > 8 else (iss.entry_id or f"#{iss.index}")
             ui.print_warning(f"Skipped during restore: [{short}] {iss.message}")
 
-    current_path = storage.get_storage_path()
-    has_existing = current_path.exists()
+    if storage._is_sqlite_backend():
+        from devlog.sqlite_storage import get_sqlite_path
+
+        current_path = get_sqlite_path()
+        has_existing = current_path.exists()
+    else:
+        current_path = storage.get_storage_path()
+        has_existing = current_path.exists()
     if has_existing and not yes and not dry_run:
         click.confirm(
             f"This will overwrite the current journal at {current_path}. Continue?",
@@ -1855,6 +2161,58 @@ def _emit_doctor_report(report: dict, *, quiet: bool) -> None:
 @click.option("--quiet", "-q", is_flag=True, help="Output a single JSON health summary.")
 def doctor(quiet: bool) -> None:
     """Check the journal store for corruption and report basic health stats."""
+    if storage._is_sqlite_backend():
+        from devlog.sqlite_storage import get_db_size, get_sqlite_path
+
+        path = get_sqlite_path()
+        report: dict = {
+            "ok": True,
+            "path": str(path),
+            "exists": path.exists(),
+            "writable": False,
+            "size_bytes": get_db_size(),
+            "entry_count": 0,
+            "issues": [],
+            "days_since_last": None,
+            "top_messages": [],
+        }
+
+        writable, ok = _doctor_probe_writable(path)
+        report["writable"] = writable
+        report["ok"] = report["ok"] and ok
+
+        if not path.exists():
+            if not ok:
+                sys.exit(2)
+            _emit_doctor_report(report, quiet=quiet)
+            return
+
+        try:
+            entries = storage.load_entries()
+        except StorageError as exc:
+            report["ok"] = False
+            report["issues"] = [
+                {
+                    "kind": "corrupt_db",
+                    "message": f"SQLite database is unreadable: {exc}",
+                    "entry_id": None,
+                }
+            ]
+            _emit_doctor_report(report, quiet=quiet)
+            sys.exit(2)
+            return  # unreachable
+
+        report["entry_count"] = len(entries)
+        if entries:
+            report["days_since_last"] = _doctor_days_since_last(entries)
+            report["top_messages"] = _doctor_top_messages(entries)
+
+        _emit_doctor_report(report, quiet=quiet)
+        if not report["ok"]:
+            sys.exit(1)
+        return
+
+    # JSON backend
     path = storage.get_storage_path()
     report: dict = {
         "ok": True,

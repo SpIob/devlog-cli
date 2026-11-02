@@ -13,6 +13,7 @@ import pytest
 
 from devlog import storage
 from devlog.models import Entry
+from tests.conftest import active_backend
 
 
 class TestEntryFromDict:
@@ -73,6 +74,10 @@ class TestEntryFromDict:
 
 
 class TestLoadEntriesTolerant:
+    @pytest.mark.skipif(
+        active_backend() == "sqlite",
+        reason="asserts entries.json on-disk semantics (JSON backend only)",
+    )
     def test_load_entries_ignores_unknown_fields(self, data_dir, write_entries):
         """Future-schema entries load instead of crashing every command."""
         write_entries(

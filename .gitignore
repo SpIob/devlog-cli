@@ -16,3 +16,6 @@ devlog-export.md
 exports/
 # Python build intermediate dir
 build/
+
+# macOS
+.DS_Store

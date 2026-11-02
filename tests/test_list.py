@@ -6,6 +6,7 @@ import pytest
 from click.testing import CliRunner
 
 from devlog.cli import main
+from tests.conftest import active_backend
 
 
 @pytest.fixture()
@@ -102,6 +103,10 @@ def test_list_invalid_limit(runner):
 # ---------------------------------------------------------------------------
 # Corrupted storage
 # ---------------------------------------------------------------------------
+@pytest.mark.skipif(
+        active_backend() == "sqlite",
+        reason="asserts entries.json on-disk semantics (JSON backend only)",
+    )
 
 
 def test_list_corrupted_file(tmp_path):

@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from devlog import storage
 from devlog.cli import main
 from devlog.models import Entry
+from tests.conftest import active_backend
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -80,6 +81,10 @@ def test_doctor_quiet_clean(runner, data_dir):
 # ---------------------------------------------------------------------------
 # Issues detected
 # ---------------------------------------------------------------------------
+@pytest.mark.skipif(
+        active_backend() == "sqlite",
+        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+    )
 
 
 def test_doctor_detects_bad_tags(runner, data_dir, tmp_path):
@@ -103,6 +108,10 @@ def test_doctor_detects_bad_tags(runner, data_dir, tmp_path):
     assert "attention" in result.output
     assert "validation issue" in result.output
     assert "devlog repair" in result.output
+@pytest.mark.skipif(
+        active_backend() == "sqlite",
+        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+    )
 
 
 def test_doctor_quiet_with_issues(runner, data_dir, tmp_path):
@@ -125,6 +134,10 @@ def test_doctor_quiet_with_issues(runner, data_dir, tmp_path):
     obj = json.loads(result.output.strip())
     assert obj["ok"] is False
     assert any(i["kind"] == "bad_tag" for i in obj["issues"])
+@pytest.mark.skipif(
+        active_backend() == "sqlite",
+        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+    )
 
 
 def test_doctor_detects_corrupt_json(runner, data_dir, tmp_path):
@@ -133,6 +146,10 @@ def test_doctor_detects_corrupt_json(runner, data_dir, tmp_path):
     assert result.exit_code == 2
     # Should mention the corruption
     assert "corrupt" in result.output.lower() or "valid" in result.output.lower() or "Doctor" in result.output
+@pytest.mark.skipif(
+        active_backend() == "sqlite",
+        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+    )
 
 
 def test_doctor_quiet_corrupt_json(runner, data_dir, tmp_path):
@@ -142,6 +159,10 @@ def test_doctor_quiet_corrupt_json(runner, data_dir, tmp_path):
     obj = json.loads(result.output.strip())
     assert obj["ok"] is False
     assert any(i["kind"] == "corrupt_json" for i in obj["issues"])
+@pytest.mark.skipif(
+        active_backend() == "sqlite",
+        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+    )
 
 
 def test_doctor_recovers_truncated_trailing_garbage(runner, data_dir, tmp_path):
@@ -234,6 +255,10 @@ def test_doctor_reports_file_size(runner, data_dir):
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 0
     assert "bytes" in result.output
+@pytest.mark.skipif(
+        active_backend() == "sqlite",
+        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+    )
 
 
 def test_doctor_lists_specific_issues_inline(runner, data_dir):
@@ -284,6 +309,10 @@ def test_doctor_lists_specific_issues_inline(runner, data_dir):
     # And the kind tag is shown too.
     assert "bad_timestamp" in result.output
     assert "bad_tag" in result.output
+@pytest.mark.skipif(
+        active_backend() == "sqlite",
+        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+    )
 
 
 def test_doctor_truncates_long_issue_lists(runner, data_dir):

@@ -1,8 +1,8 @@
 """Tests for the `devlog add` command."""
 
-import json
 from unittest.mock import patch
 
+from devlog import storage
 from devlog.cli import main
 from devlog.storage import StoragePermissionError
 
@@ -26,11 +26,19 @@ def test_add_with_tags(runner):
     assert "backend" in result.output
 
 
-def test_add_tags_deduplicated(runner, tmp_path):
+def test_add_tags_deduplicated(runner, tmp_path, monkeypatch):
+    from devlog import storage
+
+    # Align the in-process env with the runner's data dir so
+    # storage.load_entries() reads what the CLI wrote (CliRunner's env
+    # override only lasts for the invoke itself).
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
     runner.invoke(main, ["add", "Dup tags", "-t", "backend", "-t", "Backend"])
-    entries_file = tmp_path / "entries.json"
-    data = json.loads(entries_file.read_text())
-    assert data["entries"][0]["tags"].count("backend") == 1
+    # Read via the storage API (backend-agnostic) rather than parsing
+    # entries.json directly, so the test holds on both backends.
+    entries = storage.load_entries()
+    assert len(entries) == 1
+    assert entries[0].tags.count("backend") == 1
 
 
 def test_add_quiet(runner):
@@ -90,7 +98,15 @@ def test_add_too_many_tags(runner):
 
 
 def test_add_storage_permission_error(runner, tmp_path):
-    with patch("devlog.storage.save_entries") as mock_save:
+    import os
+
+    if os.environ.get("DEVLOG_BACKEND", "json").lower() == "sqlite":
+        # SQLite add path writes via sqlite_storage.add_entry (single
+        # INSERT, no save_entries round-trip).
+        target = "devlog.sqlite_storage.add_entry"
+    else:
+        target = "devlog.storage.save_entries"
+    with patch(target) as mock_save:
         mock_save.side_effect = StoragePermissionError(
             tmp_path / "entries.json", "write"
         )
@@ -199,3 +215,81 @@ def test_add_at_accepts_relative_days(runner, tmp_path, monkeypatch):
         ts = datetime.strptime(e.created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         age = (datetime.now(tz=timezone.utc) - ts).total_seconds()
         assert 0 <= age <= 8 * 86400 + 5
+
+
+# ---------------------------------------------------------------------------
+# stdin support (Tier 1: `devlog add -`)
+# ---------------------------------------------------------------------------
+
+
+def test_add_stdin_basic(runner, tmp_path, monkeypatch):
+    """`devlog add -` reads message from stdin."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    result = runner.invoke(main, ["add", "-"], input="Hello from stdin\n")
+    assert result.exit_code == 0
+    assert "Hello from stdin" in result.output
+
+    entries = storage.load_entries()
+    assert len(entries) == 1
+    assert entries[0].message == "Hello from stdin\n"
+
+
+def test_add_stdin_with_tags(runner, tmp_path, monkeypatch):
+    """`devlog add - -t tag` works with stdin input."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    result = runner.invoke(main, ["add", "-", "-t", "stdin-tag"], input="Message from pipe\n")
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    assert entries[0].message == "Message from pipe\n"
+    assert entries[0].tags == ["stdin-tag"]
+
+
+def test_add_stdin_multiline(runner, tmp_path, monkeypatch):
+    """`devlog add -` preserves multiline input."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    result = runner.invoke(main, ["add", "-"], input="Line 1\nLine 2\nLine 3\n")
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    assert entries[0].message == "Line 1\nLine 2\nLine 3\n"
+
+
+def test_add_stdin_no_newline(runner, tmp_path, monkeypatch):
+    """`devlog add -` works when input lacks trailing newline (e.g., git log)."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    result = runner.invoke(main, ["add", "-"], input="No newline at end")
+    assert result.exit_code == 0
+    entries = storage.load_entries()
+    assert entries[0].message == "No newline at end"
+
+
+def test_add_stdin_empty_rejected(runner, tmp_path, monkeypatch):
+    """Empty stdin is rejected with a clear error."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    result = runner.invoke(main, ["add", "-"], input="")
+    assert result.exit_code == 1
+    assert "stdin is empty" in result.output
+
+
+def test_add_stdin_whitespace_only_rejected(runner, tmp_path, monkeypatch):
+    """Whitespace-only stdin is rejected."""
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    result = runner.invoke(main, ["add", "-"], input="   \n\t\n")
+    assert result.exit_code == 1
+    assert "stdin is empty" in result.output
+
+
+def test_add_stdin_tty_error(monkeypatch, tmp_path):
+    """`devlog add -` errors when stdin is empty (simulates TTY with no input).
+
+    In real usage, running `devlog add -` without piping input makes stdin
+    a TTY, which the command detects and rejects. CliRunner always
+    provides a non-TTY StringIO, so we test the empty-stdin path which
+    produces the same user-facing error message.
+    """
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
+    from click.testing import CliRunner
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["add", "-"], input="")
+    assert result.exit_code == 1
+    assert "stdin is empty" in result.output

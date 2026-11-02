@@ -195,3 +195,104 @@ def test_week_local_zone_includes_recent(runner, data_dir, monkeypatch):
     result = _invoke(runner, "week", tz="America/New_York", monkeypatch=monkeypatch)
     assert result.exit_code == 0
     assert "recent-ny" in result.output
+
+
+# ---------------------------------------------------------------------------
+# on
+# ---------------------------------------------------------------------------
+
+
+def test_on_empty(runner, data_dir, monkeypatch):
+    result = _invoke(runner, "on", "today", monkeypatch=monkeypatch)
+    assert result.exit_code == 0
+    assert "No entries on" in result.output
+
+
+def test_on_today_includes_today_entry(runner, data_dir, monkeypatch):
+    now = datetime.now(tz=timezone.utc)
+    _seed("aaaaaaaa-aaaa-bbbb-cccc-aaaaaaaaaaaa", "today msg", _utc_iso(now))
+    result = _invoke(runner, "on", "today", monkeypatch=monkeypatch)
+    assert result.exit_code == 0
+    assert "today msg" in result.output
+
+
+def test_on_today_excludes_yesterday(runner, data_dir, monkeypatch):
+    now = datetime.now(tz=timezone.utc)
+    yesterday_utc = now - timedelta(days=1)
+    _seed("bbbbbbbb-aaaa-bbbb-cccc-bbbbbbbbbbbb", "yest msg", _utc_iso(yesterday_utc))
+    result = _invoke(runner, "on", "today", monkeypatch=monkeypatch)
+    assert result.exit_code == 0
+    assert "yest msg" not in result.output
+    assert "No entries on" in result.output
+
+
+def test_on_yesterday_includes_yesterday(runner, data_dir, monkeypatch):
+    now = datetime.now(tz=timezone.utc)
+    yesterday_utc = now - timedelta(days=1)
+    _seed("cccccccc-aaaa-bbbb-cccc-cccccccccccc", "yest msg", _utc_iso(yesterday_utc))
+    result = _invoke(runner, "on", "yesterday", monkeypatch=monkeypatch)
+    assert result.exit_code == 0
+    assert "yest msg" in result.output
+
+
+def test_on_specific_date(runner, data_dir, monkeypatch):
+    _seed("dddddddd-aaaa-bbbb-cccc-dddddddddddd", "specific date", "2025-05-10T12:00:00Z")
+    result = _invoke(runner, "on", "2025-05-10", monkeypatch=monkeypatch)
+    assert result.exit_code == 0
+    assert "specific date" in result.output
+
+
+def test_on_specific_date_excludes_adjacent(runner, data_dir, monkeypatch):
+    _seed("eeeeeeee-aaaa-bbbb-cccc-eeeeeeeeeeee", "day before", "2025-05-09T12:00:00Z")
+    _seed("ffffffff-aaaa-bbbb-cccc-ffffffffffff", "target day", "2025-05-10T12:00:00Z")
+    _seed("11111111-aaaa-bbbb-cccc-111111111111", "day after", "2025-05-11T12:00:00Z")
+    result = _invoke(runner, "on", "2025-05-10", monkeypatch=monkeypatch)
+    assert result.exit_code == 0
+    assert "target day" in result.output
+    assert "day before" not in result.output
+    assert "day after" not in result.output
+
+
+def test_on_relative_days(runner, data_dir, monkeypatch):
+    now = datetime.now(tz=timezone.utc)
+    # Entry from 3 days ago
+    three_days = _utc_iso(now - timedelta(days=3))
+    # Entry from 7 days ago
+    seven_days = _utc_iso(now - timedelta(days=7))
+    _seed("22222222-aaaa-bbbb-cccc-222222222222", "three days ago", three_days)
+    _seed("33333333-aaaa-bbbb-cccc-333333333333", "seven days ago", seven_days)
+    result = _invoke(runner, "on", "3d", monkeypatch=monkeypatch)
+    assert result.exit_code == 0
+    assert "three days ago" in result.output
+    assert "seven days ago" not in result.output
+
+
+def test_on_quiet(runner, data_dir, monkeypatch):
+    now = datetime.now(tz=timezone.utc)
+    _seed("44444444-aaaa-bbbb-cccc-444444444444", "quiet msg", _utc_iso(now))
+    result = _invoke(runner, "on", "today", "--quiet", monkeypatch=monkeypatch)
+    assert result.exit_code == 0
+    lines = [ln for ln in result.output.splitlines() if ln.strip()]
+    assert len(lines) == 1
+    obj = json.loads(lines[0])
+    assert obj["message"] == "quiet msg"
+
+
+def test_on_invalid_limit(runner, data_dir, monkeypatch):
+    result = _invoke(runner, "on", "today", "--limit", "0", monkeypatch=monkeypatch)
+    assert result.exit_code == 1
+    assert "--limit must be a positive integer" in result.output
+
+
+def test_on_invalid_date(runner, data_dir, monkeypatch):
+    result = _invoke(runner, "on", "not-a-date", monkeypatch=monkeypatch)
+    assert result.exit_code == 2
+    assert "not-a-date" in result.output
+
+
+def test_on_local_zone_bucketing(runner, data_dir, monkeypatch):
+    """An entry at 2025-01-01 02:00 UTC is on 2024-12-31 in NY, so when
+    today_local is 2024-12-31 NY, that entry must appear in `on yesterday`."""
+    from devlog.storage import local_date_for
+    iso = "2025-01-01T02:00:00Z"
+    assert local_date_for(iso, ZoneInfo("America/New_York")).isoformat() == "2024-12-31"

@@ -239,6 +239,72 @@ def test_list_relative_days(runner, data_dir, seed_entry, utc_iso):
 
 
 # ---------------------------------------------------------------------------
+# Tier 1: Nh/Nm support in --since/--until
+# ---------------------------------------------------------------------------
+
+
+def test_parse_relative_hours():
+    dt = _parse_date_bound("4h")
+    now_utc = datetime.datetime.now(tz=datetime.timezone.utc)
+    # Should be roughly 4 hours ago
+    diff = now_utc - dt
+    assert datetime.timedelta(hours=3, minutes=55) <= diff <= datetime.timedelta(hours=4, minutes=5)
+
+
+def test_parse_relative_minutes():
+    dt = _parse_date_bound("30m")
+    now_utc = datetime.datetime.now(tz=datetime.timezone.utc)
+    diff = now_utc - dt
+    assert datetime.timedelta(minutes=25) <= diff <= datetime.timedelta(minutes=35)
+
+
+def test_list_relative_hours(runner, data_dir, seed_entry, utc_iso):
+    from datetime import datetime, timedelta, timezone
+    # Entry from 5 hours ago (should NOT match 2h)
+    old = utc_iso(datetime.now(tz=timezone.utc) - timedelta(hours=5))
+    # Entry from 1 hour ago (should match 2h)
+    recent = utc_iso(datetime.now(tz=timezone.utc) - timedelta(hours=1))
+    seed_entry("aaaaaaaa-1111-1111-1111-111111111111", "old5h", old)
+    seed_entry("bbbbbbbb-2222-2222-2222-222222222222", "recent1h", recent)
+    result = runner.invoke(main, ["list", "--since", "2h"])
+    assert result.exit_code == 0
+    assert "recent1h" in result.output
+    assert "old5h" not in result.output
+
+
+def test_list_relative_minutes(runner, data_dir, seed_entry, utc_iso):
+    from datetime import datetime, timedelta, timezone
+    # Entry from 45 minutes ago (should NOT match 15m)
+    old = utc_iso(datetime.now(tz=timezone.utc) - timedelta(minutes=45))
+    # Entry from 5 minutes ago (should match 15m)
+    recent = utc_iso(datetime.now(tz=timezone.utc) - timedelta(minutes=5))
+    seed_entry("aaaaaaaa-1111-1111-1111-111111111111", "old45m", old)
+    seed_entry("bbbbbbbb-2222-2222-2222-222222222222", "recent5m", recent)
+    result = runner.invoke(main, ["list", "--since", "15m"])
+    assert result.exit_code == 0
+    assert "recent5m" in result.output
+    assert "old45m" not in result.output
+
+
+def test_since_4h_until_1h_window(runner, data_dir, seed_entry, utc_iso):
+    from datetime import datetime, timedelta, timezone
+    # Entry from 5 hours ago (outside window)
+    e1 = utc_iso(datetime.now(tz=timezone.utc) - timedelta(hours=5))
+    # Entry from 3 hours ago (inside 4h..1h window)
+    e2 = utc_iso(datetime.now(tz=timezone.utc) - timedelta(hours=3))
+    # Entry from 30 minutes ago (outside window, too recent)
+    e3 = utc_iso(datetime.now(tz=timezone.utc) - timedelta(minutes=30))
+    seed_entry("11111111-1111-1111-1111-111111111111", "too-old", e1)
+    seed_entry("22222222-2222-2222-2222-222222222222", "inside", e2)
+    seed_entry("33333333-3333-3333-3333-333333333333", "too-recent", e3)
+    result = runner.invoke(main, ["list", "--since", "4h", "--until", "1h"])
+    assert result.exit_code == 0
+    assert "inside" in result.output
+    assert "too-old" not in result.output
+    assert "too-recent" not in result.output
+
+
+# ---------------------------------------------------------------------------
 # CLI integration: --since / --until on `search`
 # ---------------------------------------------------------------------------
 

@@ -231,3 +231,36 @@ def first_json_line(output: str) -> str:
         if line.strip():
             return line
     raise ValueError(f"no non-empty line in: {output!r}")
+
+# ---------------------------------------------------------------------------
+# Backend-aware test helpers
+# ---------------------------------------------------------------------------
+
+
+def active_backend() -> str:
+    """Return the storage backend under test: "json" (default) or "sqlite".
+
+    Read once per call from the env so tests can branch or skip:
+    tests that assert on-disk ``entries.json`` semantics (corrupt-file
+    recovery, direct file reads, chmod-based permission errors) are
+    JSON-backend-specific by nature and should skip under
+    ``DEVLOG_BACKEND=sqlite``.
+    """
+    import os
+
+    return os.environ.get("DEVLOG_BACKEND", "json").lower()
+
+
+def requires_json_backend(reason: str = "asserts entries.json on-disk semantics"):
+    """Pytestmark helper: skip the test when the sqlite backend is active.
+
+    Usage::
+
+        pytestmark = pytest.mark.skipif(
+            active_backend() == "sqlite", reason=requires_json_backend()
+        )
+
+    (or per-test with the same skipif expression).
+    """
+    return f"JSON-backend only: {reason}"
+

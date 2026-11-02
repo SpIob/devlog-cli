@@ -23,6 +23,8 @@ if TYPE_CHECKING:
 # Supported --since / --until input forms. ``None`` means "no bound".
 _RELATIVE_DAY_RE = re.compile(r"^(\d+)\s*d$")
 _RELATIVE_WEEK_RE = re.compile(r"^(\d+)\s*w$")
+_RELATIVE_HOUR_RE = re.compile(r"^(\d+)\s*h$")
+_RELATIVE_MINUTE_RE = re.compile(r"^(\d+)\s*m$")
 
 # Relative-time input forms for `add --at` / `edit --at`. Minute/hour-only
 # because seconds-level backfill is rare and would just be confusing.
@@ -77,6 +79,7 @@ def _parse_date_bound(
         * ``YYYY-MM-DDTHH:MM:SSZ`` / with timezone — explicit UTC.
         * ``today``                      — today at midnight UTC.
         * ``yesterday``                  — yesterday at midnight UTC.
+        * ``Nh`` / ``Nm``                — N hours/minutes ago from now (e.g. ``4h``, ``30m``).
         * ``Nd`` / ``Nw``                — N days/weeks ago at midnight UTC
                                            (e.g. ``7d``).
 
@@ -125,7 +128,19 @@ def _parse_date_bound(
             return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(datetime.timezone.utc)
         return dt.astimezone(datetime.timezone.utc)
 
-    # Relative: 7d, 2w
+    # Relative: 4h, 30m, 7d, 2w
+    m = _RELATIVE_HOUR_RE.match(lower)
+    if m:
+        hours = int(m.group(1))
+        return (datetime.datetime.now(tz=tz or datetime.timezone.utc) - datetime.timedelta(hours=hours)).astimezone(
+            datetime.timezone.utc
+        )
+    m = _RELATIVE_MINUTE_RE.match(lower)
+    if m:
+        minutes = int(m.group(1))
+        return (datetime.datetime.now(tz=tz or datetime.timezone.utc) - datetime.timedelta(minutes=minutes)).astimezone(
+            datetime.timezone.utc
+        )
     m = _RELATIVE_DAY_RE.match(lower)
     if m:
         days = int(m.group(1))
@@ -163,7 +178,8 @@ def _parse_date_bound(
         raise click.BadParameter(
             f'Invalid date "{value}". Supported formats: '
             '"YYYY-MM-DD", "YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM:SSZ", '
-            '"today", "yesterday", "Nd" (N days ago), "Nw" (N weeks ago).'
+            '"today", "yesterday", "Nh" (N hours ago), "Nm" (N minutes ago), '
+            '"Nd" (N days ago), "Nw" (N weeks ago).'
         )
     if dt.tzinfo is None:
         # Naive timestamp — honour the local zone if one is active,
@@ -361,3 +377,49 @@ def today_local_date(tz) -> datetime.date:
     """
     effective = tz or datetime.timezone.utc
     return datetime.datetime.now(tz=effective).date()
+
+
+def _parse_on_date(
+    value: str,
+    *,
+    tz=None,
+) -> datetime.date | None:
+    """Parse a user-supplied date for the ``on`` command into a local date.
+
+    Accepted forms (case-insensitive, whitespace stripped):
+
+        * ``today``           — today in the local zone (or UTC).
+        * ``yesterday``       — yesterday in the local zone (or UTC).
+        * ``YYYY-MM-DD``      — absolute date.
+        * ``Nd``              — N days ago (e.g. ``3d``).
+
+    Args:
+        value:    the raw string from the user.
+        tz:       when supplied, dates are interpreted in this zone.
+                  When ``None``, UTC is used.
+
+    Returns:
+        A ``datetime.date`` in the target zone, or ``None`` if unparseable.
+    """
+    if not value or not value.strip():
+        return None
+
+    raw = value.strip()
+    lower = raw.lower()
+
+    if lower == "today":
+        return today_local_date(tz)
+    if lower == "yesterday":
+        return today_local_date(tz) - datetime.timedelta(days=1)
+
+    # Relative: 3d
+    m = _RELATIVE_DAY_RE.match(lower)
+    if m:
+        days = int(m.group(1))
+        return today_local_date(tz) - datetime.timedelta(days=days)
+
+    # Date only: YYYY-MM-DD
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return datetime.datetime.strptime(raw, "%Y-%m-%d").date()
+
+    return None

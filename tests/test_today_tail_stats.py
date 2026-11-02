@@ -10,6 +10,7 @@ from click.testing import CliRunner
 from devlog import storage
 from devlog.cli import main
 from devlog.models import Entry
+from tests.conftest import active_backend
 
 
 @pytest.fixture()
@@ -52,10 +53,15 @@ def test_today_empty(runner, data_dir):
 
 
 def test_today_shows_todays_entries(runner, data_dir):
-    now = datetime.now(tz=timezone.utc)
-    # Use 30 minutes instead of 1 hour to avoid crossing midnight in UTC.
-    _seed("11111111-aaaa-bbbb-cccc-111111111111", "today one", _utc_iso(now))
-    _seed("22222222-aaaa-bbbb-cccc-222222222222", "today two", _utc_iso(now - timedelta(minutes=30)))
+    # Anchor to today's UTC midnight (+1s/+2s) rather than now-minus-deltas:
+    # a naive `now - 30 minutes` lands in *yesterday* whenever the test runs
+    # within 30 minutes after midnight, which is a real flake (observed at
+    # 00:08 UTC). Midnight-anchored seeds are always inside "today".
+    midnight = datetime.now(tz=timezone.utc).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    _seed("11111111-aaaa-bbbb-cccc-111111111111", "today one", _utc_iso(midnight + timedelta(seconds=1)))
+    _seed("22222222-aaaa-bbbb-cccc-222222222222", "today two", _utc_iso(midnight + timedelta(seconds=2)))
     result = runner.invoke(main, ["today"])
     assert result.exit_code == 0
     assert "today one" in result.output
@@ -170,6 +176,10 @@ def test_stats_quiet(runner, data_dir):
     assert "top_tags" in obj
     assert "last_30_days" in obj
     assert len(obj["last_30_days"]) == 30
+@pytest.mark.skipif(
+        active_backend() == "sqlite",
+        reason="asserts entries.json on-disk semantics (JSON backend only)",
+    )
 
 
 def test_stats_does_not_crash_on_unparseable_created_at(runner, data_dir):

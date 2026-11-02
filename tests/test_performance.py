@@ -66,6 +66,55 @@ def seeded_journal(
     (tmp_path / "entries.json").write_text(
         json.dumps(payload, ensure_ascii=False), encoding="utf-8"
     )
+    # Also seed SQLite if the backend is active
+    import os
+    if os.environ.get("DEVLOG_BACKEND", "json").lower() == "sqlite":
+        sqlite_path = tmp_path / "entries.db"
+        # Remove any existing SQLite file
+        if sqlite_path.exists():
+            sqlite_path.unlink()
+        # Import entries into SQLite
+        import sqlite3
+        conn = sqlite3.connect(sqlite_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY
+            );
+            
+            CREATE TABLE IF NOT EXISTS entries (
+                id TEXT PRIMARY KEY,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                tags TEXT NOT NULL DEFAULT '[]'
+            );
+            
+            CREATE INDEX IF NOT EXISTS idx_entries_created_at 
+            ON entries(created_at DESC);
+            
+            CREATE INDEX IF NOT EXISTS idx_entries_updated_at 
+            ON entries(updated_at DESC);
+        """)
+        conn.execute("INSERT OR REPLACE INTO schema_version (version) VALUES (1)")
+        for e in entries:
+            conn.execute(
+                "INSERT INTO entries (id, message, created_at, updated_at, tags) VALUES (?, ?, ?, ?, ?)",
+                (
+                    e["id"],
+                    e["message"],
+                    e["created_at"],
+                    e["updated_at"],
+                    json.dumps(e["tags"], ensure_ascii=False),
+                ),
+            )
+        conn.commit()
+        conn.close()
+    
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
     return tmp_path
 

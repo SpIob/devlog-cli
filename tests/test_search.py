@@ -134,3 +134,83 @@ def test_search_whitespace_only_query_errors(runner):
     result = runner.invoke(main, ["search", "   "])
     assert result.exit_code == 1
     assert "QUERY" in result.output
+
+
+# ---------------------------------------------------------------------------
+# AND semantics / quoted phrases (Tier 1)
+# ---------------------------------------------------------------------------
+
+
+def test_search_and_semantics(runner):
+    """Multiple space-separated terms require ALL terms (AND)."""
+    _add(runner, "Fixed auth bug in login")
+    _add(runner, "Fixed auth module")
+    _add(runner, "Fixed login page")
+    # "auth login" should match only the first entry (has both terms)
+    result = runner.invoke(main, ["search", "auth login"])
+    assert result.exit_code == 0
+    assert "auth bug in login" in result.output
+    assert "auth module" not in result.output
+    assert "login page" not in result.output
+    assert "Showing 1 of" in result.output
+
+
+def test_search_quoted_phrase(runner):
+    """Quoted phrases match as a single term."""
+    _add(runner, "Fixed the login bug")
+    _add(runner, "Fixed login page")
+    _add(runner, "Login authentication")
+    # Exact phrase "login bug" should match only first entry
+    result = runner.invoke(main, ["search", '"login bug"'])
+    assert result.exit_code == 0
+    assert "login bug" in result.output
+    assert "login page" not in result.output
+    assert "Login authentication" not in result.output
+    assert "Showing 1 of" in result.output
+
+
+def test_search_quoted_phrase_with_other_terms(runner):
+    """Quoted phrase combined with other terms (AND)."""
+    _add(runner, "Fixed the login bug in auth")
+    _add(runner, "Fixed the login page")
+    # "login bug" AND "auth" should match only first
+    result = runner.invoke(main, ['search', '"login bug" auth'])
+    assert result.exit_code == 0
+    assert "login bug in auth" in result.output
+    assert "login page" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# Regex mode (Tier 1)
+# ---------------------------------------------------------------------------
+
+
+def test_search_regex_basic(runner):
+    """--regex interprets query as a regex pattern."""
+    _add(runner, "Fix bug #123")
+    _add(runner, "Fix bug #456")
+    _add(runner, "Fixed bug")
+    result = runner.invoke(main, ["search", "--regex", r"^Fix bug #\d+$"])
+    assert result.exit_code == 0
+    assert "Fix bug #123" in result.output
+    assert "Fix bug #456" in result.output
+    assert "Fixed bug" not in result.output
+    assert "Showing 2 of" in result.output
+
+
+def test_search_regex_case_insensitive(runner):
+    """--regex is case-insensitive."""
+    _add(runner, "AUTH service")
+    _add(runner, "auth module")
+    _add(runner, "Auth UI")
+    result = runner.invoke(main, ["search", "--regex", "auth"])
+    assert result.exit_code == 0
+    assert "Showing 3 of" in result.output
+
+
+def test_search_regex_invalid(runner):
+    """Invalid regex shows error and exits 2."""
+    _add(runner, "test")
+    result = runner.invoke(main, ["search", "--regex", "[invalid"])
+    assert result.exit_code == 2
+    assert "Invalid regex" in result.output
