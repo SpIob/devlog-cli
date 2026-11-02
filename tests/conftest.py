@@ -11,8 +11,10 @@ from __future__ import annotations
 import io
 import json
 import re
+import threading
 import time
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -22,6 +24,94 @@ from rich.console import Console
 from devlog import storage
 from devlog.cli import main
 from devlog.models import Entry
+
+# ---------------------------------------------------------------------------
+# Shared fake Ollama server (real HTTP, no mocks)
+# ---------------------------------------------------------------------------
+
+
+class _FakeOllama(BaseHTTPRequestHandler):
+    """Minimal Ollama-compatible server: records requests, emits replies.
+
+    Responses key off request content so tests never need per-test
+    hooks: an unknown model name 404s exactly like the real server, and
+    the sentinel input ``__broken__`` produces a malformed payload.
+    """
+
+    last_path: str | None = None
+    last_payload: dict | None = None
+    request_count: int = 0
+
+    def log_message(self, format, *args):
+        pass
+
+    def _reply(self, payload: dict, status: int = 200) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length) or b"{}")
+        _FakeOllama.last_path = self.path
+        _FakeOllama.last_payload = payload
+        _FakeOllama.request_count += 1
+        if self.path == "/api/generate":
+            if payload.get("model") == "missing-model":
+                self._reply({"error": "model not found"}, status=404)
+            else:
+                self._reply({"response": "You shipped the importers.", "done": True})
+        elif self.path == "/api/embed":
+            if payload.get("input") == ["__broken__"]:
+                self._reply({"unexpected": "shape"})
+            else:
+                # Deterministic pseudo-embedding: 4 dims derived from the text,
+                # so tests can assert relative similarity without a real model.
+                vectors = []
+                for text in payload.get("input", []):
+                    h = sum(ord(c) for c in str(text))
+                    vectors.append([
+                        ((h % 17) + 1) / 18.0,
+                        ((h % 13) + 1) / 14.0,
+                        ((h % 7) + 1) / 8.0,
+                        1.0,
+                    ])
+                self._reply({"embeddings": vectors})
+        else:
+            self._reply({"error": "unknown path"}, status=404)
+
+
+class _OllamaRecorder:
+    """Test handle for the fake server: base URL + last-request accessors."""
+
+    def __init__(self, url: str):
+        self.url = url
+
+    @property
+    def last_path(self):
+        return _FakeOllama.last_path
+
+    @property
+    def last_payload(self):
+        return _FakeOllama.last_payload
+
+    @property
+    def request_count(self):
+        return _FakeOllama.request_count
+
+
+@pytest.fixture()
+def ollama_server():
+    """Yield a :class:`_OllamaRecorder` backed by a real localhost server."""
+    _FakeOllama.request_count = 0
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeOllama)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield _OllamaRecorder(f"http://127.0.0.1:{server.server_address[1]}")
+    server.shutdown()
 
 
 def median_of(fn, *args, runs: int = 5) -> float:

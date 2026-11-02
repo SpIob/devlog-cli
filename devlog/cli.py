@@ -63,6 +63,9 @@ COMMANDS: list[tuple[str, str]] = [
     ("rename-tag", "Rename a tag across all entries"),
     ("theme", "View or change the active color theme"),
     ("stats", "Summarize the journal"),
+    ("digest", "Summarize recent journal activity (AI optional)"),
+    ("ask", "Ask your journal questions via local embeddings (AI)"),
+    ("mcp", "Expose the journal to AI agents (MCP server)"),
     ("calendar", "Show a year-grid heatmap of activity"),
     ("import", "Import entries from a JSON or Markdown file"),
     ("export", "Export entries to a Markdown or JSON file"),
@@ -246,6 +249,20 @@ try:
     _git_cli.register(main)
 except ImportError:
     pass  # _git_cli not available yet
+
+# The AI commands (digest/ask) live in _ai_cli.py; attach at import time.
+try:
+    from devlog import _ai_cli
+    _ai_cli.register(main)
+except ImportError:
+    pass  # _ai_cli not available yet
+
+# The MCP server command lives in _mcp_cli.py; attach at import time.
+try:
+    from devlog import _mcp_cli
+    _mcp_cli.register(main)
+except ImportError:
+    pass  # _mcp_cli not available yet
 
 
 # ---------------------------------------------------------------------------

@@ -5,12 +5,42 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-11-02
 
-Tier 1 remainder — core UX (Stats v2, `devlog undo`).
+Tier 3 — differentiators: local-AI digest/ask and the MCP server. Ships
+the never-tagged Tier 1 remainder (`devlog undo`, Stats v2) alongside,
+matching the v1.7.0 precedent of folding ready work into the next tag.
 
 ### Added
 
+- **`devlog digest --week`** — weekly journal summary, fully offline by
+  default: an extractive digest grouped by local day with per-entry
+  times, tags, and a tag-totals footer. `--llm` (or `DEVLOG_AI=1`)
+  hands the extractive text to a local Ollama model for a written
+  summary; `--model` selects the model, `--json` emits a single
+  `{week_start, week_end, entry_count, digest}` object, `--quiet`
+  prints the raw text. Ollama errors (server down, model missing)
+  render as actionable messages and exit 1 — never a traceback.
+- **`devlog ask "<query>"`** — semantic search over the journal using
+  local embeddings. First run embeds the whole journal once and caches
+  `{entry_id: vector}` in `<data-dir>/embeddings.json`; later runs only
+  embed new entries and the query (stale ids are pruned, a model change
+  triggers a rebuild). `--json` returns ranked
+  `{id, message, created_at, score}` results; `--top N` bounds the list.
+  Works on both storage backends — the index lives in its own file, so
+  no schema migration was needed.
+- **`devlog mcp`** — Model Context Protocol server over stdio
+  (newline-delimited JSON-RPC 2.0, stdlib-only). Exposes
+  `list_entries`, `search_entries`, `add_entry`, and `get_stats` to AI
+  agents (Hermes, OpenCode, Continue.dev, Claude Desktop). Tool errors
+  use the MCP `isError` convention instead of crashing the loop.
+  Sanity check: `devlog mcp --check`.
+- **Ollama HTTP client** — minimal `urllib`-based client in
+  `devlog/_ollama.py`; the base install gains no dependencies. Host
+  override via `DEVLOG_OLLAMA_HOST` (default
+  `http://127.0.0.1:11434`), embedding model via `DEVLOG_EMBED_MODEL`
+  (default `nomic-embed-text`), LLM summary model defaults to
+  `llama3.2`.
 - **`devlog undo`** — single-step rollback. Every mutating command now
   snapshots the previous store (`backups/entries-TIMESTAMP.pre.json`,
   microsecond-precision names) before writing, on both the JSON and
@@ -143,7 +173,8 @@ this point. Highlights of the 1.x line:
 - Performance: 10k-entry stress-tested (`list` 91ms, `search` 103ms,
   `stats` 104ms, `export` 114ms) with atomic writes everywhere.
 
-[Unreleased]: https://github.com/SpIob/devlog-cli/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/SpIob/devlog-cli/compare/v2.0.0...HEAD
+[2.0.0]: https://github.com/SpIob/devlog-cli/compare/v1.7.0...v2.0.0
 [1.7.0]: https://github.com/SpIob/devlog-cli/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/SpIob/devlog-cli/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/SpIob/devlog-cli/compare/v1.5.0...v1.6.0

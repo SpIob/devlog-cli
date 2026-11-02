@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "devlog-tool"
-version = "1.7.0"
+version = "2.0.0"
 description = "A terminal-based developer journal tool"
 readme = "README.md"
 license = "MIT"
@@ -34,6 +34,14 @@ dependencies = [
     "tomli>=1.1; python_version < '3.11'",
     "tzdata",
 ]
+
+[project.optional-dependencies]
+# The `devlog[ai]` extra documents the AI tier (digest/ask/mcp). The AI
+# features themselves are stdlib-only and always present; the extra
+# exists as a discoverability marker and a place for future opt-in
+# dependencies (none today). Point it at a local Ollama server:
+#   https://ollama.com  ->  ollama pull llama3.2 nomic-embed-text
+ai = []
 
 [project.scripts]
 devlog = "devlog.cli:main"

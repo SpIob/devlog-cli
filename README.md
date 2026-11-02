@@ -5,7 +5,7 @@
 [![Python](https://img.shields.io/pypi/pyversions/devlog-tool)](https://pypi.org/project/devlog-tool/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/SpIob/devlog-cli/blob/main/LICENSE)
 
-A terminal-based developer journal — log, search, filter, and export daily progress entries without leaving the command line.
+A terminal-based developer journal — log, search, filter, and export daily progress entries without leaving the command line. Local-AI powered: weekly digests, semantic search, and an MCP server for AI agents, all fully offline.
 
 ---
 
@@ -61,6 +61,13 @@ pipx install devlog-tool
 
 ```bash
 pip install devlog-tool
+```
+
+**With the `ai` extra** (documents the AI tier — digest/ask/mcp; the features are built in and stdlib-only, you just need a local [Ollama](https://ollama.com) server for `--llm` and `ask`):
+
+```bash
+pipx install "devlog-tool[ai]"
+ollama pull llama3.2 nomic-embed-text
 ```
 
 **From source:**
@@ -1215,6 +1222,104 @@ devlog doctor --quiet | jq '{ok, entry_count, issues: (.issues | length)}'
 
 ---
 
+### `devlog digest --week`
+
+Summarize recent journal activity. The default is a **fully offline, extractive** digest — entries grouped by local day with per-entry times, tags, and a tag-totals footer — no model, no network. With `--llm` the extractive text is handed to a local [Ollama](https://ollama.com) model for a written summary.
+
+```
+devlog digest --week [OPTIONS]
+```
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--week` | — | flag | True | Summarize the last 7 days (the only period in this release). |
+| `--day` | — | string | today | Anchor day (YYYY-MM-DD); the week ends on this day and spans the 6 before it. |
+| `--llm` | — | flag | False | Also produce an LLM-written summary via local Ollama. |
+| `--model` | — | string | `llama3.2` | Ollama model for `--llm`. |
+| `--quiet` | `-q` | flag | False | Print the digest text only (no header). |
+| `--json` | — | flag | False | Output one JSON object: `{week_start, week_end, entry_count, digest}`. |
+
+**Notes:**
+
+- Without `--llm`, nothing leaves the machine and no model needs to be installed.
+- `--llm` (or `DEVLOG_AI=1`) requires a running Ollama server; when it cannot be reached, devlog prints an actionable error and exits 1.
+- An empty week prints an info line and exits 0.
+
+**Examples:**
+
+```bash
+devlog digest --week                     # extractive, offline
+devlog digest --week --llm               # local LLM-written summary
+devlog digest --week --llm --model gemma3:12b
+devlog digest --week --json | jq -r .digest
+```
+
+---
+
+### `devlog ask`
+
+Search the journal **semantically** using local embeddings: `devlog ask "what did I do on auth?"` finds entries by meaning, not just keywords. On first run the whole journal is embedded once (via local Ollama) and cached in `<data-dir>/embeddings.json`; later runs only embed new entries and the query.
+
+```
+devlog ask "QUERY" [OPTIONS]
+```
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--top` | `-n` | int | 5 | Max matches to show. |
+| `--json` | — | flag | False | Output `{"query", "results": [{id, message, created_at, score}, …]}` sorted by descending score. |
+| `--model` | — | string | `nomic-embed-text` | Embedding model. Changing it (or `DEVLOG_EMBED_MODEL`) triggers a one-time index rebuild. |
+
+**Notes:**
+
+- Requires a running Ollama server (the query and any new entries are embedded per call).
+- The index is storage-backend-agnostic: it lives in its own file next to the journal, so it works identically on the `json` and `sqlite` backends.
+- Stale index entries (ids no longer in the journal) are pruned automatically.
+
+**Examples:**
+
+```bash
+devlog ask "what did I do on auth?"
+devlog ask "database migration" --json | jq '.results[0]'
+devlog ask "deployments" --top 3
+```
+
+---
+
+### `devlog mcp`
+
+Expose the journal to AI agents over the [Model Context Protocol](https://modelcontextprotocol.io): newline-delimited JSON-RPC 2.0 on stdio, implemented with the Python stdlib only. Tools: `list_entries` (optional `tag` filter and `limit`), `search_entries` (case-insensitive substring), `add_entry` (`message` required, `tags` optional), and `get_stats` (totals, date range, top tags). Tool failures use the MCP `isError` convention — the server loop never crashes.
+
+```
+devlog mcp [--check]
+```
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--check` | — | flag | False | Print server info as JSON and exit (sanity check). |
+
+**Example `mcpServers` block** (Claude Desktop, Hermes, OpenCode, Continue.dev):
+
+```json
+{
+  "mcpServers": {
+    "devlog": {
+      "command": "devlog",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Example session:**
+
+```bash
+$ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_stats","arguments":{}}}' | devlog mcp
+{"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "{\"total\": 42, ...}"}], "isError": false}}
+```
+
+---
+
 ## Tag rules
 
 Every command that accepts tags (`add`, `edit`, `tag`, `rename-tag`,
@@ -1354,6 +1459,25 @@ $ DEVLOG_TZ="Not/A_Real_Zone" devlog today
 Error: Invalid DEVLOG_TZ "Not/A_Real_Zone": …
 ```
 
+### `DEVLOG_AI`, `DEVLOG_OLLAMA_HOST`, `DEVLOG_EMBED_MODEL`
+
+Control the AI tier (`digest --llm`, `ask`). All three have working defaults; nothing here is required for the offline extractive digest.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DEVLOG_AI` | unset | Set to `1` to make `digest --week` produce an LLM summary by default (same as passing `--llm` each time). |
+| `DEVLOG_OLLAMA_HOST` | `http://127.0.0.1:11434` | Ollama server URL — point it at another machine on your LAN (e.g. `http://odysseus:11434`) if the model does not run locally. |
+| `DEVLOG_EMBED_MODEL` | `nomic-embed-text` | Embedding model for `ask`. Changing it triggers a one-time index rebuild. |
+
+```bash
+# Local LLM summary using the machine on your desk
+export DEVLOG_AI=1
+export DEVLOG_OLLAMA_HOST="http://odysseus:11434"
+devlog digest --week
+```
+
+**Model requirements:** `digest --llm` needs a generation model (default `llama3.2`; the summary quality scales with the model, `gemma3:12b` works well). `ask` needs an embedding model (default `nomic-embed-text`). Pull both with `ollama pull llama3.2 nomic-embed-text`.
+
 ### `DEVLOG_INTERACTIVE_FORCE`
 
 Set to `1` to bypass the TTY check that normally gates `devlog --interactive`. Useful in tests, scripts, or remote shells. The check still applies to `devlog edit <id>` with no flags unless `DEVLOG_ALLOW_EDITOR_IN_PIPE=1` is also set.
@@ -1482,6 +1606,14 @@ devlog-cli/
 │   ├── _io.py            ← Export/import readers and writers
 │   ├── _iso.py           ← ISO-8601 parsing / formatting helpers
 │   ├── _tagops.py        ← Tag normalisation, validation, merge helpers
+│   ├── _git_cli.py       ← `devlog git` command group (status/sync/log)
+│   ├── _gitops.py        ← Git plumbing for the git command group
+│   ├── _aiops.py         ← Pure AI core: extractive digest, cosine ranking, answer formatting
+│   ├── _ollama.py        ← Minimal stdlib Ollama HTTP client (generate/embed)
+│   ├── _aiindex.py       ← Embedding index for `ask` (build/reuse/prune, embeddings.json)
+│   ├── _ai_cli.py        ← `devlog digest` and `devlog ask` commands
+│   ├── _mcp_server.py    ← MCP protocol + journal tools (stdlib JSON-RPC over stdio)
+│   ├── _mcp_cli.py       ← `devlog mcp` command
 │   └── builtins/         ← Bundled theme files (default, dracula, nord, …)
 │       ├── __init__.py
 │       ├── default.toml
@@ -1495,6 +1627,9 @@ devlog-cli/
 ├── tests/
 │   ├── conftest.py
 │   ├── test_add.py
+│   ├── test_ai_cli.py
+│   ├── test_aiindex.py
+│   ├── test_aiops.py
 │   ├── test_backup_restore.py
 │   ├── test_calendar.py
 │   ├── test_completions.py
@@ -1508,6 +1643,8 @@ devlog-cli/
 │   ├── test_limit_validation.py
 │   ├── test_list.py
 │   ├── test_merge_tag.py
+│   ├── test_mcp_server.py
+│   ├── test_ollama.py
 │   ├── test_performance.py
 │   ├── test_rename_tag.py
 │   ├── test_repair.py
