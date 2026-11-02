@@ -173,8 +173,8 @@ def _snapshot_rows(conn: sqlite3.Connection) -> None:
     it must run inside the caller's transaction to read consistent state.
     """
     from devlog.storage import (
-        default_pre_write_backup_filename,
         get_backups_dir,
+        pre_write_backup_destination,
     )
 
     rows = conn.execute(
@@ -194,7 +194,7 @@ def _snapshot_rows(conn: sqlite3.Connection) -> None:
     }
     backups_dir = get_backups_dir()
     backups_dir.mkdir(parents=True, exist_ok=True)
-    dest = backups_dir / default_pre_write_backup_filename()
+    dest = pre_write_backup_destination()
     dest.write_text(
         json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
     )

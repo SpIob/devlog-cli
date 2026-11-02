@@ -221,7 +221,7 @@ def save_entries(entries: list[Entry]) -> None:
         try:
             backups_dir = get_backups_dir()
             backups_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, backups_dir / default_pre_write_backup_filename())
+            shutil.copy2(path, pre_write_backup_destination())
         except (OSError, PermissionError):
             pass
 
@@ -600,6 +600,29 @@ def default_pre_write_backup_filename(now: datetime | None = None) -> str:
     elif now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     return f"entries-{now.strftime('%Y%m%d-%H%M%S-%f')}{PRE_WRITE_BACKUP_SUFFIX}"
+
+
+def pre_write_backup_destination() -> Path:
+    """Return a free snapshot path: timestamped, never clobbering.
+
+    Windows clock ticks are coarser than a microsecond, so two writes
+    in rapid succession can produce identical ``%f`` stamps; a plain
+    timestamp filename would silently overwrite the first snapshot.
+    This appends ``-1``, ``-2``, … before the suffix until a
+    non-existing path is found, so every write's snapshot survives.
+    """
+    backups_dir = get_backups_dir()
+    candidate = backups_dir / default_pre_write_backup_filename()
+    n = 0
+    while candidate.exists():
+        n += 1
+        candidate = (
+            backups_dir
+            / default_pre_write_backup_filename().replace(
+                PRE_WRITE_BACKUP_SUFFIX, f"-{n}{PRE_WRITE_BACKUP_SUFFIX}"
+            )
+        )
+    return candidate
 
 
 def _list_pre_write_backups() -> list[tuple[datetime, Path]]:

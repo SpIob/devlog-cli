@@ -590,25 +590,33 @@ def test_filter_by_tags_no_per_entry_set_construction() -> None:
         norm_filter = frozenset(t.strip().lower() for t in tags)
         return [e for e in entries if norm_filter.issubset(e.tags)]
 
-    # Interleave the two variants inside one loop and keep the best time
-    # per variant. Timing them as two median-of-5 blocks is biased by
-    # warm-up order (the second-timed variant inherits warm caches),
-    # which produced false "regressions" on shared CI runners even with
-    # byte-identical algorithms; interleaving + min-of-5 is the standard
-    # robust estimator for capability timing.
-    t_impl: float | None = None
-    t_fast: float | None = None
-    for _ in range(5):
-        t0 = time.perf_counter()
-        _tagops._filter_by_tags(entries, ("backend",))
-        dt = time.perf_counter() - t0
-        t_impl = dt if t_impl is None else min(t_impl, dt)
+    # A/B measurement done the way timeit does it: garbage collection
+    # disabled during timing, slot order alternated every iteration,
+    # and the *minimum* of several runs kept per variant. Earlier
+    # versions timed the two variants as sequential blocks (then as
+    # fixed-order interleaved pairs); either way the variant in the
+    # unlucky slot accumulated GC pauses and produced false
+    # "regressions" on shared CI runners with byte-identical algorithms
+    # (seen on py3.12 ubuntu, then again on windows/macos).
+    import gc
 
-        t0 = time.perf_counter()
-        fast_filter(entries, ("backend",))
-        dt = time.perf_counter() - t0
-        t_fast = dt if t_fast is None else min(t_fast, dt)
-    assert t_impl is not None and t_fast is not None
+    best: dict[str, float] = {"impl": float("inf"), "fast": float("inf")}
+    fns = {"impl": _tagops._filter_by_tags, "fast": fast_filter}
+    order = ["impl", "fast"]
+    for i in range(7):
+        if i % 2:
+            order = order[::-1]
+        gc.collect()
+        gc.disable()
+        try:
+            for label in order:
+                t0 = time.perf_counter()
+                fns[label](entries, ("backend",))
+                dt = time.perf_counter() - t0
+                best[label] = min(best[label], dt)
+        finally:
+            gc.enable()
+    t_impl, t_fast = best["impl"], best["fast"]
 
     # Healthy implementation should be within 30% of the fast version.
     # Per-entry set construction adds ~30-50% overhead.

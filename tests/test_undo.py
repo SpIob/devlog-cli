@@ -96,10 +96,16 @@ def test_json_snapshot_is_copy_of_entries_json(runner, data_dir):
 
 
 def test_snapshot_filenames_unique_within_same_second(runner, data_dir):
-    """Two writes in the same second must not clobber each other's snapshots."""
-    name_a = storage.default_pre_write_backup_filename()
-    name_b = storage.default_pre_write_backup_filename()
-    assert name_a != name_b
+    """Rapid successive writes must never get the same snapshot path.
+
+    Windows clock ticks are coarser than a microsecond, so raw
+    ``%f`` timestamps can repeat; the destination helper therefore
+    never returns an existing path.
+    """
+    backups_dir = storage.get_backups_dir()
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    paths = {storage.pre_write_backup_destination() for _ in range(50)}
+    assert len(paths) == 50
 
 
 # ---------------------------------------------------------------------------
