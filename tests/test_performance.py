@@ -570,7 +570,8 @@ def test_filter_by_tags_no_per_entry_set_construction() -> None:
     """
     from devlog import _tagops
 
-    # Build a synthetic 10k list to avoid filesystem state.
+    # Build a synthetic list to avoid filesystem state. 30k entries
+    # keeps each timed run ~5ms so per-run jitter amortises.
     base_dt = datetime(2024, 1, 1, tzinfo=timezone.utc)
     entries = [
         Entry(
@@ -579,7 +580,7 @@ def test_filter_by_tags_no_per_entry_set_construction() -> None:
             tags=["backend"] if i % 2 == 0 else ["backend", "bugfix"],
             created_at=(base_dt).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
-        for i in range(10_000)
+        for i in range(30_000)
     ]
 
     # Reference (fast) implementation
@@ -589,10 +590,25 @@ def test_filter_by_tags_no_per_entry_set_construction() -> None:
         norm_filter = frozenset(t.strip().lower() for t in tags)
         return [e for e in entries if norm_filter.issubset(e.tags)]
 
-    from tests.conftest import median_of
+    # Interleave the two variants inside one loop and keep the best time
+    # per variant. Timing them as two median-of-5 blocks is biased by
+    # warm-up order (the second-timed variant inherits warm caches),
+    # which produced false "regressions" on shared CI runners even with
+    # byte-identical algorithms; interleaving + min-of-5 is the standard
+    # robust estimator for capability timing.
+    t_impl: float | None = None
+    t_fast: float | None = None
+    for _ in range(5):
+        t0 = time.perf_counter()
+        _tagops._filter_by_tags(entries, ("backend",))
+        dt = time.perf_counter() - t0
+        t_impl = dt if t_impl is None else min(t_impl, dt)
 
-    t_impl = median_of(_tagops._filter_by_tags, entries, ("backend",))
-    t_fast = median_of(fast_filter, entries, ("backend",))
+        t0 = time.perf_counter()
+        fast_filter(entries, ("backend",))
+        dt = time.perf_counter() - t0
+        t_fast = dt if t_fast is None else min(t_fast, dt)
+    assert t_impl is not None and t_fast is not None
 
     # Healthy implementation should be within 30% of the fast version.
     # Per-entry set construction adds ~30-50% overhead.

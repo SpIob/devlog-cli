@@ -254,7 +254,7 @@ except ImportError:
 
 
 @main.command()
-@click.argument("message")
+@click.argument("message", required=False, default="")
 @click.option(
     "--tag",
     "-t",
@@ -310,6 +310,8 @@ def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_co
         
         # Use provided message as prefix/note when non-empty ("-" and
         # "" both mean "no prefix" — the commit message stands alone).
+        # MESSAGE is optional: with no argument, the commit message
+        # stands alone.
         if message not in ("-", ""):
             entry.message = f"{message}\n\n{entry.message}"
         
@@ -1695,10 +1697,14 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
         fmt = _importers.detect_format(path)
 
     if fmt in ("jrnl", "dayone"):
-        if fmt == "jrnl":
-            candidates = _importers.import_jrnl_json(path)
-        else:
-            candidates = _importers.import_dayone_json(path)
+        try:
+            if fmt == "jrnl":
+                candidates = _importers.import_jrnl_json(path)
+            else:
+                candidates = _importers.import_dayone_json(path)
+        except (ValueError, OSError) as exc:
+            ui.print_error(str(exc))
+            sys.exit(2)
         unreadable_rows = 0
     elif fmt == "json":
         # Use JSON importer directly (not through _io.import_cmd to preserve exit codes)

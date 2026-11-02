@@ -213,3 +213,51 @@ def test_cli_import_jrnl_dry_run_does_not_write(runner, data_dir, tmp_path):
     assert result.exit_code == 0
     assert "would import 1 entry" in result.output
     assert storage.load_entries() == []
+
+
+# ---------------------------------------------------------------------------
+# Malformed input: clean errors, no raw tracebacks
+# ---------------------------------------------------------------------------
+
+
+def test_cli_import_jrnl_invalid_json_clean_error(runner, data_dir, tmp_path):
+    """A non-JSON file with --format jrnl exits 2 with a clean message.
+
+    Regression: the importers json.load()'d without validation, so a
+    malformed file crashed with a raw JSONDecodeError traceback.
+    """
+    f = tmp_path / "broken.txt"
+    f.write_text("this is not json at all")
+    result = runner.invoke(main, ["import", str(f), "--format", "jrnl"])
+    assert result.exit_code == 2
+    assert "Invalid JSON in" in result.output
+    assert "Traceback" not in result.output
+    assert storage.load_entries() == []
+
+
+def test_cli_import_dayone_wrong_shape_clean_error(runner, data_dir, tmp_path):
+    """Valid JSON without an 'entries' list exits 2 with a clean message."""
+    f = tmp_path / "wrong.json"
+    f.write_text(json.dumps({"foo": []}))
+    result = runner.invoke(main, ["import", str(f), "--format", "dayone"])
+    assert result.exit_code == 2
+    # Rich wraps the long message inside the error panel, so assert on
+    # a short prefix rather than the full sentence.
+    assert "Invalid import file" in result.output
+    assert "Traceback" not in result.output
+    assert storage.load_entries() == []
+
+
+def test_import_jrnl_json_raises_value_error_on_bad_payload(tmp_path):
+    f = tmp_path / "broken.json"
+    f.write_text("{not json")
+    with pytest.raises(ValueError, match="Invalid JSON"):
+        import_jrnl_json(str(f))
+
+
+def test_import_payload_allows_empty_entries_list(tmp_path):
+    """An empty export is valid — no entries, no error."""
+    f = tmp_path / "empty.json"
+    f.write_text(json.dumps({"entries": []}))
+    assert import_jrnl_json(str(f)) == []
+    assert import_dayone_json(str(f)) == []

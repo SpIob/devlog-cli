@@ -11,6 +11,27 @@ if TYPE_CHECKING:
     from devlog.models import Entry
 
 
+def _load_json_payload(path: str) -> dict:
+    """Load an importer JSON file and validate its shape.
+
+    Returns the parsed object; raises ``ValueError`` with a clean
+    message when the file is not valid JSON, is not an object, or has
+    no ``entries`` list — instead of leaking a raw ``JSONDecodeError``
+    traceback through the CLI.
+    """
+    with open(path, encoding="utf-8") as fh:
+        try:
+            data = json.load(fh)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+        raise ValueError(
+            f"Invalid import file: {path} does not look like a journal "
+            "export (expected a JSON object with an 'entries' list)."
+        )
+    return data
+
+
 def _parse_iso_timestamp(ts: str) -> str | None:
     """Parse various ISO timestamp formats to UTC Z-suffixed string."""
     if not ts:
@@ -43,8 +64,7 @@ def import_jrnl_json(path: str) -> list[Entry]:
     """
     from devlog.models import Entry
 
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+    data = _load_json_payload(path)
 
     entries = []
     for item in data.get("entries", []):
@@ -94,8 +114,7 @@ def import_dayone_json(path: str) -> list[Entry]:
     """
     from devlog.models import Entry
 
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+    data = _load_json_payload(path)
 
     entries = []
     for item in data.get("entries", []):
@@ -143,8 +162,7 @@ def import_generic_json(path: str) -> list[Entry]:
     """
     from devlog.models import Entry
 
-    with open(path, encoding="utf-8") as fh:
-        data = json.load(fh)
+    data = _load_json_payload(path)
 
     entries = []
     for item in data.get("entries", []):
