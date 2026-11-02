@@ -15,16 +15,32 @@ from devlog.models import Entry
 # File locking - cross-platform
 if sys.platform == "win32":
     import msvcrt
+
     def _lock_file(fh, exclusive: bool) -> None:
-        """Lock a file handle (Windows)."""
-        if exclusive:
-            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            msvcrt.locking(fh.fileno(), msvcrt.LK_NBRLCK, 1)
+        """Lock byte 0 of the file (Windows).
+
+        msvcrt.locking() operates on the byte range at the stream's current
+        position, so explicitly lock at offset 0 regardless of where the
+        pointer sits, then restore the position.
+        """
+        pos = fh.tell()
+        fh.seek(0)
+        try:
+            if exclusive:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBRLCK, 1)
+        finally:
+            fh.seek(pos)
 
     def _unlock_file(fh) -> None:
-        """Unlock a file handle (Windows)."""
-        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        """Unlock byte 0 of the file (Windows), restoring the position."""
+        pos = fh.tell()
+        fh.seek(0)
+        try:
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        finally:
+            fh.seek(pos)
 else:
     import fcntl
     def _lock_file(fh, exclusive: bool) -> None:
