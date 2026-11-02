@@ -55,7 +55,7 @@ def _bold(role: str) -> str:
 # Constants
 # ---------------------------------------------------------------------------
 
-VERSION = "1.6.1"
+VERSION = "1.7.0"
 
 MSG_TRUNCATE_LEN = 60
 ID_DISPLAY_LEN = 8

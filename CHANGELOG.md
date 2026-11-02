@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.7.0] - 2026-11-02
 
 Tier 2 — data & integrations (SQLite backend, git mode, competitor importers).
 
@@ -125,7 +125,8 @@ this point. Highlights of the 1.x line:
 - Performance: 10k-entry stress-tested (`list` 91ms, `search` 103ms,
   `stats` 104ms, `export` 114ms) with atomic writes everywhere.
 
-[Unreleased]: https://github.com/SpIob/devlog-cli/compare/v1.6.1...HEAD
+[Unreleased]: https://github.com/SpIob/devlog-cli/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/SpIob/devlog-cli/compare/v1.6.1...v1.7.0
 [1.6.1]: https://github.com/SpIob/devlog-cli/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/SpIob/devlog-cli/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/SpIob/devlog-cli/releases/tag/v1.5.0
