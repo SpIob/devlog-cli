@@ -1483,6 +1483,14 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
             tag_counter[tag] += 1
     top_tags = tag_counter.most_common(5)
 
+    # Stats v2: streaks, tag co-occurrence, days-since-last. All are
+    # computed from the already-parsed local dates, so they add no
+    # extra timestamp parsing on large journals.
+    local_dates = [local_d for _e, local_d in valid_entries]
+    streaks = storage.compute_streaks(local_dates)
+    top_tag_pairs = storage.compute_tag_cooccurrence([e for e, _ in valid_entries])
+    days_since = storage.compute_days_since_last(local_dates)
+
     if quiet:
         print(
             json.dumps(
@@ -1494,6 +1502,12 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
                     "last_30_days": [
                         {"date": d, "count": c} for d, c in last_30_days
                     ],
+                    "streaks": {"current": streaks[0], "longest": streaks[1]},
+                    "top_tag_pairs": [
+                        {"tags": list(pair), "count": c}
+                        for pair, c in top_tag_pairs
+                    ],
+                    "days_since_last": days_since,
                 },
                 ensure_ascii=False,
             )
@@ -1507,6 +1521,9 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
         last_iso=last_iso,
         top_tags=top_tags,
         last_30_days=last_30_days,
+        streaks=streaks,
+        top_tag_pairs=top_tag_pairs,
+        days_since=days_since,
         tz=tz,
         tz_label=str(tz) if tz is not None else "UTC",
     )
@@ -2084,6 +2101,104 @@ def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
         )
         line.append(path, style="bold")
         console.print(line)
+
+
+# ---------------------------------------------------------------------------
+# undo
+# ---------------------------------------------------------------------------
+
+
+@main.command()
+@click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
+@click.option(
+    "--keep",
+    type=int,
+    default=10,
+    show_default=True,
+    help="Total pre-write snapshots to retain after pruning (0 removes all).",
+)
+@click.option("--dry-run", is_flag=True, help="Show what would be restored; do not write.")
+@click.option("--quiet", "-q", is_flag=True, help="Suppress the summary output.")
+def undo(yes: bool, keep: int, quiet: bool, dry_run: bool) -> None:
+    """Roll the journal back to its state before the last write.
+
+    Every mutating command snapshots the previous store (JSON backend:
+    a copy of entries.json; SQLite backend: a dump of the current rows)
+    into ``backups/entries-*.pre.json`` before writing. ``undo`` restores
+    the newest such snapshot — consuming it, so repeated ``undo`` calls
+    step back through recent writes one at a time — then prunes older
+    snapshots to ``--keep``. To redo, restore a backup (``devlog backup``
+    files are never consumed).
+    """
+    snapshot = storage.latest_pre_write_backup()
+    if snapshot is None:
+        ui.print_error("Nothing to undo: no pre-write snapshot exists yet.")
+        sys.exit(1)
+
+    try:
+        snapshot_entries = storage.load_pre_write_backup(snapshot)
+    except storage.CorruptedStorageError:
+        ui.print_error(f"Snapshot is unreadable: {snapshot}")
+        sys.exit(2)
+
+    if dry_run:
+        if not quiet:
+            ui.print_info(
+                f"DRY RUN: would restore {len(snapshot_entries)} "
+                f"{ui.plural_noun(len(snapshot_entries), 'entry')} from {snapshot}."
+            )
+        return
+
+    if not yes and not quiet:
+        snippet = (
+            f' — "{snapshot_entries[-1].message[:40]}"'
+            if snapshot_entries and snapshot_entries[-1].message
+            else ""
+        )
+        prompt = (
+            f"Restore journal to its state before the last write: "
+            f"{len(snapshot_entries)} {ui.plural_noun(len(snapshot_entries), 'entry')}"
+            f"{snippet}?"
+        )
+        if not click.confirm(prompt, default=False):
+            ui.print_info("Aborted.")
+            return
+
+    # Snapshot inventory before the restore so the restore's own
+    # pre-write snapshot can be removed afterwards. Without this, the
+    # snapshot of the pre-undo state would become the newest snapshot
+    # and a second `undo` would redo the just-undone write instead of
+    # rewinding one step further.
+    known = {p for _m, p in storage._list_pre_write_backups()}
+
+    try:
+        storage.save_entries(snapshot_entries)
+    except StorageError as exc:
+        _handle_storage_error(exc)
+        return
+
+    # Consume the restored snapshot plus any snapshot the restore itself
+    # created (best-effort: leftovers are harmless, just a toggleable
+    # redo state).
+    try:
+        snapshot.unlink()
+        for _m, p in storage._list_pre_write_backups():
+            if p not in known:
+                p.unlink()
+    except OSError:
+        pass
+
+    pruned = storage.prune_pre_write_backups(keep=max(0, keep))
+
+    if not quiet:
+        line = ui.success_line(
+            f"Undone: journal restored to {len(snapshot_entries)} "
+            f"{ui.plural_noun(len(snapshot_entries), 'entry')} from "
+        )
+        line.append(snapshot.name, style="bold")
+        console.print(line)
+        if pruned:
+            ui.print_info(f"Pruned {pruned} old snapshot{ui.plural_s(pruned)}.")
 
 
 def _doctor_probe_writable(path: Path) -> tuple[bool, bool]:

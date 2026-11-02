@@ -141,6 +141,13 @@ def save_entries(entries: list[Entry]) -> None:
     try:
         _init_schema(conn)
         with conn:
+            # Single-step undo support: snapshot the pre-write rows into
+            # backups/ (same convention as the JSON backend). Skip when
+            # the table is empty (nothing to roll back to). Best-effort:
+            # a snapshot failure must never block a write.
+            row = conn.execute("SELECT COUNT(*) FROM entries").fetchone()
+            if row[0] > 0:
+                _snapshot_rows(conn)
             # Delete all and re-insert (simple, correct, fast enough for 100k+)
             conn.execute("DELETE FROM entries")
             for e in entries:
@@ -158,12 +165,50 @@ def save_entries(entries: list[Entry]) -> None:
         conn.close()
 
 
+def _snapshot_rows(conn: sqlite3.Connection) -> None:
+    """Write the current rows to a pre-write backup in ``backups/``.
+
+    Mirror of the JSON backend's pre-write copy in ``storage.save_entries``:
+    same directory, same filename convention. Pure SELECT + file write, so
+    it must run inside the caller's transaction to read consistent state.
+    """
+    from devlog.storage import (
+        default_pre_write_backup_filename,
+        get_backups_dir,
+    )
+
+    rows = conn.execute(
+        "SELECT id, message, created_at, updated_at, tags FROM entries"
+    ).fetchall()
+    payload = {
+        "entries": [
+            {
+                "id": r["id"],
+                "message": r["message"],
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+                "tags": json.loads(r["tags"]) if r["tags"] else [],
+            }
+            for r in rows
+        ]
+    }
+    backups_dir = get_backups_dir()
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    dest = backups_dir / default_pre_write_backup_filename()
+    dest.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+
 def add_entry(new_entry: Entry) -> None:
     """Append a single entry to SQLite."""
     conn = _get_connection()
     try:
         _init_schema(conn)
         with conn:
+            row = conn.execute("SELECT COUNT(*) FROM entries").fetchone()
+            if row[0] > 0:
+                _snapshot_rows(conn)
             conn.execute(
                 "INSERT INTO entries (id, message, created_at, updated_at, tags) VALUES (?, ?, ?, ?, ?)",
                 (
@@ -184,6 +229,9 @@ def update_entry(updated: Entry) -> bool:
     try:
         _init_schema(conn)
         with conn:
+            row = conn.execute("SELECT COUNT(*) FROM entries").fetchone()
+            if row[0] > 0:
+                _snapshot_rows(conn)
             cursor = conn.execute(
                 "UPDATE entries SET message=?, created_at=?, updated_at=?, tags=? WHERE id=?",
                 (
@@ -205,6 +253,9 @@ def delete_entry(entry_id: str) -> bool:
     try:
         _init_schema(conn)
         with conn:
+            row = conn.execute("SELECT COUNT(*) FROM entries").fetchone()
+            if row[0] > 0:
+                _snapshot_rows(conn)
             cursor = conn.execute("DELETE FROM entries WHERE id=?", (entry_id,))
             return cursor.rowcount > 0
     finally:

@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Tier 1 remainder — core UX (Stats v2, `devlog undo`).
+
+### Added
+
+- **`devlog undo`** — single-step rollback. Every mutating command now
+  snapshots the previous store (`backups/entries-TIMESTAMP.pre.json`,
+  microsecond-precision names) before writing, on both the JSON and
+  SQLite backends. Repeated `undo` calls step back one write at a time
+  (snapshots are consumed, so no toggle); `--dry-run` to inspect,
+  `--keep N` prunes old snapshots, manual `devlog backup` files are
+  never consumed.
+- **Stats v2** — `devlog stats` now shows current/longest writing
+  streaks, days-since-last-entry, and top tag co-occurrence pairs in
+  the panel. `--quiet` JSON gains `streaks`, `top_tag_pairs`, and
+  `days_since_last` fields.
+
 ## [1.7.0] - 2026-11-02
 
 Tier 2 — data & integrations (SQLite backend, git mode, competitor importers).

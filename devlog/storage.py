@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import json
 import os
+import shutil
 import sys
 from dataclasses import dataclass
 from datetime import date as _date
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from devlog import _iso, _tagops
@@ -209,6 +211,19 @@ def save_entries(entries: list[Entry]) -> None:
                 _unlock_file(fh)
     except (PermissionError, OSError):
         raise StoragePermissionError(path, "write")
+
+    # Single-step undo support: keep the previous store as a pre-write
+    # backup before the replace. A missing current file (first-ever
+    # write) has no previous state to preserve — skip so the first add
+    # doesn't litter backups/. Copy failures are deliberately
+    # best-effort: undo is a convenience, never a gate on writing.
+    if path.exists():
+        try:
+            backups_dir = get_backups_dir()
+            backups_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, backups_dir / default_pre_write_backup_filename())
+        except (OSError, PermissionError):
+            pass
 
     try:
         os.replace(tmp_path, path)
@@ -555,6 +570,186 @@ def default_backup_filename(now: datetime | None = None) -> str:
     elif now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     return f"entries-{now.strftime('%Y%m%d-%H%M%S')}.json"
+
+
+# ---------------------------------------------------------------------------
+# Single-step undo helpers (for `devlog undo`)
+# ---------------------------------------------------------------------------
+
+# Suffix distinguishing pre-write undo snapshots (written automatically on
+# every save) from manual `devlog backup` files. "Pre" as in "the state
+# *before* the write that created this snapshot".
+PRE_WRITE_BACKUP_SUFFIX = ".pre.json"
+
+
+def default_pre_write_backup_filename(now: datetime | None = None) -> str:
+    """Return a timestamped pre-write snapshot filename.
+
+    Same convention as :func:`default_backup_filename` but with the
+    ``.pre.json`` suffix so ``devlog undo`` can distinguish its own
+    snapshots from manual ``devlog backup`` outputs minutes or days
+    later. Microsecond precision keeps two writes in the same second
+    from overwriting each other's snapshots (rapid successive adds are
+    exactly when undo depth matters).
+
+    Args:
+        now: optional datetime to use; defaults to ``datetime.now(UTC)``.
+    """
+    if now is None:
+        now = datetime.now(tz=timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return f"entries-{now.strftime('%Y%m%d-%H%M%S-%f')}{PRE_WRITE_BACKUP_SUFFIX}"
+
+
+def _list_pre_write_backups() -> list[tuple[datetime, Path]]:
+    """Return ``(mtime, path)`` for every pre-write snapshot, newest first.
+
+    Only files matching the ``entries-*.pre.json`` convention are
+    considered; manual backups and unrelated files are ignored.
+    """
+    backups_dir = get_backups_dir()
+    if not backups_dir.is_dir():
+        return []
+    out: list[tuple[datetime, Path]] = []
+    for p in backups_dir.glob("entries-*.pre.json"):
+        try:
+            mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=timezone.utc)
+        except OSError:
+            continue
+        out.append((mtime, p))
+    # Name as tiebreaker: the %f suffix is zero-padded, so within an
+    # identical mtime the lexicographic order is still chronological.
+    out.sort(key=lambda mp: (mp[0], mp[1].name), reverse=True)
+    return out
+
+
+def load_pre_write_backup(path: Path) -> list[Entry]:
+    """Load entries from a pre-write snapshot produced by ``save_entries``.
+
+    Snapshots are written by the same serialization as the live store,
+    so they are loaded with the tolerant ``Entry.from_dict`` path.
+    The ``entries`` key is required (a snapshot without it is not a
+    snapshot); per-row problems are tolerated via ``from_dict``.
+
+    Raises:
+        CorruptedStorageError: when the file is not valid JSON or has
+            no ``entries`` list.
+    """
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, PermissionError) as exc:
+        raise CorruptedStorageError(path) from exc
+    except json.JSONDecodeError as exc:
+        raise CorruptedStorageError(path) from exc
+    if not isinstance(data, dict) or not isinstance(data.get("entries"), list):
+        raise CorruptedStorageError(path)
+    return [Entry.from_dict(item) for item in data["entries"]]
+
+
+def latest_pre_write_backup() -> Path | None:
+    """Return the newest pre-write snapshot path, or ``None`` if none exist."""
+    backups = _list_pre_write_backups()
+    return backups[0][1] if backups else None
+
+
+def prune_pre_write_backups(keep: int = 10) -> int:
+    """Delete the oldest pre-write snapshots beyond *keep*; return the count.
+
+    Every ``save_entries`` writes one snapshot, so the directory grows by
+    one file per mutating command. Pruning keeps the most recent *keep*
+    (each is a different point in history, so a small window preserves
+    the common "undo my last few operations" cases) and deletes the rest.
+    Deletion failures are ignored — a stale snapshot is harmless.
+    """
+    if keep < 0:
+        keep = 0
+    backups = _list_pre_write_backups()
+    removed = 0
+    for _mtime, p in backups[keep:]:
+        try:
+            p.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
+# ---------------------------------------------------------------------------
+# Stats v2 helpers (for `devlog stats`)
+# ---------------------------------------------------------------------------
+
+
+def compute_streaks(dates: list) -> tuple[int, int]:
+    """Return ``(current, longest)`` consecutive-day entry streaks.
+
+    Args:
+        dates: local dates (``datetime.date``) that have at least one
+            entry; duplicates are fine. Order does not matter.
+
+    Both streaks are counted backwards/forwards from *today*: a journal
+    last written 3 days ago reports ``current == 0`` (the streak is
+    already broken), which matches what a user checking their streak
+    wants to know.
+    """
+    if not dates:
+        return 0, 0
+    unique = sorted(set(dates))
+    today = datetime.now(tz=timezone.utc).date()
+
+    longest = 1
+    run = 1
+    for prev, curr in itertools.pairwise(unique):
+        if (curr - prev).days == 1:
+            run += 1
+            longest = max(longest, run)
+        else:
+            run = 1
+    # Current streak: count backwards from today (or yesterday, for the
+    # common "haven't written yet today" case — yesterday's streak is
+    # still alive until the day is over).
+    anchor = today if today in unique else (
+        today - timedelta(days=1) if (today - timedelta(days=1)) in unique else None
+    )
+    current = 0
+    if anchor is not None:
+        current = 1
+        d = anchor
+        while (d - timedelta(days=1)) in unique:
+            d -= timedelta(days=1)
+            current += 1
+    return current, longest
+
+
+def compute_tag_cooccurrence(entries: list[Entry], top: int = 5) -> list[tuple[tuple[str, str], int]]:
+    """Return the most common tag pairs, most frequent first.
+
+    Pairs are unordered (``("a", "b")`` is the same pair as
+    ``("b", "a")``) and normalised alphabetically for stable output.
+    Only the *top* ``top`` pairs are returned.
+    """
+    counter: dict[tuple[str, str], int] = {}
+    for e in entries:
+        tags = sorted(set(e.tags))
+        for i, a in enumerate(tags):
+            for b in tags[i + 1:]:
+                pair = (a, b)
+                counter[pair] = counter.get(pair, 0) + 1
+    ranked = sorted(counter.items(), key=lambda kv: (-kv[1], kv[0]))
+    return ranked[:top]
+
+
+def compute_days_since_last(dates: list) -> int | None:
+    """Return whole days between today (UTC) and the most recent entry date.
+
+    ``None`` when *dates* is empty. A negative value means the newest
+    entry is dated in the future (clock skew / backdated entries).
+    """
+    if not dates:
+        return None
+    today = datetime.now(tz=timezone.utc).date()
+    return (today - max(dates)).days
 
 
 # ---------------------------------------------------------------------------

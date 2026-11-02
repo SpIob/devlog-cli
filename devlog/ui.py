@@ -1339,6 +1339,9 @@ def stats_panel(
     last_iso: str,
     top_tags: list[tuple[str, int]],
     last_30_days: list[tuple[str, int]],
+    streaks: tuple[int, int] = (0, 0),
+    top_tag_pairs: list[tuple[tuple[str, str], int]] | None = None,
+    days_since: int | None = None,
     tz=None,
     tz_label: str = "UTC",
 ) -> Panel:
@@ -1347,7 +1350,8 @@ def stats_panel(
     The layout is a labelled two-column list for the top section,
     followed by a tag table for the most-used tags, followed by a
     colourised sparkline of the last 30 days with a 0/max scale
-    underneath.
+    underneath. Stats v2 additions (streaks, tag pairs, days-since-last)
+    slot into the labelled list and a pairs sub-section.
 
     Args:
         total: number of entries in the journal (or filtered subset).
@@ -1355,6 +1359,11 @@ def stats_panel(
         last_iso: ISO 8601 timestamp of the newest entry.
         top_tags: ``[(tag, count), ...]`` ordered most-used first.
         last_30_days: ``[(iso_date, count), ...]`` oldest first.
+        streaks: ``(current, longest)`` consecutive-day streaks.
+        top_tag_pairs: ``[((tag_a, tag_b), count), ...]`` most common
+            tag co-occurrences, or ``None``/empty to omit the section.
+        days_since: whole days since the most recent entry (negative
+            when the newest entry is in the future), or ``None`` to omit.
         tz: optional :class:`zoneinfo.ZoneInfo` used to render
             ``first_iso`` and ``last_iso`` in the user's local zone.
             The on-disk representation is unaffected.
@@ -1394,6 +1403,15 @@ def stats_panel(
         _styled_row("Avg/day", f"{avg_per_day:.2f}"),
     ]
 
+    # Stats v2 rows. Streaks always render (0 is meaningful — "your
+    # streak is broken"); days-since-last only renders with a value.
+    current_streak, longest_streak = streaks
+    rows.append(
+        _styled_row("Streak", f"{current_streak} day{plural_s(current_streak)} (longest {longest_streak})")
+    )
+    if days_since is not None:
+        rows.append(_styled_row("Last entry", f"{days_since} day{plural_s(abs(days_since))} ago"))
+
     rows.append(Text())
     if top_tags:
         rows.append(Text(f"Top {len(top_tags)} tags", style="bold"))
@@ -1401,6 +1419,14 @@ def stats_panel(
             rows.append(_styled_row(f"  {tag}", str(count), label_width=12))
     else:
         rows.append(Text("No tags yet.", style="dim"))
+
+    # Stats v2: tag co-occurrence pairs (only when the journal actually
+    # has pairs; single-tag journals omit the section).
+    if top_tag_pairs:
+        rows.append(Text())
+        rows.append(Text("Top tag pairs", style="bold"))
+        for (a, b), count in top_tag_pairs:
+            rows.append(_styled_row(f"  {a} + {b}", str(count), label_width=24))
 
     rows.append(Text())
     if sparkline_values:

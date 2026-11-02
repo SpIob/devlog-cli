@@ -598,7 +598,7 @@ devlog tail 10 -t bugfix
 
 ### `devlog stats`
 
-Show a one-glance summary of the journal: totals, date range, top tags, and a 30-day sparkline of entries per day.
+Show a one-glance summary of the journal: totals, date range, current and longest writing streaks, top tags and tag pairs, days since the last entry, and a 30-day sparkline of entries per day.
 
 ```
 devlog stats [OPTIONS]
@@ -614,6 +614,9 @@ devlog stats [OPTIONS]
 
 - The sparkline is an ASCII bar (`▁`–`█`) representing entries per day for the last 30 days. The window and date range are computed in the local zone when `DEVLOG_TZ` is set, otherwise UTC.
 - The `First` / `Last` / `Span` lines render in the local zone when `DEVLOG_TZ` is set (the `… UTC` suffix becomes the zone's key, e.g. `… EST`).
+- The `Streak` line shows your **current** consecutive-day streak (counted back from today; writing yesterday but not today keeps it alive) plus the longest streak in journal history. `Last entry: N days ago` is the nudge line.
+- `Top tag pairs` lists the tag co-occurrences — the two tags most often written on the same entry.
+- `--quiet` adds `streaks` (`{"current": N, "longest": N}`), `top_tag_pairs` (`[{"tags": [a, b], "count": N}]`), and `days_since_last` to the JSON object.
 - Empty state: prints `No entries to summarize.` and exits 0.
 
 **Example output:**
@@ -1093,6 +1096,42 @@ devlog backup -o ~/archives/devlog-$(date +%F).json
 
 # Scripting: capture the path, then move the file
 devlog backup --quiet
+```
+
+---
+
+### `devlog undo`
+
+Roll the journal back to its state *before* the last write. Every mutating command (`add`, `edit`, `delete`, `tag`, `merge-tag`, `rename-tag`, `import`, `repair`, `restore`, …) snapshots the previous store into `<data-dir>/backups/entries-TIMESTAMP.pre.json` before writing — on both the JSON and SQLite backends — so a single `devlog undo` reverts any of them.
+
+```
+devlog undo [OPTIONS]
+```
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--yes` | `-y` | flag | False | Skip the confirmation prompt. |
+| `--keep` | — | int | 10 | Pre-write snapshots to retain after pruning (`0` removes all). |
+| `--dry-run` | — | flag | False | Show what would be restored, without writing. |
+| `--quiet` | `-q` | flag | False | Suppress the summary output. |
+
+**Notes:**
+
+- Repeated `undo` calls **step back** through recent writes one at a time (each undo consumes its snapshot instead of re-snapshotting the pre-undo state), so no toggle behavior.
+- Pre-write snapshots are pruned to the 10 newest after every undo; manual `devlog backup` files are never touched or consumed.
+- To *redo* after an undo, restore a manual backup: run `devlog backup` before experimenting, then `devlog restore <file>`.
+
+**Examples:**
+
+```bash
+# Oops — that import duplicated everything
+devlog undo
+
+# Inspect first
+devlog undo --dry-run
+
+# Non-interactive (scripts)
+devlog undo -y -q
 ```
 
 ---

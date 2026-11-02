@@ -312,7 +312,12 @@ def test_repair_writes_backup_before_writing(runner, tmp_path, write_entries):
     # No entries were dropped (the bad tag was stripped in place), so
     # exit is 0. But the file was rewritten, so a backup was taken.
     assert result.exit_code == 0
-    backups = list((tmp_path / "backups").glob("*.json"))
+    # Manual backups only: `*.pre.json` files are the undo mechanism's
+    # own pre-write snapshots (repair's save creates one too).
+    backups = [
+        p for p in (tmp_path / "backups").glob("*.json")
+        if not p.name.endswith(".pre.json")
+    ]
     assert len(backups) == 1
     payload = json.loads(backups[0].read_text())
     assert payload["entries"][0]["id"] == "bad"
@@ -340,7 +345,11 @@ def test_repair_drops_unrecoverable_writes_backup(runner, tmp_path, write_entrie
     )
     result = runner.invoke(main, ["repair", "-y"])
     assert result.exit_code == 1
-    backups = list((tmp_path / "backups").glob("*.json"))
+    # Manual backups only (undo's .pre.json snapshots excluded).
+    backups = [
+        p for p in (tmp_path / "backups").glob("*.json")
+        if not p.name.endswith(".pre.json")
+    ]
     assert len(backups) == 1
 
 
@@ -360,7 +369,14 @@ def test_repair_no_backup_flag_skips_backup(runner, tmp_path, write_entries):
     result = runner.invoke(main, ["repair", "-y", "--no-backup"])
     # No drop happened (bad tag was stripped in place), so exit is 0.
     assert result.exit_code == 0
-    assert not (tmp_path / "backups").exists() or not list((tmp_path / "backups").glob("*.json"))
+    # No *manual* backup: `*.pre.json` files are the undo mechanism's
+    # own pre-write snapshots (repair's save creates one regardless of
+    # --no-backup, which only suppresses the manual entries-TS.json).
+    manual = [
+        p for p in (tmp_path / "backups").glob("*.json")
+        if not p.name.endswith(".pre.json")
+    ]
+    assert not (tmp_path / "backups").exists() or not manual
 @pytest.mark.skipif(
     active_backend() == "sqlite",
     reason="plants hand-written entries.json; repair file-recovery is JSON-backend semantics",
