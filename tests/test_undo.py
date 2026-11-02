@@ -95,17 +95,23 @@ def test_json_snapshot_is_copy_of_entries_json(runner, data_dir):
     assert payload == before
 
 
-def test_snapshot_filenames_unique_within_same_second(runner, data_dir):
-    """Rapid successive writes must never get the same snapshot path.
+def test_snapshot_never_clobbers_existing(runner, data_dir):
+    """Consecutive snapshot *writes* must never share a path.
 
-    Windows clock ticks are coarser than a microsecond, so raw
-    ``%f`` timestamps can repeat; the destination helper therefore
-    never returns an existing path.
+    Windows clock ticks are coarser than a microsecond, so raw ``%f``
+    timestamps can repeat; the destination helper therefore never
+    returns an existing path (it bumps ``-1``, ``-2``, …). The test
+    mirrors the production pattern: allocate, write, repeat — a path
+    reused across writes would shrink the set below 50.
     """
     backups_dir = storage.get_backups_dir()
     backups_dir.mkdir(parents=True, exist_ok=True)
-    paths = {storage.pre_write_backup_destination() for _ in range(50)}
-    assert len(paths) == 50
+    paths = []
+    for _ in range(50):
+        p = storage.pre_write_backup_destination()
+        p.write_text('{"entries": []}', encoding="utf-8")
+        paths.append(p)
+    assert len(set(paths)) == 50
 
 
 # ---------------------------------------------------------------------------
