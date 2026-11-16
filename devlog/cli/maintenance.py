@@ -36,6 +36,7 @@ err_console = ui.err_console
 # repair / backup / restore / doctor
 # ---------------------------------------------------------------------------
 
+
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -74,7 +75,17 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
                 ui.print_info("No journal yet — nothing to repair.")
             return
 
-        raw, recovered = read_raw_entries_sqlite()
+        try:
+            raw, recovered = read_raw_entries_sqlite()
+        except storage.CorruptedStorageError as exc:
+            # Same contract as the JSON branch below: a corrupt store
+            # is an actionable message (exit 2), never a raw traceback.
+            msg = str(exc).removeprefix("Error: ").rstrip(".")
+            ui.print_error(f"Cannot repair: {msg}. Restore from a backup with `devlog restore`.")
+            sys.exit(2)
+        except storage.StorageError as exc:
+            _handle_storage_error(exc)
+            return
         kept, issues = storage.build_repair_plan(raw)
         raw_count = len(raw.get("entries", []))
         dropped = max(0, raw_count - len(kept))
@@ -134,9 +145,7 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
         # from a backup with \`devlog restore\`.` with no doubled
         # punctuation.
         msg = str(exc).removeprefix("Error: ").rstrip(".")
-        ui.print_error(
-            f"Cannot repair: {msg}. Restore from a backup with `devlog restore`."
-        )
+        ui.print_error(f"Cannot repair: {msg}. Restore from a backup with `devlog restore`.")
         sys.exit(2)
     except storage.StoragePermissionError as exc:
         _handle_storage_error(exc)
@@ -199,9 +208,7 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
                 f"{len(kept)} {ui.plural_noun(len(kept), 'entry')}. Continue?"
             )
         else:
-            prompt = (
-                f"Repair will drop {dropped} {ui.plural_noun(dropped, 'entry')}. Continue?"
-            )
+            prompt = f"Repair will drop {dropped} {ui.plural_noun(dropped, 'entry')}. Continue?"
         click.confirm(prompt, default=False, abort=True)
 
     if not dry_run:
@@ -215,8 +222,7 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
         if recovered and not issues:
             console.print(
                 ui.success_line(
-                    "Trimmed trailing corruption; the recoverable "
-                    "entries have been rewritten."
+                    "Trimmed trailing corruption; the recoverable entries have been rewritten."
                 )
             )
         console.print(
@@ -312,10 +318,7 @@ def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
     # previously-broken backup can still be restored. Issues found in
     # the backup that the repair plan fixes are reported as warnings.
     new_entries, plan_issues = storage.build_repair_plan(data)
-    skipped_issues = [
-        iss for iss in plan_issues
-        if iss.kind not in ("bad_root", "bad_field")
-    ]
+    skipped_issues = [iss for iss in plan_issues if iss.kind not in ("bad_root", "bad_field")]
 
     if not new_entries:
         ui.print_info("Backup contains no valid entries; nothing to restore.")
@@ -323,7 +326,11 @@ def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
 
     if skipped_issues and not quiet:
         for iss in skipped_issues:
-            short = (iss.entry_id[:8] + "…") if iss.entry_id and len(iss.entry_id) > 8 else (iss.entry_id or f"#{iss.index}")
+            short = (
+                (iss.entry_id[:8] + "…")
+                if iss.entry_id and len(iss.entry_id) > 8
+                else (iss.entry_id or f"#{iss.index}")
+            )
             ui.print_warning(f"Skipped during restore: [{short}] {iss.message}")
 
     if storage._is_sqlite_backend():
@@ -365,6 +372,7 @@ def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
 # ---------------------------------------------------------------------------
 # undo
 # ---------------------------------------------------------------------------
+
 
 @click.option("--yes", "-y", is_flag=True, help="Skip the confirmation prompt.")
 @click.option(
@@ -494,7 +502,9 @@ def doctor(quiet: bool) -> None:
             report["issues"] = [
                 {
                     "kind": "corrupt_db",
-                    "message": f"SQLite database is unreadable: {exc}",
+                    "message": (
+                        f"SQLite database is unreadable: {str(exc).removeprefix('Error: ')}"
+                    ),
                     "entry_id": None,
                 }
             ]
@@ -502,10 +512,20 @@ def doctor(quiet: bool) -> None:
             sys.exit(2)
             return  # unreachable
 
-        report["entry_count"] = len(entries)
-        if entries:
-            report["days_since_last"] = _doctor_days_since_last(entries)
-            report["top_messages"] = _doctor_top_messages(entries)
+        # Validate the rows the same way the JSON backend does so a
+        # hand-edited database reports its issues instead of "all
+        # clear" — repair already validates sqlite rows, so doctor
+        # parity is intended.
+        raw = {"entries": [dataclasses.asdict(e) for e in entries]}
+        issue_dicts, valid_entries, issues_ok = _doctor_collect_issues(raw)
+        report["issues"] = issue_dicts
+        report["entry_count"] = len(valid_entries)
+        if not issues_ok:
+            report["ok"] = False
+
+        if valid_entries:
+            report["days_since_last"] = _doctor_days_since_last(valid_entries)
+            report["top_messages"] = _doctor_top_messages(valid_entries)
 
         _emit_doctor_report(report, quiet=quiet)
         if not report["ok"]:

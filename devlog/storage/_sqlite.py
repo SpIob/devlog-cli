@@ -8,13 +8,18 @@ Opt-in via DEVLOG_BACKEND=sqlite. Provides:
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import json
 import sqlite3
 import sys
+from collections.abc import Iterator
+from pathlib import Path
 
 from devlog.models import Entry
 from devlog.storage._base import (
+    CorruptedStorageError,
+    StorageError,
     ensure_storage_dir,
     get_backups_dir,
     get_sqlite_path,
@@ -92,28 +97,84 @@ def _row_to_entry(row: sqlite3.Row) -> Entry:
 
 
 # ---------------------------------------------------------------------------
+# Error translation
+# ---------------------------------------------------------------------------
+
+# Message fragments that indicate the database file itself is broken
+# (wrong file type, corrupted pages) rather than a transient failure.
+# Matching on message keeps runtime problems like "database is locked"
+# out of the corruption path.
+_CORRUPTION_MARKERS = ("not a database", "malformed")
+
+
+def _translate_sqlite_error(path: Path, exc: sqlite3.Error) -> StorageError:
+    """Map a raw sqlite3 error onto the storage exception contract.
+
+    A corrupt database file ("file is not a database", "database disk
+    image is malformed") becomes ``CorruptedStorageError`` so
+    ``doctor``/``repair``/``list`` render the same actionable message
+    the JSON backend raises; every other sqlite failure becomes a
+    plain ``StorageError`` (handled message, exit 2 — never a
+    traceback).
+    """
+    if any(marker in str(exc).lower() for marker in _CORRUPTION_MARKERS):
+        return CorruptedStorageError(path)
+    return StorageError(f"Error: SQLite storage error at {path}: {exc}")
+
+
+@contextlib.contextmanager
+def _backend_connection() -> Iterator[sqlite3.Connection]:
+    """Yield a connection with sqlite3 errors translated at the boundary.
+
+    Connect + pragmas, the request itself, and the close all happen
+    inside the guarded region, so a corrupt database file surfaces as
+    ``CorruptedStorageError``/``StorageError`` from every CRUD entry
+    point instead of leaking a raw ``sqlite3.DatabaseError``.
+    """
+    path = get_sqlite_path()
+    try:
+        conn = _get_connection()
+    except sqlite3.Error as exc:
+        raise _translate_sqlite_error(path, exc) from exc
+    try:
+        yield conn
+    except sqlite3.Error as exc:
+        raise _translate_sqlite_error(path, exc) from exc
+    except json.JSONDecodeError as exc:
+        # A hand-edited tags column holds non-JSON bytes; the store is
+        # unusable in the same sense as a corrupt JSON file.
+        raise CorruptedStorageError(path) from exc
+    finally:
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Public API (called via devlog.storage facade)
 # ---------------------------------------------------------------------------
 
 
+def get_store_path() -> Path:
+    """Return the path to the SQLite database file."""
+    return get_sqlite_path()
+
+
 def load_entries() -> list[Entry]:
     """Load all entries from SQLite in insertion order (rowid)."""
-    conn = _get_connection()
-    try:
+    with _backend_connection() as conn:
         _init_schema(conn)
         # ORDER BY rowid gives insertion order, matching JSON backend behavior
         cursor = conn.execute(
             "SELECT id, message, created_at, updated_at, tags FROM entries ORDER BY rowid"
         )
         return [_row_to_entry(row) for row in cursor.fetchall()]
-    finally:
-        conn.close()
 
 
 def save_entries(entries: list[Entry]) -> None:
     """Persist all entries to SQLite atomically (single transaction)."""
-    conn = _get_connection()
-    try:
+    with _backend_connection() as conn:
         _init_schema(conn)
         with conn:
             # Single-step undo support: snapshot the pre-write rows into
@@ -136,8 +197,6 @@ def save_entries(entries: list[Entry]) -> None:
                         json.dumps(e.tags, ensure_ascii=False),
                     ),
                 )
-    finally:
-        conn.close()
 
 
 def _snapshot_rows(conn: sqlite3.Connection) -> None:
@@ -168,8 +227,7 @@ def _snapshot_rows(conn: sqlite3.Connection) -> None:
 
 def add_entry(new_entry: Entry) -> None:
     """Append a single entry to SQLite."""
-    conn = _get_connection()
-    try:
+    with _backend_connection() as conn:
         _init_schema(conn)
         with conn:
             row = conn.execute("SELECT COUNT(*) FROM entries").fetchone()
@@ -185,8 +243,6 @@ def add_entry(new_entry: Entry) -> None:
                     json.dumps(new_entry.tags, ensure_ascii=False),
                 ),
             )
-    finally:
-        conn.close()
 
 
 def update_entry(updated: Entry) -> bool:
@@ -194,8 +250,7 @@ def update_entry(updated: Entry) -> bool:
 
     Only creates a pre-write snapshot if the entry actually exists.
     """
-    conn = _get_connection()
-    try:
+    with _backend_connection() as conn:
         _init_schema(conn)
         with conn:
             # Check if the target entry exists BEFORE snapshotting
@@ -216,8 +271,6 @@ def update_entry(updated: Entry) -> bool:
                 ),
             )
             return cursor.rowcount > 0
-    finally:
-        conn.close()
 
 
 def delete_entry(entry_id: str) -> bool:
@@ -225,8 +278,7 @@ def delete_entry(entry_id: str) -> bool:
 
     Only creates a pre-write snapshot if the entry actually exists.
     """
-    conn = _get_connection()
-    try:
+    with _backend_connection() as conn:
         _init_schema(conn)
         with conn:
             # Check if the target entry exists BEFORE snapshotting
@@ -238,8 +290,6 @@ def delete_entry(entry_id: str) -> bool:
                 _snapshot_rows(conn)
             cursor = conn.execute("DELETE FROM entries WHERE id=?", (entry_id,))
             return cursor.rowcount > 0
-    finally:
-        conn.close()
 
 
 def read_raw_entries() -> tuple[dict, bool]:
@@ -247,7 +297,16 @@ def read_raw_entries() -> tuple[dict, bool]:
 
     SQLite rows are committed atomically, so there is no partial-write
     state to recover from — the recovered flag is always False.
+
+    Raises:
+        FileNotFoundError: when the database does not exist yet. The
+            check happens *before* opening a connection so callers can
+            distinguish "no journal yet" from an empty one without
+            creating the database as a side effect.
     """
+    path = get_sqlite_path()
+    if not path.exists():
+        raise FileNotFoundError(path)
     entries = load_entries()
     return {"entries": [dataclasses.asdict(e) for e in entries]}, False
 

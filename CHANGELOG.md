@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **SQLite backend:** a corrupt or hand-mangled `entries.db` (garbage
+  bytes, wrong file type) now surfaces through the same error contract
+  as a corrupt `entries.json`: `devlog list`/`doctor`/`repair` print an
+  actionable message and exit 2 instead of a raw
+  `sqlite3.DatabaseError` traceback. Corruption ("file is not a
+  database", "malformed") maps to `CorruptedStorageError`; transient
+  failures (e.g. a locked database) keep a generic handled message.
+- **SQLite backend:** `devlog doctor` now validates rows exactly like
+  the JSON backend — a hand-edited `tags`/`created_at` column is
+  reported as a validation issue (exit 1, inline list, quiet-JSON
+  `issues` array) instead of "all clear".
+
 ### Changed
 
 - **Internal:** split the storage monolith (`devlog/storage.py`) into a
@@ -19,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI no longer import the storage layer. `devlog/sqlite_storage.py`
   remains as a compatibility shim, and every public name is
   re-exported unchanged — no user-facing behavior change.
+- **CI:** the test matrix now runs a sqlite-backend leg
+  (`DEVLOG_BACKEND=sqlite`) on the supported Python bookends; the
+  sqlite parity test file previously never executed in CI.
+
+### Added
+
+- **Tests:** 19 sqlite-backend parity tests (`tests/test_sqlite_backend.py`)
+  mirroring the JSON suite's corruption, repair, pre-write-snapshot and
+  stats-robustness coverage.
 
 ## [2.0.0] - 2026-11-02
 
