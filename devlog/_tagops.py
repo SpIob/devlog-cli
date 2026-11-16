@@ -9,7 +9,7 @@ import re
 
 import click
 
-from devlog import storage
+from devlog._time import utc_now_iso
 from devlog.models import Entry
 
 # Tag validation constants (also used by storage module)
@@ -160,7 +160,7 @@ def _rewrite_tag_in_entry(
         else:
             new_tags.append(t)
     entry.tags = new_tags
-    entry.updated_at = now if now is not None else storage.utc_now_iso()
+    entry.updated_at = now if now is not None else utc_now_iso()
 
 
 def _is_valid_tag(tag: str) -> bool:

@@ -31,6 +31,7 @@ from devlog.cli._shared import (
     _print_jsonl,
     _require_positive_int,
     _resolve_entry_by_id_or_exit,
+    _resolve_tz_or_exit,
     _validate_tags_or_exit,
 )
 from devlog.models import Entry
@@ -114,7 +115,7 @@ def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_co
         # Override timestamp if --at is also provided
         if at is not None:
             try:
-                ts_dt = _dates._parse_timestamp(at, tz=_dates._resolve_local_tz())
+                ts_dt = _dates._parse_timestamp(at, tz=_resolve_tz_or_exit())
                 ts = ts_dt.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 entry.created_at = ts
             except click.BadParameter as exc:
@@ -152,7 +153,7 @@ def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_co
 
     if at is not None:
         try:
-            ts_dt = _dates._parse_timestamp(at, tz=_dates._resolve_local_tz())
+            ts_dt = _dates._parse_timestamp(at, tz=_resolve_tz_or_exit())
         except click.BadParameter as exc:
             ui.print_error(str(exc))
             sys.exit(2)

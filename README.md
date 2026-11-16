@@ -1615,8 +1615,8 @@ devlog-cli/
 │   │   └── progress.py     ← export progress bar
 │   ├── themes.py           ← Theme loader, role contract, palette helpers
 │   ├── theme_preview.py    ← Synthetic UI fixture for theme create previews
-│   ├── storage.py          ← File I/O, JSON read/write, atomic write logic
-│   ├── sqlite_storage.py   ← SQLite backend for journal storage
+│   ├── storage/            ← Storage facade + _base/_json/_sqlite backends
+│   ├── sqlite_storage.py   ← Compat shim re-exporting devlog.storage._sqlite
 │   ├── models.py           ← Entry dataclass / TypedDict definition
 │   ├── _completions.py     ← Bash / zsh / fish completion script generators
 │   ├── _dates.py           ← Date-range parsing, week boundaries, TZ helpers
@@ -1624,6 +1624,7 @@ devlog-cli/
 │   ├── _interactive.py     ← Line-based REPL dispatcher
 │   ├── _io.py              ← Export/import readers and writers
 │   ├── _iso.py             ← ISO-8601 parsing / formatting helpers
+│   ├── _time.py            ← UTC timestamps + timezone resolution helpers
 │   ├── _tagops.py          ← Tag normalisation, validation, merge helpers
 │   ├── _git_cli.py         ← `devlog git` command group (status/sync/log)
 │   ├── _gitops.py          ← Git plumbing for the git command group

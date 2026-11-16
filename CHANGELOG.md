@@ -5,6 +5,21 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Internal:** split the storage monolith (`devlog/storage.py`) into a
+  `devlog/storage/` package. `devlog.storage` is now a facade that
+  dispatches to the active backend: `_base` (shared exceptions, paths,
+  locking, validation, stats helpers), `_json` (default backend, incl.
+  right-truncation recovery of a corrupt store) and `_sqlite` (opt-in
+  via `DEVLOG_BACKEND=sqlite`). Shared time helpers moved to the new
+  `devlog/_time.py`; `devlog/_dates.py`, `devlog/_tagops.py` and the AI
+  CLI no longer import the storage layer. `devlog/sqlite_storage.py`
+  remains as a compatibility shim, and every public name is
+  re-exported unchanged — no user-facing behavior change.
+
 ## [2.0.0] - 2026-11-02
 
 Tier 3 — differentiators: local-AI digest/ask and the MCP server. Ships

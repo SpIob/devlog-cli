@@ -69,7 +69,8 @@ def register(main) -> None:
             sys.exit(2)
 
         all_entries = storage.load_entries()
-        tz = _dates._resolve_local_tz()
+        from devlog.cli._shared import _resolve_tz_or_exit
+        tz = _resolve_tz_or_exit()
         if anchor:
             try:
                 anchor_dt = _dates._parse_date_bound(anchor, tz=tz)

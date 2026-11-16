@@ -21,6 +21,7 @@ from devlog.cli._shared import (
     _load_entries_or_exit,
     _print_jsonl,
     _require_positive_int,
+    _resolve_tz_or_exit,
 )
 
 # Console instances (ui re-exports) so command bodies read `console.print`
@@ -47,7 +48,7 @@ def today(limit: int, quiet: bool) -> None:
 
     all_entries = _load_entries_or_exit()
 
-    tz = _dates._resolve_local_tz()
+    tz = _resolve_tz_or_exit()
     local_today = _dates.today_local_date(tz)
     today_entries = _dates._filter_by_local_window(all_entries, end_date=local_today, days=0, tz=tz)
     subtitle = local_today.strftime("%Y-%m-%d")
@@ -88,7 +89,7 @@ def yesterday(limit: int, quiet: bool) -> None:
 
     all_entries = _load_entries_or_exit()
 
-    tz = _dates._resolve_local_tz()
+    tz = _resolve_tz_or_exit()
     local_today = _dates.today_local_date(tz)
     local_yesterday = local_today - datetime.timedelta(days=1)
     yesterday_entries = _dates._filter_by_local_window(
@@ -139,7 +140,7 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
 
     all_entries = _load_entries_or_exit()
 
-    tz = _dates._resolve_local_tz()
+    tz = _resolve_tz_or_exit()
     if anchor:
         # Parse the anchor in the local zone when possible, then convert
         # to UTC. Falls back to UTC if no tz is set, mirroring
@@ -201,7 +202,7 @@ def on(date: str, limit: int, quiet: bool) -> None:
 
     all_entries = _load_entries_or_exit()
 
-    tz = _dates._resolve_local_tz()
+    tz = _resolve_tz_or_exit()
     target_date = _dates._parse_on_date(date, tz=tz)
     
     if target_date is None:
@@ -247,7 +248,7 @@ def on(date: str, limit: int, quiet: bool) -> None:
 )
 def calendar(year: int | None, quiet: bool) -> None:
     """Show a year-grid heatmap of journal activity."""
-    tz = _dates._resolve_local_tz()
+    tz = _resolve_tz_or_exit()
     if year is None:
         year = _dates.today_local_date(tz).year
 

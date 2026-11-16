@@ -59,6 +59,22 @@ def _load_entries_or_exit() -> list[Entry]:
         return []
 
 
+def _resolve_tz_or_exit():
+    """Resolve the local timezone from DEVLOG_TZ, or exit with an error.
+
+    Wraps :func:`devlog._dates._resolve_local_tz` so the CLI layer
+    handles the ValueError raised on invalid zone names.
+    """
+    try:
+        return _dates._resolve_local_tz()
+    except ValueError as exc:
+        ui.print_error(
+            f'Invalid DEVLOG_TZ: {exc}. '
+            "Use an IANA name like America/New_York or Europe/Berlin."
+        )
+        sys.exit(1)
+
+
 def _resolve_entry_by_id_or_exit(
     all_entries: list[Entry], entry_id: str, *, ignore_missing: bool = False
 ) -> Entry | None:
@@ -204,7 +220,7 @@ def _edit_resolve_at(
     if at is None:
         return match.created_at
     try:
-        parsed = _dates._parse_timestamp(at, tz=_dates._resolve_local_tz())
+        parsed = _dates._parse_timestamp(at, tz=_resolve_tz_or_exit())
     except click.BadParameter as exc:
         ui.print_error(str(exc))
         sys.exit(2)

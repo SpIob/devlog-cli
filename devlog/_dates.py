@@ -9,12 +9,12 @@ from __future__ import annotations
 import datetime
 import os
 import re
-import sys
 from typing import TYPE_CHECKING
 
 import click
 
-from devlog import _iso, storage, ui
+from devlog import _iso
+from devlog._time import _resolve_zoneinfo, local_date_for
 from devlog.models import Entry
 
 if TYPE_CHECKING:
@@ -38,28 +38,15 @@ def _resolve_local_tz():
     Behaviour:
         * Env var unset → return ``None`` (callers should fall back to UTC).
         * Env var set to a valid IANA name → return the ``ZoneInfo``.
-        * Env var set to an invalid name → render a red error panel and
-          exit with code 1. We deliberately fail loudly: a silent
-          fallback to UTC after a typo would mask the real configuration
-          problem.
+        * Env var set to an invalid name → raise ``ValueError``.
 
     The function delegates the actual IANA-name → ``ZoneInfo``
-    resolution to :func:`devlog.storage._resolve_zoneinfo` so the
-    lazy import lives in one place. The ``tzdata`` package is a
-    small dependency that provides IANA data on Windows and as a
-    fallback elsewhere.
+    resolution to :func:`devlog.storage._time._resolve_zoneinfo`.
     """
     raw = os.environ.get("DEVLOG_TZ")
     if not raw:
         return None
-    try:
-        return storage._resolve_zoneinfo(raw)
-    except ValueError as exc:
-        ui.print_error(
-            f'Invalid DEVLOG_TZ "{raw}": {exc}. '
-            "Use an IANA name like America/New_York or Europe/Berlin."
-        )
-        sys.exit(1)
+    return _resolve_zoneinfo(raw)
 
 
 def _parse_date_bound(
@@ -122,50 +109,62 @@ def _parse_date_bound(
             return now.replace(hour=23, minute=59, second=59, microsecond=0)
         return now.replace(hour=0, minute=0, second=0, microsecond=0)
     if lower == "yesterday":
-        ref = datetime.datetime.now(tz=tz or datetime.timezone.utc).date() - datetime.timedelta(days=1)
+        ref = datetime.datetime.now(tz=tz or datetime.timezone.utc).date() - datetime.timedelta(
+            days=1
+        )
         dt = datetime.datetime(ref.year, ref.month, ref.day, tzinfo=tz or datetime.timezone.utc)
         if is_upper:
-            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(datetime.timezone.utc)
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(
+                datetime.timezone.utc
+            )
         return dt.astimezone(datetime.timezone.utc)
 
     # Relative: 4h, 30m, 7d, 2w
     m = _RELATIVE_HOUR_RE.match(lower)
     if m:
         hours = int(m.group(1))
-        return (datetime.datetime.now(tz=tz or datetime.timezone.utc) - datetime.timedelta(hours=hours)).astimezone(
-            datetime.timezone.utc
-        )
+        return (
+            datetime.datetime.now(tz=tz or datetime.timezone.utc) - datetime.timedelta(hours=hours)
+        ).astimezone(datetime.timezone.utc)
     m = _RELATIVE_MINUTE_RE.match(lower)
     if m:
         minutes = int(m.group(1))
-        return (datetime.datetime.now(tz=tz or datetime.timezone.utc) - datetime.timedelta(minutes=minutes)).astimezone(
-            datetime.timezone.utc
-        )
+        return (
+            datetime.datetime.now(tz=tz or datetime.timezone.utc)
+            - datetime.timedelta(minutes=minutes)
+        ).astimezone(datetime.timezone.utc)
     m = _RELATIVE_DAY_RE.match(lower)
     if m:
         days = int(m.group(1))
-        ref = datetime.datetime.now(tz=tz or datetime.timezone.utc).date() - datetime.timedelta(days=days)
+        ref = datetime.datetime.now(tz=tz or datetime.timezone.utc).date() - datetime.timedelta(
+            days=days
+        )
         dt = datetime.datetime(ref.year, ref.month, ref.day, tzinfo=tz or datetime.timezone.utc)
         if is_upper:
-            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(datetime.timezone.utc)
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(
+                datetime.timezone.utc
+            )
         return dt.astimezone(datetime.timezone.utc)
     m = _RELATIVE_WEEK_RE.match(lower)
     if m:
         weeks = int(m.group(1))
-        ref = (
-            datetime.datetime.now(tz=tz or datetime.timezone.utc).date()
-            - datetime.timedelta(weeks=weeks)
+        ref = datetime.datetime.now(tz=tz or datetime.timezone.utc).date() - datetime.timedelta(
+            weeks=weeks
         )
         dt = datetime.datetime(ref.year, ref.month, ref.day, tzinfo=tz or datetime.timezone.utc)
         if is_upper:
-            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(datetime.timezone.utc)
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(
+                datetime.timezone.utc
+            )
         return dt.astimezone(datetime.timezone.utc)
 
     # Date only: YYYY-MM-DD
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
         dt = datetime.datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=tz or datetime.timezone.utc)
         if is_upper:
-            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(datetime.timezone.utc)
+            return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(
+                datetime.timezone.utc
+            )
         return dt.astimezone(datetime.timezone.utc)
 
     # Full ISO with optional Z / +00:00 / +HH:MM
@@ -244,19 +243,16 @@ def _parse_timestamp(value: str, *, tz=None) -> datetime.datetime:
     if m:
         days = int(m.group(1))
         ref = datetime.datetime.now(tz=zone).date() - datetime.timedelta(days=days)
-        return datetime.datetime(
-            ref.year, ref.month, ref.day, tzinfo=zone
-        ).astimezone(datetime.timezone.utc)
+        return datetime.datetime(ref.year, ref.month, ref.day, tzinfo=zone).astimezone(
+            datetime.timezone.utc
+        )
     m = _RELATIVE_WEEK_RE.match(lower)
     if m:
         weeks = int(m.group(1))
-        ref = (
-            datetime.datetime.now(tz=zone).date()
-            - datetime.timedelta(weeks=weeks)
+        ref = datetime.datetime.now(tz=zone).date() - datetime.timedelta(weeks=weeks)
+        return datetime.datetime(ref.year, ref.month, ref.day, tzinfo=zone).astimezone(
+            datetime.timezone.utc
         )
-        return datetime.datetime(
-            ref.year, ref.month, ref.day, tzinfo=zone
-        ).astimezone(datetime.timezone.utc)
 
     # Date-only: YYYY-MM-DD → local midnight, then convert to UTC so
     # callers always get a UTC datetime.
@@ -331,7 +327,10 @@ def _parse_since_until(
     mirrors :func:`_parse_date_bound` — when ``DEVLOG_TZ`` is set, naive
     date inputs are interpreted in that zone.
     """
-    tz = _resolve_local_tz()
+    try:
+        tz = _resolve_local_tz()
+    except ValueError as exc:
+        raise click.ClickException(f"Invalid DEVLOG_TZ: {exc}")
     since_dt = _parse_date_bound(since, tz=tz) if since else None
     until_dt = _parse_date_bound(until, is_upper=True, tz=tz) if until else None
     return since_dt, until_dt
@@ -356,7 +355,7 @@ def _filter_by_local_window(
     out = []
     for entry in entries:
         if tz is not None:
-            local_d = storage.local_date_for(entry.created_at, tz)
+            local_d = local_date_for(entry.created_at, tz)
         else:
             # UTC fallback — preserve the same epoch-on-failure contract
             # as ``storage.local_date_for`` so unreadable timestamps

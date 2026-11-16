@@ -19,3 +19,6 @@ build/
 
 # macOS
 .DS_Store
+
+# Agent locks (multi-session coordination)
+.agent-locks/

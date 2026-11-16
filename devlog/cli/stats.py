@@ -17,6 +17,7 @@ from devlog import (
 )
 from devlog.cli._shared import (
     _load_entries_or_exit,
+    _resolve_tz_or_exit,
 )
 from devlog.models import Entry
 
@@ -48,7 +49,7 @@ def stats(since: str | None, until: str | None, quiet: bool) -> None:
     # ``storage.local_date_for``. We now parse once here and reuse the
     # resulting date — saves one ``parse_utc_iso`` call per entry
     # (10k+ syscalls on large journals).
-    tz = _dates._resolve_local_tz()
+    tz = _resolve_tz_or_exit()
     valid_entries: list[tuple[Entry, datetime.date]] = []
     for entry in all_entries:
         dt = _iso.try_parse_utc_iso(entry.created_at)

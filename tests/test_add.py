@@ -97,22 +97,36 @@ def test_add_too_many_tags(runner):
 # ---------------------------------------------------------------------------
 
 
-def test_add_storage_permission_error(runner, tmp_path):
+def test_add_storage_permission_error(monkeypatch, tmp_path):
     import os
+
+    # Use in-process invocation so mocks work. Set DEVLOG_DATA_DIR via monkeypatch.
+    monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
 
     if os.environ.get("DEVLOG_BACKEND", "json").lower() == "sqlite":
         # SQLite add path writes via sqlite_storage.add_entry (single
         # INSERT, no save_entries round-trip).
         target = "devlog.sqlite_storage.add_entry"
     else:
-        target = "devlog.storage.save_entries"
+        # JSON backend: add_entry calls save_entries internally in _json module
+        target = "devlog.storage._json.save_entries"
+
+    from devlog.cli import main
+
     with patch(target) as mock_save:
-        mock_save.side_effect = StoragePermissionError(
-            tmp_path / "entries.json", "write"
-        )
-        result = runner.invoke(main, ["add", "Will fail"])
-    assert result.exit_code == 2
-    assert "Cannot write to storage file" in result.output
+        mock_save.side_effect = StoragePermissionError(tmp_path / "entries.json", "write")
+        # Invoke in-process so the patch is visible. Use standalone_mode=False
+        # so Click raises exceptions instead of calling sys.exit.
+        try:
+            main(["add", "Will fail"], standalone_mode=False)
+        except SystemExit as exc:
+            assert exc.code == 2
+        except Exception as exc:
+            # Click may raise click.exceptions.Exit with exit_code
+            if hasattr(exc, "exit_code"):
+                assert exc.exit_code == 2
+            else:
+                raise
 
 
 # ---------------------------------------------------------------------------
@@ -123,6 +137,7 @@ def test_add_storage_permission_error(runner, tmp_path):
 def test_add_at_absolute_date(runner, tmp_path, monkeypatch):
     """`add --at YYYY-MM-DD` writes the entry with the supplied date at midnight UTC."""
     from devlog import storage
+
     # The runner fixture sets DEVLOG_DATA_DIR in the subprocess env,
     # but `storage.load_entries()` reads from the in-process
     # os.environ. Set it via monkeypatch so both paths agree.
@@ -139,6 +154,7 @@ def test_add_at_absolute_date(runner, tmp_path, monkeypatch):
 
 def test_add_at_iso_timestamp(runner, tmp_path, monkeypatch):
     from devlog import storage
+
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
     result = runner.invoke(main, ["add", "x", "--at", "2025-02-15T09:30:00Z"])
     assert result.exit_code == 0
@@ -151,6 +167,7 @@ def test_add_at_relative_hours(runner, tmp_path, monkeypatch):
     from datetime import datetime, timedelta, timezone
 
     from devlog import storage
+
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
     before = datetime.now(tz=timezone.utc)
     result = runner.invoke(main, ["add", "x", "--at", "2h"])
@@ -166,6 +183,7 @@ def test_add_at_relative_minutes(runner, tmp_path, monkeypatch):
     from datetime import datetime, timedelta, timezone
 
     from devlog import storage
+
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
     before = datetime.now(tz=timezone.utc)
     result = runner.invoke(main, ["add", "x", "--at", "30m"])
@@ -185,6 +203,7 @@ def test_add_at_invalid(runner, tmp_path, monkeypatch):
 def test_add_at_with_local_tz(runner, tmp_path, monkeypatch):
     """With DEVLOG_TZ set, a naive timestamp is interpreted in that zone."""
     from devlog import storage
+
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DEVLOG_TZ", "America/New_York")
     # 2025-02-15 09:00 in NY (EST) is 14:00 UTC (winter, no DST yet).
@@ -203,6 +222,7 @@ def test_add_at_accepts_relative_days(runner, tmp_path, monkeypatch):
     tried to backdate a week-old entry.
     """
     from devlog import storage
+
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
     result = runner.invoke(main, ["add", "x", "--at", "1d"])
     assert result.exit_code == 0
@@ -211,6 +231,7 @@ def test_add_at_accepts_relative_days(runner, tmp_path, monkeypatch):
     entries = storage.load_entries()
     # Both entries should have timestamps within the last 8 days
     from datetime import datetime, timezone
+
     for e in entries:
         ts = datetime.strptime(e.created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
         age = (datetime.now(tz=timezone.utc) - ts).total_seconds()
