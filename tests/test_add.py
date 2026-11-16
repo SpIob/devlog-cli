@@ -104,9 +104,9 @@ def test_add_storage_permission_error(monkeypatch, tmp_path):
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
 
     if os.environ.get("DEVLOG_BACKEND", "json").lower() == "sqlite":
-        # SQLite add path writes via sqlite_storage.add_entry (single
+        # SQLite add path writes via storage._sqlite.add_entry (single
         # INSERT, no save_entries round-trip).
-        target = "devlog.sqlite_storage.add_entry"
+        target = "devlog.storage._sqlite.add_entry"
     else:
         # JSON backend: add_entry calls save_entries internally in _json module
         target = "devlog.storage._json.save_entries"

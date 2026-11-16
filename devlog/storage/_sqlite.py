@@ -161,6 +161,23 @@ def get_store_path() -> Path:
     return get_sqlite_path()
 
 
+def corrupt_issue(exc: Exception) -> dict:
+    """Describe an unreadable SQLite store for ``doctor``'s report.
+
+    Unlike the JSON backend, a database can fail for reasons that are
+    not corruption (a lock timeout, a bad file type), so the driver's
+    own message is kept — it is what tells the user which failure they
+    are looking at. A genuine corruption already arrives as a complete
+    actionable sentence, so it is reported verbatim instead of being
+    prefixed with a second diagnosis.
+    """
+    if isinstance(exc, CorruptedStorageError):
+        message = str(exc).removeprefix("Error: ")
+    else:
+        message = f"SQLite database is unreadable: {str(exc).removeprefix('Error: ')}"
+    return {"kind": "corrupt_db", "message": message, "entry_id": None}
+
+
 def load_entries() -> list[Entry]:
     """Load all entries from SQLite in insertion order (rowid)."""
     with _backend_connection() as conn:

@@ -35,6 +35,20 @@ def get_store_path() -> Path:
     return get_storage_path()
 
 
+def corrupt_issue(_exc: Exception) -> dict:
+    """Describe an unreadable JSON store for ``doctor``'s report.
+
+    The JSON backend has exactly one corruption mode (the file does not
+    parse), so the exception text is not repeated in the message — the
+    report already carries the path.
+    """
+    return {
+        "kind": "corrupt_json",
+        "message": "entries.json is not valid JSON",
+        "entry_id": None,
+    }
+
+
 def load_entries() -> list[Entry]:
     """Load all entries from the JSON file, in insertion order."""
     path = get_storage_path()

@@ -1615,8 +1615,11 @@ devlog-cli/
 │   │   └── progress.py     ← export progress bar
 │   ├── themes.py           ← Theme loader, role contract, palette helpers
 │   ├── theme_preview.py    ← Synthetic UI fixture for theme create previews
-│   ├── storage/            ← Storage facade + _base/_json/_sqlite backends
-│   ├── sqlite_storage.py   ← Compat shim re-exporting devlog.storage._sqlite
+│   ├── storage/            ← Storage facade (dispatch by DEVLOG_BACKEND)
+│   │   ├── __init__.py     ← facade: public API + backend dispatch
+│   │   ├── _base.py        ← exceptions, paths, locking, validation, stats
+│   │   ├── _json.py        ← default backend (entries.json, atomic writes)
+│   │   └── _sqlite.py      ← opt-in backend (entries.db, WAL)
 │   ├── models.py           ← Entry dataclass / TypedDict definition
 │   ├── _completions.py     ← Bash / zsh / fish completion script generators
 │   ├── _dates.py           ← Date-range parsing, week boundaries, TZ helpers

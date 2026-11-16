@@ -62,76 +62,10 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
     removed. The original store is preserved in ``backups/`` whenever a
     write happens unless ``--no-backup`` is set.
     """
-    if storage._is_sqlite_backend():
-        # SQLite backend: the store is a live database, not a flat file,
-        # so the corrupt-JSON recovery path does not apply. Rows were
-        # already validated at insert time; running the same validator
-        # over the payload still catches hand-edited (post-migration)
-        # drift, but there is no "repair" beyond dropping bad rows.
-        from devlog.sqlite_storage import get_sqlite_path, read_raw_entries_sqlite
-
-        if not get_sqlite_path().exists():
-            if not quiet:
-                ui.print_info("No journal yet — nothing to repair.")
-            return
-
-        try:
-            raw, recovered = read_raw_entries_sqlite()
-        except storage.CorruptedStorageError as exc:
-            # Same contract as the JSON branch below: a corrupt store
-            # is an actionable message (exit 2), never a raw traceback.
-            msg = str(exc).removeprefix("Error: ").rstrip(".")
-            ui.print_error(f"Cannot repair: {msg}. Restore from a backup with `devlog restore`.")
-            sys.exit(2)
-        except storage.StorageError as exc:
-            _handle_storage_error(exc)
-            return
-        kept, issues = storage.build_repair_plan(raw)
-        raw_count = len(raw.get("entries", []))
-        dropped = max(0, raw_count - len(kept))
-        tags_stripped = sum(1 for i in issues if i.kind == "bad_tag")
-
-        if not issues:
-            if not quiet:
-                ui.print_info("No issues found. Nothing to repair.")
-            return
-
-        backup_path: str | None = None
-        if not dry_run and backup:
-            try:
-                storage.ensure_storage_dir()
-                backups_dir = storage.get_backups_dir()
-                backups_dir.mkdir(parents=True, exist_ok=True)
-                backup_path = str(backups_dir / storage.default_backup_filename())
-                with open(backup_path, "w", encoding="utf-8") as fh:
-                    json.dump(raw, fh, indent=2, ensure_ascii=False)
-            except (OSError, PermissionError) as exc:
-                ui.print_error(f"Could not write backup: {exc}")
-                sys.exit(2)
-
-        if not dry_run:
-            try:
-                storage.save_entries(kept)
-            except StorageError as exc:
-                _handle_storage_error(exc)
-                return
-
-        if not quiet:
-            console.print(
-                ui.repair_summary(
-                    issues=issues,
-                    dropped=dropped,
-                    kept=len(kept),
-                    dry_run=dry_run,
-                    backup_path=backup_path,
-                    tags_stripped=tags_stripped,
-                )
-            )
-        if not dry_run and dropped > 0:
-            sys.exit(1)
-        return
-
-    # JSON backend: read the raw file (with right-truncation recovery).
+    # Backend-agnostic: the facade reads the raw payload from whichever
+    # store is active — the JSON file (with right-truncation recovery)
+    # or the live SQLite table. An absent store is reported as "no
+    # journal yet" and is never created as a side effect.
     try:
         raw, recovered = storage.read_raw_entries()
     except FileNotFoundError:
@@ -147,7 +81,9 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
         msg = str(exc).removeprefix("Error: ").rstrip(".")
         ui.print_error(f"Cannot repair: {msg}. Restore from a backup with `devlog restore`.")
         sys.exit(2)
-    except storage.StoragePermissionError as exc:
+    except storage.StorageError as exc:
+        # Any other storage failure (unreadable file, sqlite lock
+        # timeout) is actionable on its own — handled message, exit 2.
         _handle_storage_error(exc)
         return
 
@@ -183,7 +119,7 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
                 # raw bytes so the user can recover anything we
                 # trimmed off the end.
                 if recovered:
-                    raw_bytes = storage.get_storage_path().read_bytes()
+                    raw_bytes = storage.get_store_path().read_bytes()
                     fh.write(raw_bytes.decode("utf-8", errors="replace"))
                 else:
                     json.dump(raw, fh, indent=2, ensure_ascii=False)
@@ -333,15 +269,10 @@ def restore(path: str, yes: bool, dry_run: bool, quiet: bool) -> None:
             )
             ui.print_warning(f"Skipped during restore: [{short}] {iss.message}")
 
-    if storage._is_sqlite_backend():
-        from devlog.sqlite_storage import get_sqlite_path
-
-        current_path = get_sqlite_path()
-        has_existing = current_path.exists()
-    else:
-        current_path = storage.get_storage_path()
-        has_existing = current_path.exists()
-    if has_existing and not yes and not dry_run:
+    # Backend-agnostic: the facade names the active store (entries.json
+    # or entries.db) so the overwrite warning points at the right file.
+    current_path = storage.get_store_path()
+    if current_path.exists() and not yes and not dry_run:
         click.confirm(
             f"This will overwrite the current journal at {current_path}. Continue?",
             default=False,
@@ -469,71 +400,10 @@ def undo(yes: bool, keep: int, quiet: bool, dry_run: bool) -> None:
 @click.option("--quiet", "-q", is_flag=True, help="Output a single JSON health summary.")
 def doctor(quiet: bool) -> None:
     """Check the journal store for corruption and report basic health stats."""
-    if storage._is_sqlite_backend():
-        from devlog.sqlite_storage import get_db_size, get_sqlite_path
-
-        path = get_sqlite_path()
-        report: dict = {
-            "ok": True,
-            "path": str(path),
-            "exists": path.exists(),
-            "writable": False,
-            "size_bytes": get_db_size(),
-            "entry_count": 0,
-            "issues": [],
-            "days_since_last": None,
-            "top_messages": [],
-        }
-
-        writable, ok = _doctor_probe_writable(path)
-        report["writable"] = writable
-        report["ok"] = report["ok"] and ok
-
-        if not path.exists():
-            if not ok:
-                sys.exit(2)
-            _emit_doctor_report(report, quiet=quiet)
-            return
-
-        try:
-            entries = storage.load_entries()
-        except StorageError as exc:
-            report["ok"] = False
-            report["issues"] = [
-                {
-                    "kind": "corrupt_db",
-                    "message": (
-                        f"SQLite database is unreadable: {str(exc).removeprefix('Error: ')}"
-                    ),
-                    "entry_id": None,
-                }
-            ]
-            _emit_doctor_report(report, quiet=quiet)
-            sys.exit(2)
-            return  # unreachable
-
-        # Validate the rows the same way the JSON backend does so a
-        # hand-edited database reports its issues instead of "all
-        # clear" — repair already validates sqlite rows, so doctor
-        # parity is intended.
-        raw = {"entries": [dataclasses.asdict(e) for e in entries]}
-        issue_dicts, valid_entries, issues_ok = _doctor_collect_issues(raw)
-        report["issues"] = issue_dicts
-        report["entry_count"] = len(valid_entries)
-        if not issues_ok:
-            report["ok"] = False
-
-        if valid_entries:
-            report["days_since_last"] = _doctor_days_since_last(valid_entries)
-            report["top_messages"] = _doctor_top_messages(valid_entries)
-
-        _emit_doctor_report(report, quiet=quiet)
-        if not report["ok"]:
-            sys.exit(1)
-        return
-
-    # JSON backend
-    path = storage.get_storage_path()
+    # Backend-agnostic: the facade names the active store, and each
+    # backend describes its own failure mode via `corrupt_issue()`, so
+    # this report shape is shared by the JSON and SQLite backends.
+    path = storage.get_store_path()
     report: dict = {
         "ok": True,
         "path": str(path),
@@ -561,21 +431,16 @@ def doctor(quiet: bool) -> None:
 
     try:
         raw, _recovered = storage.read_raw_entries()
-    except storage.CorruptedStorageError:
-        report["ok"] = False
-        report["issues"] = [
-            {
-                "kind": "corrupt_json",
-                "message": "entries.json is not valid JSON",
-                "entry_id": None,
-            }
-        ]
-        _emit_doctor_report(report, quiet=quiet)
-        sys.exit(2)
-        return  # unreachable
     except storage.StoragePermissionError as exc:
         _handle_storage_error(exc)
         return
+    except storage.StorageError as exc:
+        # The active backend names its own corruption kind and message
+        # ("corrupt_json" / "corrupt_db"); the report shape is shared.
+        report["ok"] = False
+        report["issues"] = [storage.corrupt_issue(exc)]
+        _emit_doctor_report(report, quiet=quiet)
+        sys.exit(2)
 
     issue_dicts, valid_entries, issues_ok = _doctor_collect_issues(raw)
     report["issues"] = issue_dicts

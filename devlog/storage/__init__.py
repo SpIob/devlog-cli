@@ -102,6 +102,17 @@ def get_store_path() -> Path:
     return _get_backend_module().get_store_path()
 
 
+def corrupt_issue(exc: Exception) -> dict:
+    """Return the active backend's ``doctor`` issue dict for an unreadable store.
+
+    The backend owns this vocabulary because the failure modes differ:
+    JSON reports "not valid JSON", SQLite reports the driver's message
+    (corrupt file *or* lock timeout). Callers render whatever comes
+    back, so no command needs to know which backend is active.
+    """
+    return _get_backend_module().corrupt_issue(exc)
+
+
 __all__ = [
     "MAX_TAG_LENGTH",
     "PRE_WRITE_BACKUP_SUFFIX",
@@ -120,6 +131,7 @@ __all__ = [
     "compute_days_since_last",
     "compute_streaks",
     "compute_tag_cooccurrence",
+    "corrupt_issue",
     "default_backup_filename",
     "default_pre_write_backup_filename",
     "delete_entry",

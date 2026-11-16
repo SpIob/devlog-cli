@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 import pytest
 from click.testing import CliRunner
 
-from devlog import sqlite_storage, storage
+from devlog import storage
 from devlog.cli import main
 from devlog.models import Entry
 from devlog.storage import _sqlite as sqlite_backend
@@ -69,7 +69,7 @@ def _seed(entry_id, message, created_at, tags=None):
 
 def test_backend_dispatch_active():
     assert storage._is_sqlite_backend() is True
-    assert sqlite_storage.get_backend_name() == "sqlite"
+    assert storage.get_backend_name() == "sqlite"
 
 
 def test_sqlite_file_created_in_data_dir(data_dir):

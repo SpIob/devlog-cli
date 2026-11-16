@@ -30,9 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   right-truncation recovery of a corrupt store) and `_sqlite` (opt-in
   via `DEVLOG_BACKEND=sqlite`). Shared time helpers moved to the new
   `devlog/_time.py`; `devlog/_dates.py`, `devlog/_tagops.py` and the AI
-  CLI no longer import the storage layer. `devlog/sqlite_storage.py`
-  remains as a compatibility shim, and every public name is
-  re-exported unchanged — no user-facing behavior change.
+  CLI no longer import the storage layer. Every public name is
+  re-exported unchanged, and the old `devlog/sqlite_storage.py` module
+  is gone — no user-facing behavior change.
+- **Internal:** `repair`, `restore` and `doctor` no longer branch on the
+  storage backend. The facade now exposes `get_store_path()` — the
+  active store (`entries.json` or `entries.db`) — and `corrupt_issue()`,
+  which lets each backend name its own `doctor` failure kind and
+  message (`corrupt_json` / `corrupt_db`). One consequence: `devlog
+  repair` on the SQLite backend now asks for confirmation before
+  rewriting, exactly like the JSON backend (it previously overwrote
+  without prompting).
 - **CI:** the test matrix now runs a sqlite-backend leg
   (`DEVLOG_BACKEND=sqlite`) on the supported Python bookends; the
   sqlite parity test file previously never executed in CI.
