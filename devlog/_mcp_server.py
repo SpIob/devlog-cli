@@ -23,11 +23,10 @@ import json
 import sys
 from collections.abc import Callable
 
+from devlog import __version__ as SERVER_VERSION
+
 PROTOCOL_VERSION = "2024-11-05"
 SERVER_NAME = "devlog"
-
-# Track the application version (single source of truth in ui.py).
-from devlog.ui import VERSION as SERVER_VERSION  # noqa: E402
 
 # JSON-RPC / MCP error codes
 _PARSE_ERROR = -32700

@@ -1592,29 +1592,48 @@ pytest
 ```
 devlog-cli/
 ├── devlog/
-│   ├── __init__.py
-│   ├── cli.py            ← Click entry point, all command definitions
-│   ├── ui.py             ← Rich rendering helpers (panels, tables, errors)
-│   ├── themes.py         ← Theme loader, role contract, palette helpers
-│   ├── theme_preview.py  ← Synthetic UI fixture for theme create previews
-│   ├── storage.py        ← File I/O, JSON read/write, atomic write logic
-│   ├── models.py         ← Entry dataclass / TypedDict definition
-│   ├── _completions.py   ← Bash / zsh / fish completion script generators
-│   ├── _dates.py         ← Date-range parsing, week boundaries, TZ helpers
-│   ├── _filter.py        ← Shared filter chain (tag → date → sort)
-│   ├── _interactive.py   ← Line-based REPL dispatcher
-│   ├── _io.py            ← Export/import readers and writers
-│   ├── _iso.py           ← ISO-8601 parsing / formatting helpers
-│   ├── _tagops.py        ← Tag normalisation, validation, merge helpers
-│   ├── _git_cli.py       ← `devlog git` command group (status/sync/log)
-│   ├── _gitops.py        ← Git plumbing for the git command group
-│   ├── _aiops.py         ← Pure AI core: extractive digest, cosine ranking, answer formatting
-│   ├── _ollama.py        ← Minimal stdlib Ollama HTTP client (generate/embed)
-│   ├── _aiindex.py       ← Embedding index for `ask` (build/reuse/prune, embeddings.json)
-│   ├── _ai_cli.py        ← `devlog digest` and `devlog ask` commands
-│   ├── _mcp_server.py    ← MCP protocol + journal tools (stdlib JSON-RPC over stdio)
-│   ├── _mcp_cli.py       ← `devlog mcp` command
-│   └── builtins/         ← Bundled theme files (default, dracula, nord, …)
+│   ├── __init__.py         ← package metadata (__version__)
+│   ├── cli/                ← Click entry point, split by command group
+│   │   ├── __init__.py     ← root group; registers every group below
+│   │   ├── _shared.py      ← load/exit glue, validation, doctor plumbing
+│   │   ├── entries.py      ← add / show / edit / delete / list / search
+│   │   ├── views.py        ← today / yesterday / week / on / tail / calendar
+│   │   ├── tags.py         ← tags / tag / merge-tag / rename-tag
+│   │   ├── stats.py        ← stats
+│   │   ├── transfer.py     ← import / export
+│   │   ├── maintenance.py  ← repair / backup / restore / undo / doctor
+│   │   └── meta.py         ← completions
+│   ├── _commands.py        ← Single source of truth for command list
+│   ├── ui/                 ← Rich rendering helpers (panels, tables, errors)
+│   │   ├── __init__.py     ← facade; owns the real consoles
+│   │   ├── _base.py        ← layout constants, styles, console proxies
+│   │   ├── text.py         ← plurals, truncation, error/info lines
+│   │   ├── layout.py       ← terminal-width arithmetic and tables
+│   │   ├── panels.py       ← per-entry and summary panels
+│   │   ├── calendar.py     ← activity heatmap (sparkline, month grid)
+│   │   ├── banner.py       ← version / root banners
+│   │   └── progress.py     ← export progress bar
+│   ├── themes.py           ← Theme loader, role contract, palette helpers
+│   ├── theme_preview.py    ← Synthetic UI fixture for theme create previews
+│   ├── storage.py          ← File I/O, JSON read/write, atomic write logic
+│   ├── sqlite_storage.py   ← SQLite backend for journal storage
+│   ├── models.py           ← Entry dataclass / TypedDict definition
+│   ├── _completions.py     ← Bash / zsh / fish completion script generators
+│   ├── _dates.py           ← Date-range parsing, week boundaries, TZ helpers
+│   ├── _filter.py          ← Shared filter chain (tag → date → sort)
+│   ├── _interactive.py     ← Line-based REPL dispatcher
+│   ├── _io.py              ← Export/import readers and writers
+│   ├── _iso.py             ← ISO-8601 parsing / formatting helpers
+│   ├── _tagops.py          ← Tag normalisation, validation, merge helpers
+│   ├── _git_cli.py         ← `devlog git` command group (status/sync/log)
+│   ├── _gitops.py          ← Git plumbing for the git command group
+│   ├── _aiops.py           ← Pure AI core: extractive digest, cosine ranking, answer formatting
+│   ├── _ollama.py          ← Minimal stdlib Ollama HTTP client (generate/embed)
+│   ├── _aiindex.py         ← Embedding index for `ask` (build/reuse/prune, embeddings.json)
+│   ├── _ai_cli.py          ← `devlog digest` and `devlog ask` commands
+│   ├── _mcp_server.py      ← MCP protocol + journal tools (stdlib JSON-RPC over stdio)
+│   ├── _mcp_cli.py         ← `devlog mcp` command
+│   └── builtins/           ← Bundled theme files (default, dracula, nord, …)
 │       ├── __init__.py
 │       ├── default.toml
 │       ├── dracula.toml
@@ -1638,26 +1657,32 @@ devlog-cli/
 │   ├── test_doctor.py
 │   ├── test_edit.py
 │   ├── test_export.py
+│   ├── test_git_features.py
 │   ├── test_import.py
+│   ├── test_importers.py
 │   ├── test_interactive.py
 │   ├── test_limit_validation.py
 │   ├── test_list.py
 │   ├── test_merge_tag.py
 │   ├── test_mcp_server.py
+│   ├── test_models.py
 │   ├── test_ollama.py
 │   ├── test_performance.py
 │   ├── test_rename_tag.py
 │   ├── test_repair.py
 │   ├── test_search.py
 │   ├── test_show.py
+│   ├── test_sqlite_backend.py
+│   ├── test_stats_v2.py
 │   ├── test_tag_command.py
 │   ├── test_tags.py
+│   ├── test_theme_create_bugs.py
 │   ├── test_themes.py
 │   ├── test_timezone.py
 │   ├── test_today_tail_stats.py
 │   ├── test_ui_columns.py
 │   ├── test_ui.py
-│   └── test_week_yesterday.py
+│   └── test_undo.py
 ├── pyproject.toml
 └── README.md
 ```

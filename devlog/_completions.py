@@ -5,13 +5,12 @@ Extracted from cli.py to keep the main CLI module focused on Click wiring.
 
 from __future__ import annotations
 
-from devlog import ui
+from devlog import _commands, ui
 
 
 def _get_commands():
-    """Lazily import COMMANDS to avoid circular imports."""
-    from devlog.cli import COMMANDS
-    return COMMANDS
+    """Return the command list from the single source of truth."""
+    return _commands.COMMANDS
 
 
 def _bash_completion() -> str:

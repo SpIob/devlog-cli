@@ -325,7 +325,7 @@ def load_theme(warn_stream=None, *, strict: bool = False):
         return dict(DEFAULT_THEME)
 
     # Unknown role keys are silently dropped here. The warning is
-    # emitted at the *set* site (see `devlog.cli.theme_set`) so users
+    # emitted at the *set* site (see `devlog._theme_cli.theme_set`) so users
     # only see it once, at the moment they typed a bad role. This used
     # to spam stderr on every devlog invocation, which made the journal
     # unusable after a single typo.
