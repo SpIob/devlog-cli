@@ -7,6 +7,8 @@ layer and dispatches mutating/loading operations to the active backend
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from devlog._time import _resolve_zoneinfo, local_date_for, utc_now_iso
 
 # Trigger backend registration on first import
@@ -48,9 +50,6 @@ from devlog.storage._base import (
     validate_entries,
 )
 
-# JSON-only corruption recovery (re-exported for pre-split compatibility)
-from devlog.storage._json import _try_recover_entries_from_corrupt_json
-
 
 # Dispatch functions that route to the active backend
 def load_entries() -> list:
@@ -83,19 +82,24 @@ def read_raw_entries() -> tuple[object, bool]:
 
     The second element is True when the payload had to be recovered
     from a partially-written store (JSON backend only).
+
+    Raises:
+        FileNotFoundError: when the store does not exist yet.
+        CorruptedStorageError: when the store is unreadable and no
+            recoverable portion can be extracted (JSON backend only).
     """
     return _get_backend_module().read_raw_entries()
 
 
-# For backward compatibility: devlog.storage._is_sqlite_backend was a
-# function; some tests/cli code call storage._is_sqlite_backend().
-# Keep it working via the re-exported function above.
+def get_store_path() -> Path:
+    """Return the on-disk path of the active backend's store.
 
-
-# Also expose the backend module for rare cases where direct access is needed
-def get_backend_module():
-    """Return the active backend module (for advanced use)."""
-    return _get_backend_module()
+    ``<data-dir>/entries.json`` on the JSON backend,
+    ``<data-dir>/entries.db`` on SQLite. Commands that need to report
+    or stat the active store use this instead of branching on the
+    backend.
+    """
+    return _get_backend_module().get_store_path()
 
 
 __all__ = [
@@ -106,11 +110,9 @@ __all__ = [
     "Issue",
     "StorageError",
     "StoragePermissionError",
-    "_get_backend_module",
     "_is_sqlite_backend",
     "_list_pre_write_backups",
     "_resolve_zoneinfo",
-    "_try_recover_entries_from_corrupt_json",
     "_validate_tag_values",
     "add_entry",
     "build_repair_plan",
@@ -124,12 +126,12 @@ __all__ = [
     "ensure_storage_dir",
     "find_entry_by_id",
     "find_entry_id_prefix_matches",
-    "get_backend_module",
     "get_backend_name",
     "get_backups_dir",
     "get_data_dir",
     "get_sqlite_path",
     "get_storage_path",
+    "get_store_path",
     "latest_pre_write_backup",
     "load_entries",
     "load_pre_write_backup",
