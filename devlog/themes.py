@@ -49,17 +49,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 # ---------------------------------------------------------------------------
 
 
-class ThemeValueError(ValueError):
-    """Raised when a theme value is not a parseable Rich style string.
 
-    The message identifies the offending role so the caller can surface
-    it in a warning or as part of a batch validation error.
-    """
-
-    def __init__(self, role: str, value: object) -> None:
-        self.role = role
-        self.value = value
-        super().__init__(f"theme role {role!r} has invalid style value: {value!r}")
 
 
 def is_valid_style(value: str) -> bool:
@@ -745,7 +735,6 @@ __all__ = [
     "SECTIONS",
     "ThemeInstallError",
     "ThemeNotFoundError",
-    "ThemeValueError",
     "build_theme_toml",
     "export_template",
     "get_active_theme",

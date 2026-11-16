@@ -42,16 +42,6 @@ def get_sqlite_path() -> Path:
     return Path.home() / ".devlog" / SQLITE_DB_NAME
 
 
-def get_backend_name() -> str:
-    """Return the active backend name: 'json' or 'sqlite'."""
-    return os.environ.get("DEVLOG_BACKEND", "json").lower()
-
-
-def is_sqlite_backend() -> bool:
-    """Check if SQLite backend is active."""
-    return get_backend_name() == "sqlite"
-
-
 # ---------------------------------------------------------------------------
 # Connection & schema
 # ---------------------------------------------------------------------------
@@ -77,7 +67,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS schema_version (
             version INTEGER PRIMARY KEY
         );
-        
+
         CREATE TABLE IF NOT EXISTS entries (
             id TEXT PRIMARY KEY,
             message TEXT NOT NULL,
@@ -85,14 +75,14 @@ def _init_schema(conn: sqlite3.Connection) -> None:
             updated_at TEXT,
             tags TEXT NOT NULL DEFAULT '[]'
         );
-        
-        CREATE INDEX IF NOT EXISTS idx_entries_created_at 
+
+        CREATE INDEX IF NOT EXISTS idx_entries_created_at
         ON entries(created_at DESC);
-        
-        CREATE INDEX IF NOT EXISTS idx_entries_updated_at 
+
+        CREATE INDEX IF NOT EXISTS idx_entries_updated_at
         ON entries(updated_at DESC);
     """)
-    
+
     # Ensure schema version is set
     cursor = conn.execute("SELECT version FROM schema_version")
     row = cursor.fetchone()
@@ -101,7 +91,7 @@ def _init_schema(conn: sqlite3.Connection) -> None:
     elif row[0] < SCHEMA_VERSION:
         # Future: run migrations here
         conn.execute("UPDATE schema_version SET version = ?", (SCHEMA_VERSION,))
-    
+
     conn.commit()
 
 
@@ -262,45 +252,14 @@ def delete_entry(entry_id: str) -> bool:
         conn.close()
 
 
-def find_entry_by_id(entries: list[Entry], id_prefix: str) -> Entry | None:
-    """Find an entry by exact id or unique short-id prefix.
-
-    This function takes an in-memory list (for API compatibility with the
-    JSON backend) but for SQLite we could also query directly. The current
-    approach loads all entries first, which is fine for moderate sizes.
-    For very large journals, we could add a direct query version.
-    """
-    from devlog.storage import find_entry_by_id as json_find_entry_by_id
-    return json_find_entry_by_id(entries, id_prefix)
-
-
-def find_entry_id_prefix_matches(entries: list[Entry], id_prefix: str) -> list[Entry]:
-    """Return all entries whose id starts with the given prefix (case-insensitive)."""
-    from devlog.storage import find_entry_id_prefix_matches as json_find_entry_id_prefix_matches
-    return json_find_entry_id_prefix_matches(entries, id_prefix)
-
-
 # ---------------------------------------------------------------------------
 # Validation & Repair (reusing JSON logic where possible)
 # ---------------------------------------------------------------------------
 
 
-def validate_entries_sqlite(data: object) -> list[Issue]:
-    """Validate entries from a SQLite export (for import validation)."""
-    # Reuse the JSON validator by converting to the expected format
-    if isinstance(data, dict) and "entries" in data:
-        return validate_entries(data)
-    return [Issue(kind="bad_root", message="root must be a JSON object with 'entries' key")]
-
-
-def build_repair_plan_sqlite(raw: object) -> tuple[list[Entry], list[Issue]]:
-    """Build a repair plan from a raw payload (for import)."""
-    return build_repair_plan(raw)
-
-
 def read_raw_entries_sqlite() -> tuple[object, bool]:
     """Return all entries from SQLite as a JSON-compatible payload.
-    
+
     Returns a tuple of (payload_dict, recovered_flag) for compatibility
     with the JSON backend's read_raw_entries().
     """
@@ -310,50 +269,8 @@ def read_raw_entries_sqlite() -> tuple[object, bool]:
 
 
 # ---------------------------------------------------------------------------
-# Migration helpers
-# ---------------------------------------------------------------------------
-
-
-def migrate_from_json(json_entries: list[Entry]) -> None:
-    """Migrate entries from JSON backend to SQLite."""
-    if not json_entries:
-        return
-    conn = _get_connection()
-    try:
-        _init_schema(conn)
-        with conn:
-            for e in json_entries:
-                conn.execute(
-                    "INSERT OR REPLACE INTO entries (id, message, created_at, updated_at, tags) VALUES (?, ?, ?, ?, ?)",
-                    (
-                        e.id,
-                        e.message,
-                        e.created_at,
-                        e.updated_at,
-                        json.dumps(e.tags, ensure_ascii=False),
-                    ),
-                )
-    finally:
-        conn.close()
-
-
-def export_to_json() -> list[Entry]:
-    """Export all SQLite entries as a list of Entry (for backup/migration)."""
-    return load_entries()
-
-
-# ---------------------------------------------------------------------------
 # Vacuum / maintenance
 # ---------------------------------------------------------------------------
-
-
-def vacuum() -> None:
-    """Run VACUUM to reclaim space and defragment."""
-    conn = _get_connection()
-    try:
-        conn.execute("VACUUM")
-    finally:
-        conn.close()
 
 
 def get_db_size() -> int:
@@ -362,14 +279,3 @@ def get_db_size() -> int:
     if path.exists():
         return path.stat().st_size
     return 0
-
-
-def get_entry_count() -> int:
-    """Return the total number of entries."""
-    conn = _get_connection()
-    try:
-        _init_schema(conn)
-        cursor = conn.execute("SELECT COUNT(*) FROM entries")
-        return cursor.fetchone()[0]
-    finally:
-        conn.close()
