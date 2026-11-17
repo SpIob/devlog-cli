@@ -38,6 +38,9 @@ COMMANDS: list[tuple[str, str]] = [
     ("restore", "Restore the journal from a backup file"),
     ("undo", "Roll the journal back to its state before the last write"),
     ("doctor", "Check the journal store for corruption"),
+    ("config", "View and manage devlog configuration"),
+    ("template", "Manage entry templates for `devlog add --template`"),
+    ("view", "Save and recall named filter combinations"),
 ]
 
 __all__ = ["COMMANDS"]

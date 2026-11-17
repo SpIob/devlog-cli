@@ -125,6 +125,12 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
 @click.option("--tag", "-t", "tags", multiple=True, help="Filter by tag (AND).")
 @click.option("--since", default=None, help="Only export entries on/after this date (UTC).")
 @click.option("--until", default=None, help="Only export entries on/before this date (UTC).")
+@click.option(
+    "--preset",
+    type=click.Choice(["today", "yesterday", "last-7d", "last-30d", "last-week", "last-month", "this-week", "this-month", "this-year", "year-to-date"], case_sensitive=False),
+    default=None,
+    help="Date-range preset (overrides --since/--until).",
+)
 @click.option("--quiet", "-q", is_flag=True, help="Suppress progress output.")
 def export(
     output: str | None,
@@ -132,10 +138,11 @@ def export(
     tags: tuple[str, ...],
     since: str | None,
     until: str | None,
+    preset: str | None,
     quiet: bool,
 ) -> None:
     """Export entries to a Markdown or JSON file."""
-    _io.export(output, fmt, tags, since, until, quiet)
+    _io.export(output, fmt, tags, since, until, preset, quiet)
 
 
 def register(main) -> None:

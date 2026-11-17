@@ -143,11 +143,108 @@ def _tool_get_stats(_arguments: dict) -> str:
     )
 
 
+def _tool_get_entry(arguments: dict) -> str:
+    from devlog import storage
+
+    entry_id = arguments.get("id")
+    if not isinstance(entry_id, str) or not entry_id:
+        raise ValueError("get_entry requires a non-empty 'id' string")
+    entries = storage.load_entries()
+    entry = next((e for e in entries if e.id == entry_id or e.id.startswith(entry_id)), None)
+    if entry is None:
+        raise ValueError(f"Entry not found: {entry_id}")
+    return json.dumps(
+        {
+            "id": entry.id,
+            "message": entry.message,
+            "created_at": entry.created_at,
+            "updated_at": entry.updated_at,
+            "tags": entry.tags,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _tool_edit_entry(arguments: dict) -> str:
+    from devlog import _tagops, storage
+
+    entry_id = arguments.get("id")
+    if not isinstance(entry_id, str) or not entry_id:
+        raise ValueError("edit_entry requires a non-empty 'id' string")
+
+    entries = storage.load_entries()
+    entry = next((e for e in entries if e.id == entry_id or e.id.startswith(entry_id)), None)
+    if entry is None:
+        raise ValueError(f"Entry not found: {entry_id}")
+
+    message = arguments.get("message")
+    if message is not None:
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError("message must be a non-empty string")
+        entry.message = message
+
+    tags = arguments.get("tags")
+    if tags is not None:
+        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+            raise ValueError("'tags' must be a list of strings")
+        for tag in tags:
+            if not _tagops._is_valid_tag(tag):
+                raise ValueError(
+                    f"Invalid tag '{tag}': must match {_tagops.TAG_RE.pattern} "
+                    f"(max {_tagops.MAX_TAG_LENGTH} chars)"
+                )
+        entry.tags = tags
+
+    from devlog.storage import utc_now_iso
+    entry.updated_at = utc_now_iso()
+
+    storage.save_entries(entries)
+    return json.dumps(
+        {"edited": True, "id": entry.id, "short_id": entry.short_id},
+        ensure_ascii=False,
+    )
+
+
+def _tool_delete_entry(arguments: dict) -> str:
+    from devlog import storage
+
+    entry_id = arguments.get("id")
+    if not isinstance(entry_id, str) or not entry_id:
+        raise ValueError("delete_entry requires a non-empty 'id' string")
+
+    entries = storage.load_entries()
+    entry = next((e for e in entries if e.id == entry_id or e.id.startswith(entry_id)), None)
+    if entry is None:
+        raise ValueError(f"Entry not found: {entry_id}")
+
+    storage.delete_entry(entry.id)
+    return json.dumps({"deleted": True, "id": entry.id}, ensure_ascii=False)
+
+
+def _tool_list_tags(arguments: dict) -> str:
+    from devlog import storage
+
+    entries = storage.load_entries()
+    tag_counts: dict[str, int] = {}
+    for e in entries:
+        for tag in e.tags:
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    tags = sorted(tag_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    return json.dumps(
+        [{"tag": t, "count": c} for t, c in tags],
+        ensure_ascii=False,
+    )
+
+
 TOOLS: dict[str, Callable[[dict], str]] = {
     "list_entries": _tool_list_entries,
     "search_entries": _tool_search_entries,
     "add_entry": _tool_add_entry,
     "get_stats": _tool_get_stats,
+    "get_entry": _tool_get_entry,
+    "edit_entry": _tool_edit_entry,
+    "delete_entry": _tool_delete_entry,
+    "list_tags": _tool_list_tags,
 }
 
 TOOL_SCHEMAS: list[dict] = [
@@ -205,6 +302,50 @@ TOOL_SCHEMAS: list[dict] = [
             "Journal summary: total entries, first/last timestamps, and "
             "the most-used tags with counts."
         ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "get_entry",
+        "description": "Get a single journal entry by ID (exact or unique prefix).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Entry ID (full or unique prefix)"},
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "edit_entry",
+        "description": "Edit an existing journal entry.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Entry ID (full or unique prefix)"},
+                "message": {"type": "string", "description": "New message text"},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "New tags (replaces all existing)",
+                },
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "delete_entry",
+        "description": "Delete a journal entry by ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "Entry ID (full or unique prefix)"},
+            },
+            "required": ["id"],
+        },
+    },
+    {
+        "name": "list_tags",
+        "description": "List all tags with usage counts.",
         "inputSchema": {"type": "object", "properties": {}},
     },
 ]

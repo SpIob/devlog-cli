@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime
 import json
 import sys
+from typing import Any
 
 import click
 
@@ -279,14 +280,20 @@ def calendar(year: int | None, quiet: bool) -> None:
 
 @click.argument("n", required=False, default=5, type=int)
 @click.option("--tag", "-t", "tags", multiple=True, help="Filter by tag (AND).")
+@click.option(
+    "--preset",
+    type=click.Choice(["today", "yesterday", "last-7d", "last-30d", "last-week", "last-month", "this-week", "this-month", "this-year", "year-to-date"], case_sensitive=False),
+    default=None,
+    help="Date-range preset (overrides --since/--until).",
+)
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
-def tail(n: int, tags: tuple[str, ...], quiet: bool) -> None:
+def tail(n: int, tags: tuple[str, ...], preset: str | None, quiet: bool) -> None:
     """Show the N most recent entries (default: 5)."""
     _require_positive_int("N", n)
 
     all_entries = _load_entries_or_exit()
 
-    filtered = _filter.filter_pipeline(all_entries, tags=tags)
+    filtered = _filter.filter_pipeline(all_entries, tags=tags, preset=preset)
     shown = filtered[:n]
     total = len(filtered)
 
@@ -303,6 +310,192 @@ def tail(n: int, tags: tuple[str, ...], quiet: bool) -> None:
     console.print(table)
 
 
+# ---------------------------------------------------------------------------
+# view (saved views)
+# ---------------------------------------------------------------------------
+
+
+@click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
+def view_list(quiet: bool) -> None:
+    """List all saved views."""
+    from devlog._views_store import list_views
+
+    views = list_views()
+
+    if quiet:
+        import json
+
+        for name, filters in views.items():
+            print(json.dumps({"name": name, **filters}, ensure_ascii=False))
+        return
+
+    if not views:
+        ui.print_info("No saved views.")
+        return
+
+    from rich.table import Table
+
+    table = Table(title="Saved Views", show_header=True)
+    table.add_column("Name", style="bold")
+    table.add_column("Description")
+    table.add_column("Filters", style="dim")
+
+    for name, filters in views.items():
+        desc = filters.pop("description", "")
+        filter_parts = []
+        for k, v in filters.items():
+            if k == "tags" and isinstance(v, (list, tuple)):
+                filter_parts.append(f"-t {', '.join(v)}")
+            elif k in ("since", "until") and v:
+                filter_parts.append(f"--{k} {v}")
+            elif k == "limit" and isinstance(v, int):
+                filter_parts.append(f"-n {v}")
+        filters["description"] = desc  # restore
+        table.add_row(name, desc or "—", " ".join(filter_parts) or "—")
+
+    console.print(table)
+
+
+@click.argument("name")
+@click.option("--quiet", "-q", is_flag=True, help="Output as JSON.")
+def view_show(name: str, quiet: bool) -> None:
+    """Show a saved view's filters."""
+    import sys
+
+    from devlog._views_store import get_view
+
+    view = get_view(name)
+    if view is None:
+        ui.print_error(f"View not found: {name}")
+        sys.exit(1)
+
+    if quiet:
+        import json
+
+        print(json.dumps({"name": name, **view}, ensure_ascii=False))
+        return
+
+    from rich.table import Table
+
+    table = Table(title=f"View: {name}", show_header=True)
+    table.add_column("Key", style="bold")
+    table.add_column("Value")
+
+    for k, v in view.items():
+        if k == "description":
+            continue
+        table.add_row(k, str(v))
+    if "description" in view:
+        table.add_row("description", view["description"])
+    console.print(table)
+
+
+@click.argument("name")
+@click.option("--tag", "-t", "tags", multiple=True, help="Filter by tag (repeatable, AND).")
+@click.option("--since", default=None, help="Only show entries on/after this date.")
+@click.option("--until", default=None, help="Only show entries on/before this date.")
+@click.option("--limit", "-n", type=int, default=None, help="Max entries to show.")
+@click.option("--sort", type=click.Choice(["created_at", "updated_at"]), default=None, help="Sort field.")
+@click.option("--description", "-d", default="", help="Human-readable description.")
+def view_save(
+    name: str,
+    tags: tuple[str, ...],
+    since: str | None,
+    until: str | None,
+    limit: int | None,
+    sort: str | None,
+    description: str,
+) -> None:
+    """Save the current filter combination as a named view."""
+    import sys
+
+    from devlog._views_store import save_view, validate_view_dict
+
+    filters: dict[str, Any] = {}
+    if tags:
+        filters["tags"] = list(tags)
+    if since:
+        filters["since"] = since
+    if until:
+        filters["until"] = until
+    if limit is not None:
+        filters["limit"] = limit
+    if sort:
+        filters["sort"] = sort
+
+    errors = validate_view_dict(filters)
+    if errors:
+        for e in errors:
+            ui.print_error(e)
+        sys.exit(1)
+
+    save_view(name, filters, description)
+    console.print(ui.success_line(f"Saved view: {name}"))
+
+
+@click.argument("name")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation.")
+def view_delete(name: str, yes: bool) -> None:
+    """Delete a saved view."""
+    import sys
+
+    from devlog._views_store import delete_view
+
+    if not yes:
+        if not click.confirm(f"Delete view '{name}'?", default=False):
+            ui.print_info("Aborted.")
+            return
+
+    if delete_view(name):
+        console.print(ui.success_line(f"Deleted view: {name}"))
+    else:
+        ui.print_error(f"View not found: {name}")
+        sys.exit(1)
+
+
+@click.argument("name")
+@click.option("--limit", "-n", type=int, default=None, help="Override view limit.")
+@click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
+def view_run(name: str, limit: int | None, quiet: bool) -> None:
+    """Run a saved view."""
+    import sys
+
+    from devlog import _filter
+    from devlog._views_store import get_view
+    from devlog.cli._shared import _load_entries_or_exit, _print_jsonl
+
+    view = get_view(name)
+    if view is None:
+        ui.print_error(f"View not found: {name}")
+        sys.exit(1)
+
+    tags = tuple(view.get("tags", [])) if view.get("tags") else ()
+    since = view.get("since")
+    until = view.get("until")
+    view_limit = limit if limit is not None else view.get("limit", 20)
+
+    all_entries = _load_entries_or_exit()
+    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until)
+
+    if isinstance(view_limit, int) and view_limit > 0:
+        shown = filtered[:view_limit]
+    else:
+        shown = filtered
+
+    if quiet:
+        _print_jsonl(shown)
+        return
+
+    total = len(filtered)
+    if total == 0:
+        ui.print_info("No entries match the view.")
+        return
+
+    title = f"View · {name} · {total} {ui.plural_noun(total, 'entry')}"
+    table = ui.entries_table(shown, total, title=title)
+    console.print(table)
+
+
 def register(main) -> None:
     """Attach the views commands to *main*."""
     main.command()(today)
@@ -311,3 +504,13 @@ def register(main) -> None:
     main.command()(on)
     main.command()(calendar)
     main.command()(tail)
+
+    @main.group()
+    def view() -> None:
+        """Manage saved filter views."""
+
+    view.command(name="list")(view_list)
+    view.command(name="show")(view_show)
+    view.command(name="save")(view_save)
+    view.command(name="delete")(view_delete)
+    view.command(name="run")(view_run)

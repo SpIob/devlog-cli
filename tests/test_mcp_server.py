@@ -86,7 +86,16 @@ class TestToolsList:
     def test_lists_the_four_journal_tools(self):
         response = _mcp_server.handle_message(_rpc("tools/list"))
         names = [t["name"] for t in response["result"]["tools"]]
-        assert set(names) == {"list_entries", "search_entries", "add_entry", "get_stats"}
+        assert set(names) == {
+            "list_entries",
+            "search_entries",
+            "add_entry",
+            "get_stats",
+            "get_entry",
+            "edit_entry",
+            "delete_entry",
+            "list_tags",
+        }
 
     def test_every_tool_has_a_schema_and_description(self):
         response = _mcp_server.handle_message(_rpc("tools/list"))

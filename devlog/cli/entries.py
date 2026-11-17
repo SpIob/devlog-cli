@@ -78,7 +78,13 @@ err_console = ui.err_console
         "from the commit. The message argument becomes a prefix/note."
     ),
 )
-def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_commit: str | None) -> None:
+@click.option(
+    "--template",
+    "template_name",
+    default=None,
+    help="Use a saved template (prompts for variables). Run `devlog template list` to see available.",
+)
+def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_commit: str | None, template_name: str | None) -> None:
     """Add a new journal entry.
 
     Pass `-` as the message to read from stdin (e.g., `git log -1 --format=%B | devlog add -`).
@@ -87,31 +93,31 @@ def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_co
     # Handle --from-commit
     if from_commit is not None:
         from devlog._gitops import create_entry_from_commit, get_git_repo_root
-        
+
         # Find git repo
         cwd = Path.cwd()
         repo_root = get_git_repo_root(cwd)
         if repo_root is None:
             ui.print_error("Not in a git repository (or any parent directory).")
             sys.exit(1)
-        
+
         entry = create_entry_from_commit(from_commit, repo_root)
         if entry is None:
             ui.print_error(f"Could not get info for commit '{from_commit}'.")
             sys.exit(1)
-        
+
         # Use provided message as prefix/note when non-empty ("-" and
         # "" both mean "no prefix" — the commit message stands alone).
         # MESSAGE is optional: with no argument, the commit message
         # stands alone.
         if message not in ("-", ""):
             entry.message = f"{message}\n\n{entry.message}"
-        
+
         # Merge tags
         norm_tags = _validate_tags_or_exit(tag)
         if norm_tags:
             entry.tags = list(dict.fromkeys(norm_tags + entry.tags))  # preserve order, dedupe
-        
+
         # Override timestamp if --at is also provided
         if at is not None:
             try:
@@ -121,20 +127,51 @@ def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_co
             except click.BadParameter as exc:
                 ui.print_error(str(exc))
                 sys.exit(2)
-        
+
         # Ensure entry has an ID
         if not entry.id:
             entry.id = str(uuid.uuid4())
-        
+
         try:
             storage.add_entry(entry)
         except StorageError as exc:
             _handle_storage_error(exc)
-        
+
         if not quiet:
             console.print(ui.entry_panel(entry))
         return
-    
+
+    # Handle --template
+    if template_name is not None:
+        from devlog._templates import expand_template, get_all_templates
+
+        template = get_all_templates().get(template_name)
+        if template is None:
+            ui.print_error(f"Template not found: {template_name}")
+            ui.print_info("Run `devlog template list` to see available templates.")
+            sys.exit(1)
+
+        if not sys.stdin.isatty():
+            ui.print_error("Template requires a TTY for interactive variable prompts.")
+            sys.exit(1)
+
+        values = {}
+        for var, hint in template.variables.items():
+            prompt = f"{var} ({hint})"
+            val = click.prompt(prompt, default="", show_default=False)
+            values[var] = val
+
+        message, template_tags = expand_template(template, values)
+
+        # Merge template tags with any user-provided tags (user tags take precedence)
+        norm_tags = _validate_tags_or_exit(tag)
+        if norm_tags:
+            # Template tags first, then user tags (user tags override duplicates)
+            combined = list(dict.fromkeys(template_tags + norm_tags))
+        else:
+            combined = template_tags
+        tag = tuple(combined)
+
     if not message or not message.strip():
         ui.print_error("MESSAGE cannot be empty.")
         sys.exit(1)
@@ -194,6 +231,12 @@ def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_co
 @click.option("--all", "show_all", is_flag=True, help="Show all entries (overrides --limit).")
 @click.option("--since", default=None, help="Only show entries on/after this date (UTC).")
 @click.option("--until", default=None, help="Only show entries on/before this date (UTC).")
+@click.option(
+    "--preset",
+    type=click.Choice(["today", "yesterday", "last-7d", "last-30d", "last-week", "last-month", "this-week", "this-month", "this-year", "year-to-date"], case_sensitive=False),
+    default=None,
+    help="Date-range preset (overrides --since/--until).",
+)
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
 def list_entries(
     tags: tuple[str, ...],
@@ -201,6 +244,7 @@ def list_entries(
     show_all: bool,
     since: str | None,
     until: str | None,
+    preset: str | None,
     quiet: bool,
 ) -> None:
     """List journal entries, newest first."""
@@ -210,7 +254,7 @@ def list_entries(
     all_entries = _load_entries_or_exit()
 
     total_all = len(all_entries)
-    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until)
+    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until, preset=preset)
 
     total_filtered = len(filtered)
     shown = filtered if show_all else filtered[:limit]
@@ -250,6 +294,12 @@ def list_entries(
 )
 @click.option("--since", default=None, help="Only show entries on/after this date (UTC).")
 @click.option("--until", default=None, help="Only show entries on/before this date (UTC).")
+@click.option(
+    "--preset",
+    type=click.Choice(["today", "yesterday", "last-7d", "last-30d", "last-week", "last-month", "this-week", "this-month", "this-year", "year-to-date"], case_sensitive=False),
+    default=None,
+    help="Date-range preset (overrides --since/--until).",
+)
 @click.option("--regex", is_flag=True, help="Interpret QUERY as a regex pattern.")
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
 def search(
@@ -258,6 +308,7 @@ def search(
     limit: int,
     since: str | None,
     until: str | None,
+    preset: str | None,
     regex: bool,
     quiet: bool,
 ) -> None:
@@ -279,7 +330,7 @@ def search(
 
     all_entries = _load_entries_or_exit()
 
-    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until)
+    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until, preset=preset)
 
     if regex:
         import re

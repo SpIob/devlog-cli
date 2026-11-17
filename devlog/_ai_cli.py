@@ -33,19 +33,39 @@ def register(main) -> None:
     @main.command()
     @click.option(
         "--week",
-        "week",
-        flag_value=True,
+        "period",
+        flag_value="week",
         default=True,
-        help="Summarize the last 7 days (the only period in this release).",
+        help="Summarize the last 7 days.",
     )
     @click.option(
-        "--day",
-        "anchor",
+        "--month",
+        "period",
+        flag_value="month",
+        help="Summarize the last 30 days.",
+    )
+    @click.option(
+        "--days",
+        type=int,
         default=None,
-        help=(
-            "Anchor day (YYYY-MM-DD). The week ends on this day (inclusive) "
-            "and spans the 6 days before it. Defaults to today."
-        ),
+        help="Summarize the last N days (alternative to --week/--month).",
+    )
+    @click.option(
+        "--from",
+        "since",
+        default=None,
+        help="Start date (inclusive). See date formats below.",
+    )
+    @click.option(
+        "--to",
+        "until",
+        default=None,
+        help="End date (inclusive). See date formats below.",
+    )
+    @click.option(
+        "--anchor",
+        default=None,
+        help="Anchor day (YYYY-MM-DD) for --week/--month. Defaults to today.",
     )
     @click.option(
         "--llm",
@@ -58,36 +78,74 @@ def register(main) -> None:
     @click.option(
         "--json", "as_json", is_flag=True, help="Output a single JSON summary object."
     )
-    def digest(week: bool, anchor: str | None, llm: bool, model: str | None, quiet: bool, as_json: bool) -> None:
+    def digest(
+        period: str,
+        days: int | None,
+        anchor: str | None,
+        since: str | None,
+        until: str | None,
+        llm: bool,
+        model: str | None,
+        quiet: bool,
+        as_json: bool,
+    ) -> None:
         """Summarize recent journal activity (extractive, or --llm for a written summary)."""
         from datetime import timedelta
 
         from devlog import _dates, _ollama
 
-        if not week:
-            ui.print_error("Only --week is supported in this release.")
-            sys.exit(2)
-
         all_entries = storage.load_entries()
         from devlog.cli._shared import _resolve_tz_or_exit
         tz = _resolve_tz_or_exit()
-        if anchor:
-            try:
-                anchor_dt = _dates._parse_date_bound(anchor, tz=tz)
-            except click.BadParameter as exc:
-                ui.print_error(str(exc))
-                sys.exit(2)
-            end_date = anchor_dt.astimezone(tz).date() if tz is not None else anchor_dt.date()
+
+        # Resolve date range based on period
+        if period == "week":
+            period_days = 7
+        elif period == "month":
+            period_days = 30
         else:
-            end_date = _dates.today_local_date(tz)
-        start_date = end_date - timedelta(days=6)
+            period_days = 7
 
-        week_entries = _dates._filter_by_local_window(
-            all_entries, end_date=end_date, days=6, tz=tz
-        )
-        week_entries.sort(key=lambda e: e.created_at, reverse=False)
+        # --days overrides period
+        if days is not None:
+            period_days = days
 
-        text = summarize_week_text(week_entries, start_date=start_date, end_date=end_date, tz=tz)
+        # Handle --from/--to (highest priority)
+        if since or until:
+            since_dt, until_dt = _dates._parse_since_until(since, until)
+            # Filter entries by date range
+            filtered = _dates._filter_by_date(all_entries, since_dt, until_dt)
+            # Determine start/end for display
+            if since_dt:
+                start_date = since_dt.astimezone(tz).date() if tz else since_dt.date()
+            else:
+                start_date = min((e.created_dt.astimezone(tz).date() for e in filtered if e.created_dt.year > 1970), default=_dates.today_local_date(tz))
+            if until_dt:
+                end_date = until_dt.astimezone(tz).date() if tz else until_dt.date()
+            else:
+                end_date = max((e.created_dt.astimezone(tz).date() for e in filtered if e.created_dt.year > 1970), default=_dates.today_local_date(tz))
+            entries = filtered
+        else:
+            # Use period/anchor
+            if anchor:
+                try:
+                    anchor_dt = _dates._parse_date_bound(anchor, tz=tz)
+                except click.BadParameter as exc:
+                    ui.print_error(str(exc))
+                    sys.exit(2)
+                end_date = anchor_dt.astimezone(tz).date() if tz is not None else anchor_dt.date()
+            else:
+                end_date = _dates.today_local_date(tz)
+
+            start_date = end_date - timedelta(days=period_days - 1)
+
+            entries = _dates._filter_by_local_window(
+                all_entries, end_date=end_date, days=period_days - 1, tz=tz
+            )
+
+        entries.sort(key=lambda e: e.created_at, reverse=False)
+
+        text = summarize_week_text(entries, start_date=start_date, end_date=end_date, tz=tz)
 
         if llm:
             try:
@@ -100,7 +158,7 @@ def register(main) -> None:
             if quiet:
                 print(reply)
             else:
-                console.print(f"[bold]LLM weekly summary[/bold] ({start_date} → {end_date})")
+                console.print(f"[bold]LLM summary[/bold] ({start_date} → {end_date})")
                 console.print(reply)
             return
 
@@ -108,9 +166,12 @@ def register(main) -> None:
             print(
                 json.dumps(
                     {
+                        "period": period,
+                        "start": start_date.isoformat(),
+                        "end": end_date.isoformat(),
                         "week_start": start_date.isoformat(),
                         "week_end": end_date.isoformat(),
-                        "entry_count": len(week_entries),
+                        "entry_count": len(entries),
                         "digest": text,
                     },
                     ensure_ascii=False,
@@ -118,19 +179,15 @@ def register(main) -> None:
             )
             return
 
-        if not week_entries:
-            ui.print_info(
-                f"No entries in the last 7 days ({start_date} to {end_date})."
-            )
+        if not entries:
+            ui.print_info(f"No entries in the selected period ({start_date} to {end_date}).")
             return
+
         if not quiet:
             console.print(
-                f"[bold]Weekly digest[/bold] · {start_date} → {end_date} · "
-                f"{len(week_entries)} {ui.plural_noun(len(week_entries), 'entry')}"
+                f"[bold]Digest[/bold] · {start_date} → {end_date} · "
+                f"{len(entries)} {ui.plural_noun(len(entries), 'entry')}"
             )
-            # The text's own "Weekly digest: …" header would duplicate the
-            # Rich header above; strip it for humans (kept in --quiet,
-            # --json, and the LLM prompt where the text stands alone).
             body_lines = text.splitlines()
             if body_lines and body_lines[0].startswith("Weekly digest:"):
                 body_lines = body_lines[1:]

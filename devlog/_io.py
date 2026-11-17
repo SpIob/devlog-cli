@@ -330,7 +330,8 @@ def export(
     tags: tuple[str, ...],
     since: str | None,
     until: str | None,
-    quiet: bool,
+    preset: str | None = None,
+    quiet: bool = False,
 ) -> None:
     """Export entries to a Markdown or JSON file."""
     import dataclasses
@@ -345,7 +346,7 @@ def export(
         ui.print_error(str(exc))
         sys.exit(2)
 
-    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until)
+    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until, preset=preset)
 
     if not filtered:
         ui.print_warning("Warning: No entries to export.")

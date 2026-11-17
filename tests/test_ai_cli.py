@@ -63,7 +63,7 @@ class TestDigestExtractive:
         payload = json.loads(result.output)
         assert payload["entry_count"] == 2
         assert "Shipped the export command" in payload["digest"]
-        assert set(payload) == {"week_start", "week_end", "entry_count", "digest"}
+        assert set(payload) == {"week_start", "week_end", "start", "end", "period", "entry_count", "digest"}
 
     def test_empty_week_prints_info_and_exits_zero(self, runner):
         result = runner.invoke(main, ["digest", "--week"])

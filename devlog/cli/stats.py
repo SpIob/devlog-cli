@@ -32,12 +32,18 @@ err_console = ui.err_console
 
 @click.option("--since", default=None, help="Only include entries on/after this date (UTC).")
 @click.option("--until", default=None, help="Only include entries on/before this date (UTC).")
+@click.option(
+    "--preset",
+    type=click.Choice(["today", "yesterday", "last-7d", "last-30d", "last-week", "last-month", "this-week", "this-month", "this-year", "year-to-date"], case_sensitive=False),
+    default=None,
+    help="Date-range preset (overrides --since/--until).",
+)
 @click.option("--quiet", "-q", is_flag=True, help="Output a single JSON summary.")
-def stats(since: str | None, until: str | None, quiet: bool) -> None:
+def stats(since: str | None, until: str | None, preset: str | None, quiet: bool) -> None:
     """Show a summary of the journal: total entries, date range, top tags, and a 30-day sparkline."""
     all_entries = _load_entries_or_exit()
 
-    all_entries = _filter.filter_pipeline(all_entries, since=since, until=until, sort=False)
+    all_entries = _filter.filter_pipeline(all_entries, since=since, until=until, preset=preset, sort=False)
     # Also drop entries whose created_at cannot be parsed at all, so
     # downstream formatting (which assumes a valid ISO timestamp) never
     # crashes. Other commands go through this filter implicitly via

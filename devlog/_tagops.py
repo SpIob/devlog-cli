@@ -6,6 +6,7 @@ Centralises all tag-related logic that was previously in ``cli.py``.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 import click
 
@@ -23,15 +24,17 @@ def _validate_tags(raw_tags: tuple[str, ...]) -> list[str]:
 
     Validation rules (in order):
         1. Normalise: strip whitespace, lower-case.
-        2. Character set: only a-z, 0-9, hyphen.
-        3. Maximum tag length: 32 characters.
+        2. Character set: only a-z, 0-9, hyphen, comma, exclamation.
+           (Comma and exclamation are allowed for compound queries;
+           strict per-tag validation happens in parse_tag_query.)
+        3. Maximum tag length: 32 characters per tag part.
         4. Maximum distinct tags per entry: 10.
 
     Args:
         raw_tags: tuple of raw tag strings as provided by the user.
 
     Returns:
-        list[str]: deduplicated, normalised tags.
+        list[str]: deduplicated, normalised tags (raw, not expanded).
 
     Raises:
         click.UsageError: on any validation failure.
@@ -42,18 +45,22 @@ def _validate_tags(raw_tags: tuple[str, ...]) -> list[str]:
     for original in raw_tags:
         norm = original.strip().lower()
 
-        if not TAG_RE.fullmatch(norm):
+        # Allow comma and ! for compound queries; strict validation in parse_tag_query
+        if not re.fullmatch(r"[a-z0-9\-,!]+", norm):
             raise click.UsageError(
                 f'Tag "{original}" contains invalid characters. '
                 "Tags are normalised to lowercase before storage; the "
-                "remaining characters must be a-z, 0-9, or hyphen."
+                "remaining characters must be a-z, 0-9, hyphen, comma, or !."
             )
 
-        if len(norm) > MAX_TAG_LENGTH:
-            raise click.UsageError(
-                f'Tag "{original}" exceeds maximum length of '
-                f"{MAX_TAG_LENGTH} characters."
-            )
+        # Check length of each tag part (split by comma)
+        for part in norm.split(","):
+            part = part.lstrip("!")  # Remove NOT prefix for length check
+            if len(part) > MAX_TAG_LENGTH:
+                raise click.UsageError(
+                    f'Tag "{original}" exceeds maximum length of '
+                    f"{MAX_TAG_LENGTH} characters per tag."
+                )
 
         if norm not in seen_set:
             seen_set.add(norm)
@@ -65,6 +72,91 @@ def _validate_tags(raw_tags: tuple[str, ...]) -> list[str]:
         )
 
     return seen
+
+
+# ---------------------------------------------------------------------------
+# Compound tag queries
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TagQuery:
+    """Parsed tag query with AND/OR/NOT logic.
+
+    Attributes:
+        all_of:   All of these tags must be present (AND).
+        any_of:   At least one of these tags must be present (OR).
+        none_of:  None of these tags may be present (NOT).
+    """
+
+    all_of: frozenset[str]
+    any_of: frozenset[str]
+    none_of: frozenset[str]
+
+    @staticmethod
+    def empty() -> TagQuery:
+        return TagQuery(frozenset(), frozenset(), frozenset())
+
+    def matches(self, entry_tags: set[str]) -> bool:
+        """Check if entry_tags satisfy the query."""
+        if self.all_of and not self.all_of.issubset(entry_tags):
+            return False
+        if self.any_of and not (self.any_of & entry_tags):
+            return False
+        if self.none_of and (self.none_of & entry_tags):
+            return False
+        return True
+
+
+def parse_tag_query(raw_tags: tuple[str, ...]) -> TagQuery:
+    """Parse raw tag strings into a structured TagQuery.
+
+    Syntax:
+        - Plain tag (e.g., "bug") → AND (must have)
+        - Comma-separated (e.g., "bug,feature") → OR (any of)
+        - Prefix "!" (e.g., "!wip") → NOT (must not have)
+        - Can mix: "-t bug -t feature,refactor -t !wip"
+
+    Args:
+        raw_tags: Tuple of raw tag strings from CLI (each -t flag value).
+
+    Returns:
+        TagQuery with all_of, any_of, none_of frozensets.
+    """
+    all_of: set[str] = set()
+    any_of: set[str] = set()
+    none_of: set[str] = set()
+
+    for raw in raw_tags:
+        if not raw or not raw.strip():
+            continue
+        # Split on comma for OR groups
+        parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+        for part in parts:
+            if part.startswith("!"):
+                tag = part[1:]
+                if not _is_valid_tag(tag):
+                    raise click.UsageError(
+                        f"Invalid tag in NOT clause: {part}. "
+                        f"Tags must match {TAG_RE.pattern} (max {MAX_TAG_LENGTH} chars)."
+                    )
+                none_of.add(tag)
+            else:
+                if not _is_valid_tag(part):
+                    raise click.UsageError(
+                        f"Tag \"{part}\" contains invalid characters. "
+                        f"Tags are normalised to lowercase; allowed: a-z, 0-9, hyphen."
+                    )
+                if len(parts) > 1:
+                    any_of.add(part)
+                else:
+                    all_of.add(part)
+
+    return TagQuery(
+        all_of=frozenset(all_of),
+        any_of=frozenset(any_of),
+        none_of=frozenset(none_of),
+    )
 
 
 def _filter_by_tags(entries: list[Entry], tags: tuple[str, ...]) -> list[Entry]:
@@ -88,6 +180,18 @@ def _filter_by_tags(entries: list[Entry], tags: tuple[str, ...]) -> list[Entry]:
         return entries
     norm_filter = frozenset(t.strip().lower() for t in tags)
     return [e for e in entries if norm_filter.issubset(e.tags)]
+
+
+def _filter_by_tag_query(entries: list[Entry], query: TagQuery) -> list[Entry]:
+    """Filter entries using a parsed TagQuery (AND/OR/NOT)."""
+    if query.all_of == frozenset() and query.any_of == frozenset() and query.none_of == frozenset():
+        return entries
+    out = []
+    for e in entries:
+        entry_tags = set(e.tags)
+        if query.matches(entry_tags):
+            out.append(e)
+    return out
 
 
 def _validate_new_tag(raw: str) -> str:

@@ -422,3 +422,41 @@ def _parse_on_date(
         return datetime.datetime.strptime(raw, "%Y-%m-%d").date()
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Date-range presets
+# ---------------------------------------------------------------------------
+
+
+PRESETS: dict[str, tuple[str | None, str | None]] = {
+    # (since, until) — both relative to today in local zone (or UTC)
+    "today": ("today", "today"),
+    "yesterday": ("yesterday", "yesterday"),
+    "last-7d": ("7d", "today"),
+    "last-30d": ("30d", "today"),
+    "last-week": ("7d", "today"),
+    "last-month": ("30d", "today"),
+    "this-week": ("0w", "today"),
+    "this-month": ("0w", "today"),
+    "this-year": ("0y", "today"),
+    "year-to-date": ("year-start", "today"),
+}
+
+
+def resolve_preset(
+    preset: str,
+    *,
+    tz=None,
+) -> tuple[datetime.datetime | None, datetime.datetime | None]:
+    """Resolve a date-range preset into (since, until) UTC datetimes.
+
+    Returns (None, None) if preset is unknown (caller should handle).
+    """
+    if preset not in PRESETS:
+        return None, None
+
+    since_raw, until_raw = PRESETS[preset]
+    since_dt = _parse_date_bound(since_raw, tz=tz) if since_raw else None
+    until_dt = _parse_date_bound(until_raw, is_upper=True, tz=tz) if until_raw else None
+    return since_dt, until_dt

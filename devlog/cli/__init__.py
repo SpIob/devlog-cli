@@ -22,11 +22,13 @@ from devlog import (
     ui,
 )
 from devlog.cli import (
+    config,
     entries,
     maintenance,
     meta,
     stats,
     tags,
+    templates,
     transfer,
     views,
 )
@@ -91,3 +93,5 @@ stats.register(main)
 transfer.register(main)
 maintenance.register(main)
 meta.register(main)
+config.register(main)
+templates.register(main)
