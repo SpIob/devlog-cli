@@ -160,7 +160,19 @@ def _parse_date_bound(
 
     # Date only: YYYY-MM-DD
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
-        dt = datetime.datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=tz or datetime.timezone.utc)
+        try:
+            dt = datetime.datetime.strptime(raw, "%Y-%m-%d")
+        except ValueError as exc:
+            # Well-formed shape but not a real calendar date
+            # (e.g. 2026-02-30) — fail with the standard message instead
+            # of leaking a raw strptime traceback.
+            raise click.BadParameter(
+                f'Invalid date "{value}". Supported formats: '
+                '"YYYY-MM-DD", "YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM:SSZ", '
+                '"today", "yesterday", "Nh" (N hours ago), "Nm" (N minutes ago), '
+                '"Nd" (N days ago), "Nw" (N weeks ago).'
+            ) from exc
+        dt = dt.replace(tzinfo=tz or datetime.timezone.utc)
         if is_upper:
             return dt.replace(hour=23, minute=59, second=59, microsecond=0).astimezone(
                 datetime.timezone.utc
@@ -254,11 +266,23 @@ def _parse_timestamp(value: str, *, tz=None) -> datetime.datetime:
             datetime.timezone.utc
         )
 
-    # Date-only: YYYY-MM-DD → local midnight, then convert to UTC so
+    # Date only: YYYY-MM-DD → local midnight, then convert to UTC so
     # callers always get a UTC datetime.
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
-        dt = datetime.datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=zone)
-        return dt.astimezone(datetime.timezone.utc)
+        try:
+            dt = datetime.datetime.strptime(raw, "%Y-%m-%d")
+        except ValueError as exc:
+            # Well-formed shape but not a real calendar date
+            # (e.g. 2026-02-30) — fail with the standard message instead
+            # of leaking a raw strptime traceback.
+            raise click.BadParameter(
+                f'Invalid --at "{value}". Supported formats: '
+                '"YYYY-MM-DD", "YYYY-MM-DDTHH:MM", "YYYY-MM-DDTHH:MM:SSZ", '
+                '"YYYY-MM-DD HH:MM[:SS]", '
+                '"Nh" (N hours ago), "Nm" (N minutes ago), '
+                '"Nd" (N days ago), "Nw" (N weeks ago).'
+            ) from exc
+        return dt.replace(tzinfo=zone).astimezone(datetime.timezone.utc)
 
     # Full ISO with optional Z / +00:00 / +HH:MM
     parseable = raw.replace(" ", "T")

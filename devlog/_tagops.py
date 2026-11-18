@@ -20,21 +20,31 @@ MAX_TAGS = 10
 
 
 def _validate_tags(raw_tags: tuple[str, ...]) -> list[str]:
-    """Validate and normalise a sequence of raw tag strings.
+    """Validate and normalise raw tag strings for STORAGE.
 
+    This is the write-path validator (``add`` / ``edit`` / ``tag``).
     Validation rules (in order):
+
         1. Normalise: strip whitespace, lower-case.
-        2. Character set: only a-z, 0-9, hyphen, comma, exclamation.
-           (Comma and exclamation are allowed for compound queries;
-           strict per-tag validation happens in parse_tag_query.)
-        3. Maximum tag length: 32 characters per tag part.
-        4. Maximum distinct tags per entry: 10.
+        2. Split comma groups: ``-t a,b`` contributes two distinct tags.
+           A stored tag is a single name — a comma-joined string would
+           violate the documented ``[a-z0-9-]`` charset and be
+           unmatchable by the query syntax (where ``a,b`` means OR).
+        3. Reject ``!``: it is NOT-query syntax and only meaningful in
+           filters (:func:`parse_tag_query`); it is not a valid stored
+           tag character.
+        4. Character set per tag: ``a-z0-9-`` only.
+        5. Maximum tag length: 32 characters per tag.
+        6. Maximum distinct tags per entry: 10, counted AFTER splitting.
+
+    Compound-query syntax (``-t a,b`` OR, ``-t !x`` NOT) is parsed by
+    :func:`parse_tag_query` on the *filter* side only.
 
     Args:
         raw_tags: tuple of raw tag strings as provided by the user.
 
     Returns:
-        list[str]: deduplicated, normalised tags (raw, not expanded).
+        list[str]: deduplicated, normalised, split tags.
 
     Raises:
         click.UsageError: on any validation failure.
@@ -45,26 +55,32 @@ def _validate_tags(raw_tags: tuple[str, ...]) -> list[str]:
     for original in raw_tags:
         norm = original.strip().lower()
 
-        # Allow comma and ! for compound queries; strict validation in parse_tag_query
-        if not re.fullmatch(r"[a-z0-9\-,!]+", norm):
+        if "!" in norm:
             raise click.UsageError(
-                f'Tag "{original}" contains invalid characters. '
-                "Tags are normalised to lowercase before storage; the "
-                "remaining characters must be a-z, 0-9, hyphen, comma, or !."
+                f'Tag "{original}" contains "!" — that is query syntax '
+                "(NOT) and is not valid in a stored tag. "
+                "Allowed characters: a-z, 0-9, hyphen."
             )
 
-        # Check length of each tag part (split by comma)
-        for part in norm.split(","):
-            part = part.lstrip("!")  # Remove NOT prefix for length check
+        parts = [p.strip() for p in norm.split(",") if p.strip()]
+        if not parts:
+            raise click.UsageError(f'Tag "{original}" is empty.')
+
+        for part in parts:
+            if not TAG_RE.fullmatch(part):
+                raise click.UsageError(
+                    f'Tag "{part}" contains invalid characters. '
+                    "Tags are normalised to lowercase before storage; "
+                    "the remaining characters must be a-z, 0-9, or hyphen."
+                )
             if len(part) > MAX_TAG_LENGTH:
                 raise click.UsageError(
-                    f'Tag "{original}" exceeds maximum length of '
+                    f'Tag "{part}" exceeds maximum length of '
                     f"{MAX_TAG_LENGTH} characters per tag."
                 )
-
-        if norm not in seen_set:
-            seen_set.add(norm)
-            seen.append(norm)
+            if part not in seen_set:
+                seen_set.add(part)
+                seen.append(part)
 
     if len(seen) > MAX_TAGS:
         raise click.UsageError(

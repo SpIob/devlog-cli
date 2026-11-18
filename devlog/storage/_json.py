@@ -23,6 +23,7 @@ from devlog.storage._base import (
     get_storage_path,
     pre_write_backup_destination,
     register_backend,
+    storage_write_lock,
 )
 
 # ---------------------------------------------------------------------------
@@ -67,6 +68,11 @@ def load_entries() -> list[Entry]:
         raise StoragePermissionError(path, "read")
     except json.JSONDecodeError:
         raise CorruptedStorageError(path)
+    except UnicodeDecodeError:
+        # Invalid UTF-8 bytes in the store: report corruption through the
+        # same clean contract as a JSON syntax error instead of leaking a
+        # raw traceback (the file cannot be decoded at all).
+        raise CorruptedStorageError(path)
     except OSError:
         raise StoragePermissionError(path, "read")
 
@@ -77,70 +83,86 @@ def load_entries() -> list[Entry]:
 
 
 def save_entries(entries: list[Entry]) -> None:
-    """Persist all entries to JSON atomically."""
+    """Persist all entries to JSON atomically.
+
+    Runs under :func:`storage_write_lock` so standalone callers
+    (import/restore/repair) are serialized against each other;
+    ``add_entry``/``update_entry``/``delete_entry`` take the same lock
+    around their whole read-modify-write, and the lock is re-entrant
+    within a process.
+    """
     ensure_storage_dir()
     path = get_storage_path()
     tmp_path = path.with_suffix(".tmp")
 
     payload = {"entries": [dataclasses.asdict(e) for e in entries]}
 
-    try:
-        with tmp_path.open("w", encoding="utf-8") as fh:
-            _lock_file(fh, exclusive=True)
-            try:
-                json.dump(payload, fh, indent=2, ensure_ascii=False)
-                fh.flush()
-                os.fsync(fh.fileno())
-            finally:
-                _unlock_file(fh)
-    except (PermissionError, OSError):
-        raise StoragePermissionError(path, "write")
-
-    # Single-step undo support: keep the previous store as a pre-write
-    # backup before the replace. A missing current file (first-ever
-    # write) has no previous state to preserve — skip so the first add
-    # doesn't litter backups/. Copy failures are deliberately
-    # best-effort: undo is a convenience, never a gate on writing.
-    if path.exists():
+    with storage_write_lock(path):
         try:
-            backups_dir = get_backups_dir()
-            backups_dir.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(path, pre_write_backup_destination())
-        except (OSError, PermissionError):
-            pass
+            with tmp_path.open("w", encoding="utf-8") as fh:
+                _lock_file(fh, exclusive=True)
+                try:
+                    json.dump(payload, fh, indent=2, ensure_ascii=False)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                finally:
+                    _unlock_file(fh)
+        except (PermissionError, OSError):
+            raise StoragePermissionError(path, "write")
 
-    try:
-        os.replace(tmp_path, path)
-    except (PermissionError, OSError):
-        raise StoragePermissionError(path, "write")
+        # Single-step undo support: keep the previous store as a pre-write
+        # backup before the replace. A missing current file (first-ever
+        # write) has no previous state to preserve — skip so the first add
+        # doesn't litter backups/. Copy failures are deliberately
+        # best-effort: undo is a convenience, never a gate on writing.
+        if path.exists():
+            try:
+                backups_dir = get_backups_dir()
+                backups_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, pre_write_backup_destination())
+            except (OSError, PermissionError):
+                pass
+
+        try:
+            os.replace(tmp_path, path)
+        except (PermissionError, OSError):
+            raise StoragePermissionError(path, "write")
 
 
 def add_entry(new_entry: Entry) -> None:
-    """Append a single entry to persistent storage."""
-    entries = load_entries()
-    entries.append(new_entry)
-    save_entries(entries)
+    """Append a single entry to persistent storage.
+
+    The load→append→save sequence holds the cross-process write lock so
+    a concurrent writer cannot slip a read between our read and write
+    (which previously lost entries to a last-writer-wins replace).
+    """
+    with storage_write_lock(get_storage_path()):
+        entries = load_entries()
+        entries.append(new_entry)
+        save_entries(entries)
 
 
 def update_entry(updated: Entry) -> bool:
     """Replace an entry in storage by id, preserving insertion order."""
-    entries = load_entries()
-    for i, e in enumerate(entries):
-        if e.id == updated.id:
-            entries[i] = updated
-            save_entries(entries)
-            return True
-    return False
+    with storage_write_lock(get_storage_path()):
+        entries = load_entries()
+        for i, e in enumerate(entries):
+            if e.id == updated.id:
+                entries[i] = updated
+                save_entries(entries)
+                return True
+        return False
 
 
 def delete_entry(entry_id: str) -> bool:
     """Remove an entry from storage by id."""
-    entries = load_entries()
-    new_entries = [e for e in entries if e.id != entry_id]
-    if len(new_entries) == len(entries):
-        return False
-    save_entries(new_entries)
-    return True
+    with storage_write_lock(get_storage_path()):
+        entries = load_entries()
+        new_entries = [e for e in entries if e.id != entry_id]
+        if len(new_entries) == len(entries):
+            return False
+        save_entries(new_entries)
+        return True
 
 
 def _try_recover_entries_from_corrupt_json(path: Path) -> object | None:
@@ -156,6 +178,10 @@ def _try_recover_entries_from_corrupt_json(path: Path) -> object | None:
     """
     try:
         text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        # Undecodable bytes: no JSON prefix can be trusted, so no
+        # recovery is possible from this payload.
+        return None
     except OSError:
         return None
     if not text:
@@ -206,6 +232,8 @@ def read_raw_entries() -> tuple[object, bool]:
         raise StoragePermissionError(path, "read") from exc
     except OSError as exc:
         raise StoragePermissionError(path, "read") from exc
+    except UnicodeDecodeError:
+        raise CorruptedStorageError(path) from None
     except json.JSONDecodeError:
         # Try to recover by truncating to the last valid JSON object
         # boundary. If that succeeds, return the recovered payload

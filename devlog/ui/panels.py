@@ -439,7 +439,13 @@ def stats_panel(
         _styled_row("First", Text(first_str, style=_s("date"))),
         _styled_row("Last", Text(last_str, style=_s("date"))),
         _styled_row("Span", f"{span_days} day{plural_s(span_days)}"),
-        _styled_row("Avg/day", f"{avg_per_day:.2f}"),
+        # Sparse journals can average < 0.01/day; two decimals would
+        # render a meaningless "0.00" there, so widen the precision
+        # only when needed.
+        _styled_row(
+            "Avg/day",
+            f"{avg_per_day:.2f}" if avg_per_day >= 0.01 else f"{avg_per_day:.4f}",
+        ),
     ]
 
     # Stats v2 rows. Streaks always render (0 is meaningful — "your
@@ -449,7 +455,24 @@ def stats_panel(
         _styled_row("Streak", f"{current_streak} day{plural_s(current_streak)} (longest {longest_streak})")
     )
     if days_since is not None:
-        rows.append(_styled_row("Last entry", f"{days_since} day{plural_s(abs(days_since))} ago"))
+        # Mirror the doctor panel's phrasing: a future-dated newest entry
+        # must read "in N days (future-dated)", never "-N days ago".
+        if days_since == 0:
+            rows.append(_styled_row("Last entry", Text("today", style=_s("date"))))
+        elif days_since < 0:
+            rows.append(
+                _styled_row(
+                    "Last entry",
+                    Text(
+                        f"in {-days_since} day{plural_s(-days_since)} (future-dated)",
+                        style=_s("warning_text"),
+                    ),
+                )
+            )
+        else:
+            rows.append(
+                _styled_row("Last entry", f"{days_since} day{plural_s(days_since)} ago")
+            )
 
     rows.append(Text())
     if top_tags:

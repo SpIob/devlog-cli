@@ -11,6 +11,9 @@ import itertools
 import json
 import os
 import sys
+import threading
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -45,6 +48,22 @@ if sys.platform == "win32":
             msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
         finally:
             fh.seek(pos)
+
+    def _try_lock_file(fh) -> bool:
+        """Try to exclusively lock byte 0 without blocking (Windows).
+
+        Returns True when the lock was acquired, False when another
+        process holds it.
+        """
+        pos = fh.tell()
+        fh.seek(0)
+        try:
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+        finally:
+            fh.seek(pos)
 else:
     import fcntl
 
@@ -58,6 +77,18 @@ else:
     def _unlock_file(fh) -> None:
         """Unlock a file handle (Unix)."""
         fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+    def _try_lock_file(fh) -> bool:
+        """Try an exclusive non-blocking flock (Unix).
+
+        Returns True when the lock was acquired, False when another
+        process holds it.
+        """
+        try:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +167,112 @@ class CorruptedStorageError(StorageError):
             "Restore from a backup with `devlog restore <file>`, or "
             "delete the file to start fresh."
         )
+
+
+class StorageBusyError(StorageError):
+    def __init__(self, path: Path):
+        super().__init__(
+            f"Error: The journal store is busy (another devlog process is "
+            f"writing to {path}). Try again in a moment."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Cross-process write lock
+# ---------------------------------------------------------------------------
+
+# In-process guards for :func:`storage_write_lock`.
+#
+# - ``_WRITE_RLOCK``: same-thread re-entrancy + mutual exclusion between
+#   threads of one process (flock() on a second fd of the same file within
+#   one process would deadlock against the first — flock locks are per
+#   open-file-description).
+# - ``_HELD_LOCKS``: counts lock paths already flocked by this process, so
+#   a nested acquisition through a different code path (e.g. the facade
+#   wrapping a backend call) skips the second flock instead of
+#   deadlocking on it.
+_WRITE_RLOCK = threading.RLock()
+_HELD_LOCKS: dict[str, int] = {}
+_HELD_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def storage_write_lock(path: Path, timeout: float | None = None):
+    """Serialize read-modify-write store mutations across processes.
+
+    A mutating command must hold this lock from its ``load`` through its
+    ``save``. The plain ``flock`` inside ``save_entries`` only guards the
+    temp file (which is per-process), so two concurrent ``add_entry``
+    calls could otherwise both read the same base state and the last
+    ``os.replace`` would silently drop the other's entry.
+
+    Re-entrant within a process (both same-thread and via a second fd of
+    the same sidecar); cross-process mutual exclusion comes from an
+    exclusive non-blocking ``flock`` on a ``<store>.lock`` sidecar,
+    retried until *timeout* elapses.
+
+    Args:
+        path: the store file path (``entries.json`` or ``entries.db``).
+            The lock sidecar is ``<path.name>.lock`` in the same directory.
+        timeout: seconds to wait for the cross-process lock before
+            raising :class:`StorageBusyError`. Defaults to the
+            ``DEVLOG_WRITE_LOCK_TIMEOUT`` env var (float seconds),
+            else 10.
+
+    Raises:
+        StorageBusyError: when the lock could not be acquired in time,
+            or the lock sidecar cannot be created.
+    """
+    if timeout is None:
+        try:
+            timeout = float(os.environ.get("DEVLOG_WRITE_LOCK_TIMEOUT", "10"))
+        except (TypeError, ValueError):
+            timeout = 10.0
+
+    lock_path = path.parent / (path.name + ".lock")
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise StoragePermissionError(path, "write") from exc
+
+    # Same-thread nested calls take the RLock fast path; other threads in
+    # this process queue here instead of fighting over the flock fd.
+    if not _WRITE_RLOCK.acquire(timeout=timeout):
+        raise StorageBusyError(path)
+    key = str(lock_path)
+    fh = None
+    took_flock = False
+    try:
+        with _HELD_LOCKS_GUARD:
+            already_held = _HELD_LOCKS.get(key, 0)
+            _HELD_LOCKS[key] = already_held + 1
+
+        if already_held == 0:
+            deadline = time.monotonic() + timeout
+            try:
+                fh = open(lock_path, "a+")
+            except OSError as exc:
+                raise StoragePermissionError(path, "write") from exc
+            while not _try_lock_file(fh):
+                if time.monotonic() >= deadline:
+                    raise StorageBusyError(path)
+                time.sleep(0.05)
+            took_flock = True
+        try:
+            yield
+        finally:
+            if took_flock:
+                _unlock_file(fh)
+    finally:
+        with _HELD_LOCKS_GUARD:
+            remaining = _HELD_LOCKS.get(key, 0) - 1
+            if remaining <= 0:
+                _HELD_LOCKS.pop(key, None)
+            else:
+                _HELD_LOCKS[key] = remaining
+        if fh is not None:
+            fh.close()
+        _WRITE_RLOCK.release()
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ import click
 from devlog import storage, ui
 from devlog._gitops import (
     _existing_ancestor,
-    auto_commit_journal,
+    auto_commit_journal_scoped,
     get_git_repo_root,
     git_status,
 )
@@ -83,7 +83,10 @@ def register(main) -> None:
         if not quiet:
             console.print("Checking for changes...")
 
-        success, msg = auto_commit_journal(repo_root, message)
+        # Stage and commit ONLY the journal directory's paths — never
+        # unrelated files in the enclosing repo (which may be as large
+        # as $HOME when the data dir sits there).
+        success, msg = auto_commit_journal_scoped(data_dir, repo_root, message)
 
         if success:
             if not quiet:

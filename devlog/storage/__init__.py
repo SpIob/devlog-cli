@@ -21,6 +21,7 @@ from devlog.storage._base import (
     TAG_RE,
     CorruptedStorageError,
     Issue,
+    StorageBusyError,
     StorageError,
     StoragePermissionError,
     _get_backend_module,
@@ -47,11 +48,17 @@ from devlog.storage._base import (
     pre_write_backup_destination,
     prune_pre_write_backups,
     register_backend,
+    storage_write_lock,
     validate_entries,
 )
 
 
-# Dispatch functions that route to the active backend
+# Dispatch functions that route to the active backend.
+#
+# The mutating entry points hold :func:`storage_write_lock` at the facade
+# so write-vs-write races (import/restore/repair/tag-ops vs a concurrent
+# `add`) are serialized on BOTH backends; the lock is re-entrant per
+# process, so the JSON backend's own nested acquisition is free.
 def load_entries() -> list:
     """Load all entries from the active backend."""
     return _get_backend_module().load_entries()
@@ -59,22 +66,26 @@ def load_entries() -> list:
 
 def save_entries(entries: list) -> None:
     """Persist all entries to the active backend atomically."""
-    return _get_backend_module().save_entries(entries)
+    with storage_write_lock(get_store_path()):
+        return _get_backend_module().save_entries(entries)
 
 
 def add_entry(new_entry) -> None:
     """Append a single entry to the active backend."""
-    return _get_backend_module().add_entry(new_entry)
+    with storage_write_lock(get_store_path()):
+        return _get_backend_module().add_entry(new_entry)
 
 
 def update_entry(updated) -> bool:
     """Replace an entry in the active backend by id."""
-    return _get_backend_module().update_entry(updated)
+    with storage_write_lock(get_store_path()):
+        return _get_backend_module().update_entry(updated)
 
 
 def delete_entry(entry_id: str) -> bool:
     """Remove an entry from the active backend by id."""
-    return _get_backend_module().delete_entry(entry_id)
+    with storage_write_lock(get_store_path()):
+        return _get_backend_module().delete_entry(entry_id)
 
 
 def read_raw_entries() -> tuple[object, bool]:
@@ -119,6 +130,7 @@ __all__ = [
     "TAG_RE",
     "CorruptedStorageError",
     "Issue",
+    "StorageBusyError",
     "StorageError",
     "StoragePermissionError",
     "_is_sqlite_backend",
@@ -153,6 +165,7 @@ __all__ = [
     "read_raw_entries",
     "register_backend",
     "save_entries",
+    "storage_write_lock",
     "update_entry",
     "utc_now_iso",
     "validate_entries",

@@ -162,6 +162,58 @@ def create_entry_from_commit(commit: str, repo_root: Path) -> Entry | None:
     )
 
 
+def auto_commit_journal_scoped(
+    data_dir: Path, repo_root: Path, message: str = "devlog: journal update"
+) -> tuple[bool, str]:
+    """Auto-commit ONLY paths under *data_dir* within *repo_root*.
+
+    ``git sync`` resolves the enclosing repository by walking up from the
+    journal directory — the journal may be the repo root itself or live
+    inside a larger repository. In both cases this function stages and
+    commits only the journal directory's paths, never unrelated files:
+    the pre-2026-11 behaviour of ``git add -A`` at the discovered root
+    would stage everything under the repo (e.g. a stray ``~/.git`` would
+    sweep the entire home directory).
+
+    Args:
+        data_dir:  the journal directory whose changes should be committed.
+        repo_root: the git repository root containing (or equal to) it.
+        message:   commit message.
+
+    Returns:
+        ``(success, message)`` as :func:`auto_commit_journal`.
+    """
+    try:
+        rel = data_dir.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return False, "Journal directory is not inside the git repository"
+    scope = "." if str(rel) == "." else str(rel)
+
+    # Check if there are changes within the journal scope only
+    exit_code, stdout, _ = _run_git(["status", "--porcelain", "--", scope], repo_root)
+    if exit_code != 0:
+        return False, f"git status failed: {stdout}"
+
+    if not stdout.strip():
+        return True, "No changes to commit"
+
+    # Add all changes — scoped to the journal directory. The write-lock
+    # sidecar is ephemeral runtime state, so it is never committed.
+    excl = ":(exclude)*.lock" if scope == "." else f":(exclude){scope}/*.lock"
+    exit_code, _, stderr = _run_git(["add", "-A", "--", scope, excl], repo_root)
+    if exit_code != 0:
+        return False, f"git add failed: {stderr}"
+
+    # Commit
+    exit_code, _, stderr = _run_git(["commit", "-m", message], repo_root)
+    if exit_code != 0:
+        if "nothing to commit" in (stderr or "").lower():
+            return True, "No changes to commit"
+        return False, f"git commit failed: {stderr}"
+
+    return True, "Committed successfully"
+
+
 def auto_commit_journal(data_dir: Path, message: str = "devlog: journal update") -> tuple[bool, str]:
     """Auto-commit the journal directory if it's a git repo."""
     if not is_git_repo(data_dir):

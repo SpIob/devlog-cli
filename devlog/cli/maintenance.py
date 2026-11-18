@@ -88,7 +88,8 @@ def repair(dry_run: bool, yes: bool, backup: bool, quiet: bool) -> None:
         return
 
     kept, issues = storage.build_repair_plan(raw)
-    raw_count = len(raw.get("entries", [])) if isinstance(raw, dict) else 0
+    raw_entries = raw.get("entries") if isinstance(raw, dict) else None
+    raw_count = len(raw_entries) if isinstance(raw_entries, list) else 0
     dropped = max(0, raw_count - len(kept))
     # Count how many tags the plan stripped (one per ``bad_tag`` issue
     # since each issue corresponds to a single offending tag string).

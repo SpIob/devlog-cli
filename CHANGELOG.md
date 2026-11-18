@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **JSON backend:** concurrent writes no longer lose entries. Mutating
+  operations (`add`/`edit`/`delete`/`import`/`restore`/`repair`) now hold
+  a cross-process write lock (`<store>.lock` sidecar, re-entrant per
+  process) across their whole read-modify-write, so a parallel writer
+  can no longer slip a read between another writer's read and replace.
+  Under contention a command now waits (default 10s, tunable via
+  `DEVLOG_WRITE_LOCK_TIMEOUT`) and then fails with an honest
+  "journal store is busy" error instead of a misleading
+  "Check file permissions" message. The lock is available to both
+  backends at the storage facade.
+- **`git sync`:** commits are now scoped to the journal directory's
+  paths only. Previously the command resolved the enclosing repository
+  (walking up from the data dir) and ran `git add -A` at the repo ROOT —
+  with a stray `~/.git` present that staged the entire home directory.
+  The `*.lock` sidecar is never committed, and "nothing to commit"
+  after staging exits successfully.
+- **Tags:** `devlog add`/`edit` now split comma-separated `-t a,b` into
+  distinct tags (matching the OR semantics `a,b` already has in
+  queries) and reject `!` as filter-only query syntax. Previously the
+  raw string was stored as a single tag containing `,`/`!` — violating
+  the documented `[a-z0-9-]` charset and unreachable by every tag
+  command. The per-entry 10-tag cap is now counted after splitting.
+  Legacy comma/`!` tags in existing stores are flagged by `doctor` and
+  can be stripped with `devlog repair`.
+- **`--at` / `--since` / `--until`:** well-formed but impossible
+  calendar dates (`2026-02-30`, `2026-13-01`) now exit 2 with the
+  standard "Invalid --at/date" message instead of a raw `ValueError`
+  traceback.
+- **`repair`:** the "Removed N entries" summary no longer counts the
+  characters of a non-list `entries` value (`{"entries": "not a list"}`
+  reported "Removed 10").
+- **`doctor` / `repair`:** a store containing undecodable (non-UTF-8)
+  bytes now surfaces through the same clean corruption-error contract
+  as invalid JSON instead of a raw `UnicodeDecodeError` traceback.
+- **`stats`:** a future-dated newest entry now renders
+  "in N days (future-dated)" instead of "-N days ago"; `Avg/day` widens
+  to four decimals when the journal is too sparse for two decimals to
+  show a meaningful value.
+- **Tests:** 14 regression tests pinning the fixes above
+  (`tests/test_qa_fixes.py`).
 - **SQLite backend:** a corrupt or hand-mangled `entries.db` (garbage
   bytes, wrong file type) now surfaces through the same error contract
   as a corrupt `entries.json`: `devlog list`/`doctor`/`repair` print an
