@@ -15,7 +15,9 @@ Each test pins one defect found by the adversarial QA pass:
 from __future__ import annotations
 
 import json
+import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -192,12 +194,53 @@ def test_write_lock_is_reentrant_same_process(data_dir, make_entry):
     assert len(storage.load_entries()) == 1
 
 
+def test_write_lock_times_out_with_busy_error(data_dir, make_entry, monkeypatch):
+    """A contended lock raises StorageBusyError after the timeout.
+
+    Uses a second *thread* as the contender: the in-process RLock is the
+    first barrier, so a held lock must surface as StorageBusyError (and
+    not silently proceed) regardless of platform.
+    """
+    import threading
+
+    release = threading.Event()
+    holder_held = threading.Event()
+
+    def hold():
+        with storage_write_lock(storage.get_store_path()):
+            holder_held.set()
+            release.wait(timeout=10)
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    assert holder_held.wait(timeout=5)
+
+    monkeypatch.setenv("DEVLOG_WRITE_LOCK_TIMEOUT", "0.3")
+    with pytest.raises(StorageBusyError):
+        storage.add_entry(make_entry("66666666-6666-4666-8666-666666666666", "blocked"))
+
+    release.set()
+    holder.join(timeout=5)
+
+    # Lock free again → the write goes through.
+    storage.add_entry(make_entry("55555555-5555-4555-8555-555555555555", "after release"))
+    assert len(storage.load_entries()) == 1
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="holder subprocess locks via fcntl (POSIX); Windows uses msvcrt",
+)
 @pytest.mark.skipif(
     active_backend() == "sqlite",
     reason=requires_json_backend("busy test holds the JSON lock sidecar via a subprocess"),
 )
-def test_write_lock_times_out_with_busy_error(data_dir, make_entry, monkeypatch):
-    """A store held by another process raises StorageBusyError after timeout."""
+def test_write_lock_cross_process_busy_error(data_dir, make_entry):
+    """A store locked by ANOTHER PROCESS raises StorageBusyError (POSIX).
+
+    Exercises the actual flock sidecar across a process boundary; the
+    thread-based test above covers the timeout contract everywhere.
+    """
     lock_path = storage.get_store_path().with_name(storage.get_store_path().name + ".lock")
     holder = subprocess.Popen(
         [
@@ -212,10 +255,11 @@ def test_write_lock_times_out_with_busy_error(data_dir, make_entry, monkeypatch)
     )
     try:
         time.sleep(0.4)  # let the holder grab the lock
-        monkeypatch.setenv("DEVLOG_WRITE_LOCK_TIMEOUT", "0.3")
+        os.environ["DEVLOG_WRITE_LOCK_TIMEOUT"] = "0.3"
         with pytest.raises(StorageBusyError):
             storage.add_entry(make_entry("66666666-6666-4666-8666-666666666666", "blocked"))
     finally:
+        os.environ.pop("DEVLOG_WRITE_LOCK_TIMEOUT", None)
         holder.wait(timeout=10)
 
     # Lock free again → the write goes through.
