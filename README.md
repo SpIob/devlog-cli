@@ -11,41 +11,7 @@ A terminal-based developer journal — log, search, filter, and export daily pro
 
 ## Demo
 
-```
-$ devlog add "Rewrote auth middleware to use JWT refresh tokens" -t backend -t security
-╭─ ✔ Entry added  ·  a1b2c3d4 ─────────────────────────────────────────────────────────────────────╮
-│ Date  : 2025-05-11 10:22 UTC                                                                     │
-│ Tags  : backend, security                                                                        │
-│ Note  : Rewrote auth middleware to use JWT refresh tokens                                        │
-│                                                                                                  │
-│ Use `devlog show a1b2c3d4` to view it again, or `devlog edit a1b2c3d4` to amend it.             │
-╰──────────────────────────────────────────────────────────────────────────────────────────────────╯
-
-$ devlog list
-                          Journal · 3 entries
-╭──────────┬───────────────────────┬──────────────────────┬────────────────────────────────────────╮
-│ ID       │ Date                  │ Tags                 │ Message                                │
-├──────────┼───────────────────────┼──────────────────────┼────────────────────────────────────────┤
-│ c3d4e5f6 │ 2025-05-11 14:30 UTC  │ bugfix, devops       │ Fixed flaky test in CI pipeline        │
-│ b2c3d4e5 │ 2025-05-11 11:05 UTC  │ architecture, docs   │ Drafted ADR for new caching layer      │
-│ a1b2c3d4 │ 2025-05-11 10:22 UTC  │ backend, security    │ Rewrote auth middleware to use JWT     │
-│          │                       │                      │ refresh tokens                         │
-├──────────┼───────────────────────┼──────────────────────┼────────────────────────────────────────┤
-│          │                       │                      │ Showing 3 of 3 entries.                │
-╰──────────┴───────────────────────┴──────────────────────┴────────────────────────────────────────╯
-
-$ devlog search "auth"
-                           Journal · 1 match
-                          Query: "auth"
-╭──────────┬───────────────────────┬──────────────────────┬────────────────────────────────────────╮
-│ ID       │ Date                  │ Tags                 │ Message                                │
-├──────────┼───────────────────────┼──────────────────────┼────────────────────────────────────────┤
-│ a1b2c3d4 │ 2025-05-11 10:22 UTC  │ backend, security    │ Rewrote auth middleware to use JWT     │
-│          │                       │                      │ refresh token…                         │
-├──────────┼───────────────────────┼──────────────────────┼────────────────────────────────────────┤
-│          │                       │                      │ Showing 1 of 1 entry.                  │
-╰──────────┴───────────────────────┴──────────────────────┴────────────────────────────────────────╯
-```
+![devlog-cli demo — add, list, search, stats, calendar heatmap, and semantic ask](docs/demo.gif)
 
 ---
 
@@ -79,6 +45,32 @@ pipx install git+https://github.com/SpIob/devlog-cli.git
 After installation, the `devlog` command is available globally in your terminal.
 
 Requires Python 3.10+.
+
+---
+
+## Switching from jrnl / Day One
+
+Already journaling? Bring your history with you — the importers are built in:
+
+```bash
+devlog import ~/.jrnl/journal.json        # jrnl JSON export (format auto-detected)
+devlog import ~/Downloads/Day\ One.json   # Day One JSON export (format auto-detected)
+```
+
+Tags and timestamps carry over, Day One uuids are preserved as entry ids, and
+re-importing the same file is a no-op (entries dedupe by id or a
+`(created_at, message)` fingerprint) — you can switch without a cliff.
+
+| | devlog | jrnl | Day One | plain notes |
+|---|---|---|---|---|
+| Runs fully offline | ✓ | ✓ | ✓ | ✓ |
+| No account, no cloud | ✓ | ✓ | — | ✓ |
+| Built-in MCP server for AI agents | ✓ | — | — | — |
+| Semantic search via local LLM (`ask`) | ✓ | — | — | — |
+| Offline weekly digests | ✓ | — | — | — |
+| Git-native entries (`--from-commit`) | ✓ | — | — | — |
+| Streaks, tag co-occurrence, calendar heatmap | ✓ | — | — | — |
+| Tags + date/tag filtering | ✓ | ✓ | ✓ | — |
 
 ---
 
