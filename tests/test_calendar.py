@@ -83,14 +83,12 @@ def test_calendar_grid_buckets_by_year():
     text = grid.plain
     # The 2024 entry shouldn't show up. The 2025 one should.
     # 2024-06-15 is a Saturday, 2025-06-15 is a Sunday.
-    # We don't assert exact cell positions; just that both `·` chars
-    # (one for 2024, but only 2025 should be present) exist.
-    # Easier: count the non-space, non-newline cells, but strip the
-    # gutter (3-char + 1-space) on each line first so the month labels
-    # don't pollute the count.
+    # We don't assert exact cell positions; just that the 2025 cell
+    # is drawn and nothing extra appears.
     lines = text.splitlines()
-    assert len(lines) == 14, f"expected 7 weekday rows × 2 (gutter + cells), got {len(lines)}"
-    data_rows = lines[1::2]  # every second line is the data row
+    # One header line (month labels) + 7 weekday data rows.
+    assert len(lines) == 8, f"expected 1 header + 7 weekday rows, got {len(lines)}"
+    data_rows = lines[1:]  # every line after the header is a data row
     heatmap_chars = {"·", "▪", "▫", "█"}
     non_space = sum(
         1 for row in data_rows for ch in row if ch in heatmap_chars
@@ -103,53 +101,46 @@ def test_calendar_grid_buckets_by_year():
     assert non_space == 1
 
 
-def test_calendar_grid_has_month_gutter():
-    """The grid must include a left-edge month label gutter."""
+def test_calendar_grid_has_month_header():
+    """The grid must carry month labels on a single header line."""
     grid = ui.calendar_grid({}, year=2025)
     text = grid.plain
     lines = text.splitlines()
-    # 7 weekday rows × 2 lines (gutter + cells) = 14 total lines.
-    assert len(lines) == 14
-    # The gutter row for the first weekday (Sunday in 2025-01-05) must
-    # contain a 3-letter month abbreviation for January.
-    gutter_lines = lines[0::2]
-    found_jan = any("Jan" in line for line in gutter_lines)
-    assert found_jan, f"no Jan label in gutter: {gutter_lines}"
+    # 1 header line (month labels) + 7 weekday data rows = 8 total.
+    assert len(lines) == 8
+    # The header line must contain a 3-letter abbreviation for January.
+    assert "Jan" in lines[0], f"no Jan label in header: {lines[0]!r}"
 
 
 def test_calendar_grid_label_alignment():
-    """Each month label must sit on the same row as the day it labels.
+    """Each month label must sit at the week-column of its 1st day.
 
-    The first day of each month in 2025 falls on a known weekday.
-    The display is laid out Sunday-first (display row 0=Sun,
-    1=Mon, ..., 6=Sat). Python's ``date.weekday()`` is
-    Monday-first (0=Mon, 6=Sun), so the display row is
-    ``(python_weekday + 1) % 7``.
+    The header is one line: every 3-letter month label starts at the
+    week-column that contains the 1st of that month (GitHub-style).
+    2025: Jan 1 is a Wednesday, so Sunday-first padding is 3 days and
+    the label column for month *m* is ``(3 + day_offset) // 7``.
     """
-    # 2025 first-of-month weekdays (Python Mon=0 .. Sun=6):
-    # Jan=Wed, Feb=Sat, Mar=Sat, Apr=Tue, May=Thu, Jun=Sun,
-    # Jul=Tue, Aug=Fri, Sep=Mon, Oct=Wed, Nov=Sat, Dec=Mon.
     expected = {
-        "Jan": 3,  # Wed → display row 3
-        "Feb": 6,  # Sat → display row 6
-        "Mar": 6,  # Sat
-        "Apr": 2,  # Tue
-        "May": 4,  # Thu
-        "Jun": 0,  # Sun
-        "Jul": 2,  # Tue
-        "Aug": 5,  # Fri
-        "Sep": 1,  # Mon
-        "Oct": 3,  # Wed
-        "Nov": 6,  # Sat
-        "Dec": 1,  # Mon
+        "Jan": 0,
+        "Feb": 4,   # (3 + 31)  // 7
+        "Mar": 8,   # (3 + 59)  // 7
+        "Apr": 13,  # (3 + 90)  // 7
+        "May": 17,  # (3 + 120) // 7
+        "Jun": 22,  # (3 + 151) // 7
+        "Jul": 26,  # (3 + 181) // 7
+        "Aug": 30,  # (3 + 212) // 7
+        "Sep": 35,  # (3 + 243) // 7
+        "Oct": 39,  # (3 + 273) // 7
+        "Nov": 43,  # (3 + 304) // 7
+        "Dec": 48,  # (3 + 334) // 7
     }
     grid = ui.calendar_grid({}, year=2025)
     lines = grid.plain.splitlines()
-    gutter_lines = lines[0::2]
-    for month, display_row in expected.items():
-        assert month in gutter_lines[display_row], (
-            f"{month} should be on gutter row {display_row}, "
-            f"but gutter lines are: {gutter_lines}"
+    header = lines[0]
+    for month, col in expected.items():
+        assert header.find(month) == col, (
+            f"{month} should start at column {col}, "
+            f"but the header is: {header!r}"
         )
 
 
