@@ -39,6 +39,27 @@ def _templates_dir() -> Path:
     return get_data_dir() / TEMPLATES_DIR_NAME
 
 
+def _validate_template_name(name: str) -> None:
+    """Reject names that would escape ``<data-dir>/templates/``.
+
+    The name becomes a filename (``f"{name}.json"``), so it must never
+    carry path separators, lead with a dot (hidden files, ``..``), or be
+    empty. Raises :class:`ValueError`; CLI callers render it as a clean
+    error instead of a traceback.
+    """
+    if not name or not name.strip():
+        raise ValueError("Template name cannot be empty.")
+    if name != name.strip():
+        raise ValueError(f"Template name cannot have leading/trailing whitespace: {name!r}")
+    if "/" in name or "\\" in name:
+        raise ValueError(
+            f"Template name cannot contain path separators: {name!r}. "
+            "Names are used as file names inside the templates directory."
+        )
+    if name.startswith("."):
+        raise ValueError(f"Template name cannot start with a dot: {name!r}.")
+
+
 def _list_template_files() -> list[Path]:
     d = _templates_dir()
     if not d.exists():
@@ -86,12 +107,14 @@ class Template:
         }
 
     def save(self) -> None:
+        _validate_template_name(self.name)
         _templates_dir().mkdir(parents=True, exist_ok=True)
         path = _templates_dir() / f"{self.name}.json"
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(self.to_dict(), fh, indent=2, ensure_ascii=False)
 
     def delete(self) -> bool:
+        _validate_template_name(self.name)
         path = _templates_dir() / f"{self.name}.json"
         try:
             path.unlink()
@@ -105,6 +128,10 @@ def list_templates() -> list[Template]:
 
 
 def get_template(name: str) -> Template | None:
+    try:
+        _validate_template_name(name)
+    except ValueError:
+        return None
     path = _templates_dir() / f"{name}.json"
     if not path.exists():
         return None

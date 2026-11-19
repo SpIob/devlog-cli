@@ -57,26 +57,34 @@ def get_view(name: str) -> dict[str, Any] | None:
 
 
 def save_view(name: str, filters: dict[str, Any], description: str = "") -> None:
-    """Save or update a view."""
+    """Save or update a view (atomic read-modify-write across processes)."""
     # Validate filter keys
     clean = {k: v for k, v in filters.items() if k in VALID_FILTER_KEYS}
     if description:
         clean["description"] = description
     store = _get_views_store()
-    data = store.load()
-    data[name] = clean
-    store.save(data)
+
+    def _apply(data: dict[str, Any]) -> dict[str, Any]:
+        data[name] = clean
+        return data
+
+    store.update(_apply)
 
 
 def delete_view(name: str) -> bool:
     """Delete a view. Returns True if it existed."""
     store = _get_views_store()
-    data = store.load()
-    if name in data:
-        del data[name]
-        store.save(data)
-        return True
-    return False
+    existed = False
+
+    def _apply(data: dict[str, Any]) -> dict[str, Any]:
+        nonlocal existed
+        existed = name in data
+        if existed:
+            del data[name]
+        return data
+
+    store.update(_apply)
+    return existed
 
 
 def apply_view(

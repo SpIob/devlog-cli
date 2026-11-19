@@ -84,12 +84,25 @@ err_console = ui.err_console
     default=None,
     help="Use a saved template (prompts for variables). Run `devlog template list` to see available.",
 )
-def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_commit: str | None, template_name: str | None) -> None:
+@click.option(
+    "--var",
+    "template_vars",
+    multiple=True,
+    help=(
+        "Template variable as 'name=value' (repeatable). Supplies values "
+        "non-interactively with --template; unset variables expand empty."
+    ),
+)
+def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_commit: str | None, template_name: str | None, template_vars: tuple[str, ...]) -> None:
     """Add a new journal entry.
 
     Pass `-` as the message to read from stdin (e.g., `git log -1 --format=%B | devlog add -`).
     Use `--from-commit HEAD` to create an entry from the latest git commit.
     """
+    if template_vars and template_name is None:
+        ui.print_error("--var requires --template.")
+        sys.exit(1)
+
     # Handle --from-commit
     if from_commit is not None:
         from devlog._gitops import create_entry_from_commit, get_git_repo_root
@@ -151,15 +164,29 @@ def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_co
             ui.print_info("Run `devlog template list` to see available templates.")
             sys.exit(1)
 
-        if not sys.stdin.isatty():
-            ui.print_error("Template requires a TTY for interactive variable prompts.")
+        if template_vars:
+            # Non-interactive path: values come from --var name=value.
+            values = {}
+            for raw_var in template_vars:
+                if "=" not in raw_var:
+                    ui.print_error(
+                        f"Invalid variable format: {raw_var} (use 'name=value')"
+                    )
+                    sys.exit(1)
+                var_name, var_value = raw_var.split("=", 1)
+                values[var_name.strip()] = var_value
+        elif not sys.stdin.isatty():
+            ui.print_error(
+                "Template requires a TTY for interactive variable prompts; "
+                "pass values with --var name=value instead."
+            )
             sys.exit(1)
-
-        values = {}
-        for var, hint in template.variables.items():
-            prompt = f"{var} ({hint})"
-            val = click.prompt(prompt, default="", show_default=False)
-            values[var] = val
+        else:
+            values = {}
+            for var, hint in template.variables.items():
+                prompt = f"{var} ({hint})"
+                val = click.prompt(prompt, default="", show_default=False)
+                values[var] = val
 
         message, template_tags = expand_template(template, values)
 

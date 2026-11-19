@@ -151,7 +151,11 @@ def register(main) -> None:
             message=message,
             variables=vars_dict,
         )
-        t.save()
+        try:
+            t.save()
+        except ValueError as exc:
+            ui.print_error(str(exc))
+            sys.exit(1)
         console.print(ui.success_line(f"Saved template: {name}"))
 
     @template.command("edit")
@@ -186,7 +190,11 @@ def register(main) -> None:
             message=str(data.get("message", "")),
             variables={k: str(v) for k, v in data.get("variables", {}).items()},
         )
-        t.save()
+        try:
+            t.save()
+        except ValueError as exc:
+            ui.print_error(str(exc))
+            sys.exit(1)
         console.print(ui.success_line(f"Updated template: {name}"))
 
     @template.command("delete")

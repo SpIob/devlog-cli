@@ -3,6 +3,22 @@
 Provides a simple, thread-safe way to persist small JSON objects in the
 data directory. All writes are atomic (temp file + os.replace) and use
 the same cross-platform locking as the main storage layer.
+
+Locking contract:
+    * A single :meth:`load` / :meth:`save` call is atomic per call
+      (readers never see a torn file), but load-then-save is *not* a
+      transaction — another process can write between the two calls.
+    * :meth:`update` and the :meth:`locked` context manager hold the
+      canonical cross-process write lock
+      (:func:`storage.storage_write_lock`) on a stable ``<name>.lock``
+      sidecar (never replaced, so the lock survives ``os.replace``)
+      across the whole read-modify-write. Nesting is re-entrant within
+      a process; cross-process writers wait up to
+      ``DEVLOG_WRITE_LOCK_TIMEOUT`` and then raise
+      :class:`storage.StorageBusyError`.
+
+The sidecar is excluded from ``git sync`` commits (the ``*.lock``
+pathspec rule in ``_gitops``) like the main journal's lock.
 """
 
 from __future__ import annotations
@@ -10,17 +26,14 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from contextlib import nullcontext
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from devlog.storage._base import (
-    _lock_file,
-    _unlock_file,
     get_data_dir,
+    storage_write_lock,
 )
-
-if TYPE_CHECKING:
-    pass
 
 
 class AtomicStore:
@@ -31,9 +44,10 @@ class AtomicStore:
 
     Example:
         store = AtomicStore("my-config.json", default={})
-        data = store.load()
-        data["key"] = "value"
-        store.save(data)
+        store.update(lambda data: {**data, "key": "value"})
+
+    For multi-step read-modify-write sequences that must not interleave
+    with other processes, wrap them in ``with store.locked():``.
     """
 
     def __init__(
@@ -47,11 +61,31 @@ class AtomicStore:
         Args:
             filename: File name (no path) inside the data directory.
             default: Default content if file doesn't exist.
-            lock: Whether to use cross-process file locking (default True).
+            lock: Whether :meth:`update`/:meth:`locked` serialize
+                read-modify-write across processes (default True).
         """
         self._path = get_data_dir() / filename
         self._default = default or {}
         self._lock = lock
+
+    @property
+    def path(self) -> Path:
+        """The on-disk JSON file this store manages."""
+        return self._path
+
+    def locked(self):
+        """Context manager holding the cross-process read-modify-write lock.
+
+        Delegates to :func:`storage.storage_write_lock` — re-entrant
+        within a process (nested ``locked()``/``update()`` on the same
+        path skip the second flock instead of deadlocking on it);
+        cross-process writers wait up to ``DEVLOG_WRITE_LOCK_TIMEOUT``
+        and then raise :class:`storage.StorageBusyError`. A no-op
+        (``nullcontext``) when the store was built with ``lock=False``.
+        """
+        if not self._lock:
+            return nullcontext()
+        return storage_write_lock(self._path)
 
     def load(self) -> dict[str, Any]:
         """Load and return the stored JSON object.
@@ -71,7 +105,13 @@ class AtomicStore:
             return dict(self._default)
 
     def save(self, data: dict[str, Any]) -> None:
-        """Atomically write *data* to the store file."""
+        """Atomically write *data* to the store file.
+
+        The write itself is a temp-file + ``os.replace`` (readers see
+        the old or the new file, never a torn one). Callers that base
+        *data* on a previous :meth:`load` must hold :meth:`locked` (or
+        use :meth:`update`) or they can lose a concurrent update.
+        """
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
         # Write to temp file first
@@ -89,18 +129,8 @@ class AtomicStore:
             temp_name = tf.name
 
         try:
-            if self._lock:
-                # Lock the target file for the replace
-                with open(self._path, "a") as lf:
-                    _lock_file(lf, exclusive=True)
             os.replace(temp_name, self._path)
         finally:
-            if self._lock:
-                try:
-                    with open(self._path, "a") as lf:
-                        _unlock_file(lf)
-                except (OSError, PermissionError):
-                    pass
             # Cleanup temp on any failure
             try:
                 os.unlink(temp_name)
@@ -108,10 +138,15 @@ class AtomicStore:
                 pass
 
     def update(self, fn: Callable[[dict[str, Any]], dict[str, Any]]) -> dict[str, Any]:
-        """Load, apply *fn*, save atomically. Returns the new data."""
-        data = self.load()
-        new_data = fn(data)
-        self.save(new_data)
+        """Atomically load, apply *fn*, and save — under the read-modify-write lock.
+
+        Returns the new data. This is the only way to merge into the
+        stored dict without racing a concurrent writer.
+        """
+        with self.locked():
+            data = self.load()
+            new_data = fn(data)
+            self.save(new_data)
         return new_data
 
     def clear(self) -> None:
@@ -120,16 +155,3 @@ class AtomicStore:
             self._path.unlink()
         except (OSError, PermissionError):
             pass
-
-
-# Convenience: a lock context manager for rare cases needing manual locking
-@__import__("contextlib").contextmanager
-def _locked_file(path: Path, exclusive: bool = True):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.touch(exist_ok=True)
-    with open(path, "a") as fh:
-        _lock_file(fh, exclusive)
-        try:
-            yield fh
-        finally:
-            _unlock_file(fh)

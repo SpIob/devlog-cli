@@ -549,3 +549,188 @@ def test_config_edit_with_editor_arguments(runner, monkeypatch, tmp_path):
     value = runner.invoke(main, ["config", "get", "theme"])
     assert value.exit_code == 0, value.output
     assert value.output.strip() == "ocean"
+
+
+# ---------------------------------------------------------------------------
+# AtomicStore serialization (P2: parallel `config set` lost keys — the old
+# lock flocked an inode that os.replace immediately swapped out, and the
+# load→modify→save window was never covered)
+# ---------------------------------------------------------------------------
+
+
+def test_atomicstore_update_composes_and_locks_reentrant(data_dir):
+    """update() merges under one lock; nested locked() must not deadlock."""
+    from devlog._store import AtomicStore
+
+    store = AtomicStore("probe-store.json", default={})
+    with store.locked():
+        with store.locked():
+            pass
+    store.update(lambda d: {**d, "a": 1})
+    store.update(lambda d: {**d, "b": 2})
+    assert store.load() == {"a": 1, "b": 2}
+
+
+def test_atomicstore_parallel_config_sets_keep_all_keys(tmp_path):
+    """6 parallel `config set` processes (different keys) must all persist.
+
+    Regression: all six writers exited 0 but one key silently vanished —
+    the read-modify-write was not serialized across processes.
+    """
+    env = dict(os.environ, DEVLOG_DATA_DIR=str(tmp_path))
+    env.pop("DEVLOG_BACKEND", None)
+    pairs = [
+        ("watch_interval", "7"),
+        ("auto_sync", "true"),
+        ("default_llm_model", "modelA"),
+        ("default_embed_model", "modelB"),
+        ("ollama_host", "http://h"),
+        ("webhook_url", "http://w"),
+    ]
+    procs = [
+        subprocess.Popen(
+            [sys.executable, "-c", "from devlog.cli import main; main()",
+             "config", "set", key, value],
+            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        for key, value in pairs
+    ]
+    exit_codes = [p.wait(timeout=120) for p in procs]
+    assert all(rc == 0 for rc in exit_codes), exit_codes
+
+    stored = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    for key, _value in pairs:
+        assert key in stored, f"lost update: {key!r} missing from {sorted(stored)}"
+
+
+# ---------------------------------------------------------------------------
+# Template name validation (P2: `template save '../config'` overwrote
+# config.json; 'a/b' crashed with a raw FileNotFoundError traceback)
+# ---------------------------------------------------------------------------
+
+
+def test_template_save_traversal_does_not_clobber_config(runner, data_dir):
+    (data_dir / "config.json").write_text('{"watch_interval": 42}', encoding="utf-8")
+    result = runner.invoke(main, ["template", "save", "../config", "-m", "CLOBBER"])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "path separators" in result.output
+
+    # The store file outside templates/ is untouched.
+    assert json.loads((data_dir / "config.json").read_text(encoding="utf-8"))[
+        "watch_interval"
+    ] == 42
+
+
+def test_template_save_rejects_slash_dot_and_empty_names(runner):
+    for bad in ("a/b", "..hidden", ".hidden", ""):
+        result = runner.invoke(main, ["template", "save", bad, "-m", "x"])
+        assert result.exit_code == 1, f"{bad!r}: {result.output}"
+        assert "Traceback" not in result.output
+
+
+def test_template_save_still_allows_unicode_names(runner):
+    result = runner.invoke(main, ["template", "save", "héllo", "-m", "x"])
+    assert result.exit_code == 0, result.output
+    listing = runner.invoke(main, ["template", "list", "--quiet"])
+    assert "héllo" in listing.output
+
+
+def test_template_delete_traversal_name_clean_error(runner):
+    result = runner.invoke(main, ["template", "delete", "../../evil", "-y"])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# digest/ask corrupt-store contract (P2: raw CorruptedStorageError
+# traceback — every other command already rendered the clean panel)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason=requires_json_backend(
+        "the corruption contract writes a corrupt entries.json; sqlite reads entries.db"
+    ),
+)
+def test_digest_corrupt_store_clean_error(runner, data_dir):
+    (data_dir / "entries.json").write_text("THIS IS NOT JSON {{{", encoding="utf-8")
+    result = runner.invoke(main, ["digest"])
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert "corrupted" in result.output.lower()
+
+
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason=requires_json_backend(
+        "the corruption contract writes a corrupt entries.json; sqlite reads entries.db"
+    ),
+)
+def test_ask_corrupt_store_clean_error(runner, data_dir):
+    (data_dir / "entries.json").write_text("THIS IS NOT JSON {{{", encoding="utf-8")
+    result = runner.invoke(main, ["ask", "query"])
+    assert result.exit_code == 2
+    assert "Traceback" not in result.output
+    assert "corrupted" in result.output.lower()
+
+
+# ---------------------------------------------------------------------------
+# add --template non-interactive (P2: TTY-only even for zero-variable
+# templates — no way to use templates from scripts or agents)
+# ---------------------------------------------------------------------------
+
+
+def _save_template(runner, name, message, *extra):
+    result = runner.invoke(main, ["template", "save", name, "-m", message, *extra])
+    assert result.exit_code == 0, result.output
+
+
+def test_add_template_with_var_flag_non_interactive(runner):
+    _save_template(
+        runner,
+        "deploy-note",
+        "Deploy {service} to {env}",
+        "--var", "service=Service name",
+        "--var", "env=Environment",
+    )
+    result = runner.invoke(
+        main,
+        ["add", "--template", "deploy-note",
+         "--var", "service=api", "--var", "env=prod", "-q"],
+    )
+    assert result.exit_code == 0, result.output
+    entry = first_json_obj(runner.invoke(main, ["list", "--quiet"]).output)
+    assert entry["message"] == "Deploy api to prod"
+
+
+def test_add_template_missing_var_expands_empty(runner):
+    _save_template(runner, "onevar", "Hello {name} and {other}", "--var", "name=Who")
+    result = runner.invoke(
+        main, ["add", "--template", "onevar", "--var", "name=Alice", "-q"]
+    )
+    assert result.exit_code == 0, result.output
+    entry = first_json_obj(runner.invoke(main, ["list", "--quiet"]).output)
+    assert entry["message"] == "Hello Alice and "
+
+
+def test_add_template_var_requires_template(runner):
+    result = runner.invoke(main, ["add", "msg", "--var", "a=b"])
+    assert result.exit_code == 1
+    assert "--var requires --template" in result.output
+
+
+def test_add_template_var_bad_format_clean_error(runner):
+    _save_template(runner, "fmt", "Hello {name}", "--var", "name=Who")
+    result = runner.invoke(main, ["add", "--template", "fmt", "--var", "noequals"])
+    assert result.exit_code == 1
+    assert "name=value" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_add_template_without_tty_errors_and_mentions_var(runner):
+    _save_template(runner, "ttyt", "Hello {name}", "--var", "name=Who")
+    result = runner.invoke(main, ["add", "--template", "ttyt"])
+    assert result.exit_code == 1
+    assert "--var" in result.output

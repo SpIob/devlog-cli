@@ -429,7 +429,14 @@ def view_save(
             ui.print_error(e)
         sys.exit(1)
 
-    save_view(name, filters, description)
+    from devlog.storage import StorageError
+
+    try:
+        save_view(name, filters, description)
+    except StorageError as exc:
+        from devlog.cli._shared import _handle_storage_error
+
+        _handle_storage_error(exc)
     console.print(ui.success_line(f"Saved view: {name}"))
 
 
@@ -440,13 +447,22 @@ def view_delete(name: str, yes: bool) -> None:
     import sys
 
     from devlog._views_store import delete_view
+    from devlog.storage import StorageError
 
     if not yes:
         if not click.confirm(f"Delete view '{name}'?", default=False):
             ui.print_info("Aborted.")
             return
 
-    if delete_view(name):
+    try:
+        deleted = delete_view(name)
+    except StorageError as exc:
+        from devlog.cli._shared import _handle_storage_error
+
+        _handle_storage_error(exc)
+        return
+
+    if deleted:
         console.print(ui.success_line(f"Deleted view: {name}"))
     else:
         ui.print_error(f"View not found: {name}")

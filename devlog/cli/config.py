@@ -16,6 +16,7 @@ from devlog._config import (
     set_config_value,
     unset_config_value,
 )
+from devlog.storage import StorageError
 
 console = ui.console
 err_console = ui.err_console
@@ -110,7 +111,12 @@ def register(main) -> None:
         else:
             coerced = value
 
-        set_config_value(key, coerced)
+        try:
+            set_config_value(key, coerced)
+        except StorageError as exc:
+            from devlog.cli._shared import _handle_storage_error
+
+            _handle_storage_error(exc)
         console.print(ui.success_line(f"Set {key} = {coerced!r}"))
 
     @config.command("unset")
@@ -121,7 +127,12 @@ def register(main) -> None:
             ui.print_error(f"Unknown config key: {key}")
             sys.exit(1)
 
-        unset_config_value(key)
+        try:
+            unset_config_value(key)
+        except StorageError as exc:
+            from devlog.cli._shared import _handle_storage_error
+
+            _handle_storage_error(exc)
         console.print(ui.success_line(f"Unset {key}"))
 
     @config.command("path")

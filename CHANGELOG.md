@@ -33,6 +33,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error, matching the CLI. Previously a short prefix silently matched
   the first entry — `delete_entry` with an ambiguous prefix could
   delete the wrong entry.
+- **Templates:** template names are validated before any filesystem
+  access. Path separators, leading dots and empty names are rejected
+  with a clean error instead of `template save '../config'`
+  overwriting `<data-dir>/config.json` or `template save 'a/b'`
+  crashing with a raw `FileNotFoundError` traceback; `template delete`
+  and `template edit` are covered by the same rule.
+- **AI commands:** `digest` and `ask` now render the standard
+  corruption panel and exit 2 on a corrupt store instead of a raw
+  `CorruptedStorageError` traceback.
+- **AtomicStore (config.json / views.json):** read-modify-write is now
+  serialized across processes via the journal's `storage_write_lock`
+  on a stable `<name>.lock` sidecar. Previously the lock flocked an
+  inode that `os.replace` immediately swapped out and never covered
+  the load→save window, so parallel `config set` calls could silently
+  lose keys. Contended writes wait (default 10s) then fail with the
+  standard "journal store is busy" error.
+- **`add --template`:** new repeatable `--var name=value` option
+  supplies template variables non-interactively — templates are now
+  usable from scripts and agents, and even work without a TTY. The
+  interactive prompt is only used when no values are given; unset
+  variables expand empty as before.
 - **JSON backend:** concurrent writes no longer lose entries. Mutating
   operations (`add`/`edit`/`delete`/`import`/`restore`/`repair`) now hold
   a cross-process write lock (`<store>.lock` sidecar, re-entrant per

@@ -93,22 +93,27 @@ def get_config_value(key: str, default: Any = None) -> Any:
 
 
 def set_config_value(key: str, value: Any) -> None:
-    """Set a single config value."""
+    """Set a single config value (atomic read-modify-write across processes)."""
     if key not in CONFIG_SCHEMA:
         raise ValueError(f"Unknown config key: {key}. Valid keys: {', '.join(CONFIG_SCHEMA)}")
     store = _get_store()
-    data = store.load()
-    data[key] = value
-    store.save(data)
+
+    def _apply(data: dict[str, Any]) -> dict[str, Any]:
+        data[key] = value
+        return data
+
+    store.update(_apply)
 
 
 def unset_config_value(key: str) -> None:
     """Remove a config key (reverts to default/env)."""
     store = _get_store()
-    data = store.load()
-    if key in data:
-        del data[key]
-        store.save(data)
+
+    def _apply(data: dict[str, Any]) -> dict[str, Any]:
+        data.pop(key, None)
+        return data
+
+    store.update(_apply)
 
 
 def config_as_json() -> str:

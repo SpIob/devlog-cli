@@ -93,9 +93,9 @@ def register(main) -> None:
         from datetime import timedelta
 
         from devlog import _dates, _ollama
+        from devlog.cli._shared import _load_entries_or_exit, _resolve_tz_or_exit
 
-        all_entries = storage.load_entries()
-        from devlog.cli._shared import _resolve_tz_or_exit
+        all_entries = _load_entries_or_exit()
         tz = _resolve_tz_or_exit()
 
         # Resolve date range based on period
@@ -210,8 +210,9 @@ def register(main) -> None:
         """
 
         from devlog import _aiindex
+        from devlog.cli._shared import _load_entries_or_exit
 
-        all_entries = storage.load_entries()
+        all_entries = _load_entries_or_exit()
         if not all_entries:
             if as_json:
                 print(json.dumps({"query": query, "results": []}, ensure_ascii=False))
