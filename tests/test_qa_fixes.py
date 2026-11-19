@@ -591,12 +591,20 @@ def test_atomicstore_parallel_config_sets_keep_all_keys(tmp_path):
         subprocess.Popen(
             [sys.executable, "-c", "from devlog.cli import main; main()",
              "config", "set", key, value],
-            env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         for key, value in pairs
     ]
-    exit_codes = [p.wait(timeout=120) for p in procs]
-    assert all(rc == 0 for rc in exit_codes), exit_codes
+    results = [p.communicate(timeout=120) for p in procs]
+    exit_codes = [p.returncode for p in procs]
+    failures = [
+        (key, rc, out.decode("utf-8", "replace")[-400:], err.decode("utf-8", "replace")[-600:])
+        for (key, _v), rc, (out, err) in zip(pairs, exit_codes, results)
+        if rc != 0
+    ]
+    assert all(rc == 0 for rc in exit_codes), (
+        f"nonzero exits: {exit_codes}; failures={failures}"
+    )
 
     stored = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     for key, _value in pairs:
