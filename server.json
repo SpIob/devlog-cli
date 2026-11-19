@@ -1,0 +1,67 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.SpIob/devlog",
+  "description": "Offline developer journal with local-LLM digests, semantic search, and MCP server.",
+  "repository": {
+    "url": "https://github.com/SpIob/devlog-cli",
+    "source": "github",
+    "id": "1235263619"
+  },
+  "version": "2.0.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "devlog-tool",
+      "version": "2.0.1",
+      "transport": {
+        "type": "stdio"
+      },
+      "entryPoint": "devlog",
+      "entryPointArgs": ["mcp"],
+      "environmentVariables": [
+        {
+          "description": "Storage backend: json (default) or sqlite",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "DEVLOG_BACKEND"
+        },
+        {
+          "description": "Custom data directory for the journal",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "DEVLOG_DATA_DIR"
+        },
+        {
+          "description": "IANA timezone for local date bucketing (e.g., America/New_York)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "DEVLOG_TZ"
+        },
+        {
+          "description": "Ollama server URL for AI features (default: http://127.0.0.1:11434)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "DEVLOG_OLLAMA_HOST"
+        },
+        {
+          "description": "Embedding model for semantic search (default: nomic-embed-text)",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "DEVLOG_EMBED_MODEL"
+        },
+        {
+          "description": "Enable LLM summaries by default (set to '1')",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": false,
+          "name": "DEVLOG_AI"
+        }
+      ]
+    }
+  ]
+}
