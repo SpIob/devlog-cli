@@ -4,6 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/devlog-tool)](https://pypi.org/project/devlog-tool/)
 [![Python](https://img.shields.io/pypi/pyversions/devlog-tool)](https://pypi.org/project/devlog-tool/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/SpIob/devlog-cli/blob/main/LICENSE)
+<!-- mcp-name: io.github.SpIob/devlog -->
 
 A terminal-based developer journal — log, search, filter, and export daily progress entries without leaving the command line. Local-AI powered: weekly digests, semantic search, and an MCP server for AI agents, all fully offline.
 
