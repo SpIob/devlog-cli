@@ -54,6 +54,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   usable from scripts and agents, and even work without a TTY. The
   interactive prompt is only used when no values are given; unset
   variables expand empty as before.
+- **Redirected output:** piped stdout/stderr now use UTF-8 regardless of
+  the platform locale. Previously the first Rich glyph (`✔`/`✘`/`ℹ`)
+  crashed commands with `UnicodeEncodeError` when stdout was a pipe on
+  Western-locale Windows (cp1252), and stalled the renderer under a
+  POSIX `C` locale; `--quiet` JSON piped on Windows was also mojibake.
+  Real console output is unchanged (Rich already speaks the Win32
+  console API there).
 - **JSON backend:** concurrent writes no longer lose entries. Mutating
   operations (`add`/`edit`/`delete`/`import`/`restore`/`repair`) now hold
   a cross-process write lock (`<store>.lock` sidecar, re-entrant per
