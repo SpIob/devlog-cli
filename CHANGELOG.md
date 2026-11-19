@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Date presets:** `--preset this-week` / `this-month` now span the
+  whole current calendar week (Monday-based) / month instead of
+  silently returning only today's entries, and `--preset this-year` /
+  `year-to-date` work — previously they exited 2 with the internal
+  sentinel errors `Invalid date "0y"` / `Invalid date "year-start"`.
+  Affected `list`, `search`, `tail` and `export`; bounds for the
+  already-working presets (`today`, `yesterday`, `last-7d`,
+  `last-30d`) are unchanged.
+- **`config edit`:** the editor's changes are now actually saved.
+  Previously the command opened the editor on a temp copy, discarded
+  the result, and printed success — every edit was silently lost.
+  The edited content must parse as a JSON object (an empty buffer
+  resets to defaults) before it replaces `config.json`.
+- **`$VISUAL` / `$EDITOR` with arguments:** values like `code -w` or
+  `emacsclient -nw` now work. The whole env string used to be passed
+  as a single executable name, so any editor configured with flags
+  failed with "Editor exited abnormally" — for `devlog edit`,
+  `template edit` and `config edit` alike. Single-token editors
+  behave exactly as before.
+- **MCP `get_entry` / `edit_entry` / `delete_entry`:** ambiguous ID
+  prefixes are now refused with a "matches multiple entries" tool
+  error, matching the CLI. Previously a short prefix silently matched
+  the first entry — `delete_entry` with an ambiguous prefix could
+  delete the wrong entry.
 - **JSON backend:** concurrent writes no longer lose entries. Mutating
   operations (`add`/`edit`/`delete`/`import`/`restore`/`repair`) now hold
   a cross-process write lock (`<store>.lock` sidecar, re-entrant per

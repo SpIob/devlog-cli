@@ -258,10 +258,15 @@ def _edit_resolve_message(
 def _edit_in_editor(initial: str) -> str | None:
     """Open $VISUAL / $EDITOR on a temp file containing *initial* text.
 
+    The editor value may carry arguments (``code -w``, ``emacsclient -nw``)
+    and is split shell-style; a single path with no arguments behaves as
+    before. On Windows the split is non-POSIX so backslash paths survive.
+
     Returns the new file content if the editor exits 0 and the file is readable,
     or ``None`` if anything goes wrong.
     """
     import os as _os
+    import shlex
     import subprocess
     import tempfile
 
@@ -285,7 +290,8 @@ def _edit_in_editor(initial: str) -> str | None:
         tmp_path = tf.name
 
     try:
-        rc = subprocess.call([editor, tmp_path])
+        argv = shlex.split(editor, posix=(sys.platform != "win32")) or [editor]
+        rc = subprocess.call([*argv, tmp_path])
         if rc != 0:
             return None
         with open(tmp_path, encoding="utf-8") as fh:

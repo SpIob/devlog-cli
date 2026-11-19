@@ -8,23 +8,28 @@ Each test pins one defect found by the adversarial QA pass:
 - ``repair`` miscounting a non-list ``entries`` value,
 - raw ``UnicodeDecodeError`` traceback on undecodable store bytes,
 - stats rendering "-N days ago" for future-dated entries,
-- ``git sync`` staging the whole enclosing repo instead of the journal,
-- cross-process write serialization (lost-update under parallel writes).
+- `git sync` staging the whole enclosing repo instead of the journal,
+- cross-process write serialization (lost-update under parallel writes),
+- date presets silently wrong (`this-week`/`this-month` = today only)
+  or unusable (`this-year`/`year-to-date` raising on `0y`/`year-start`),
+- `config edit` discarding the editor's output (silent no-op).
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from conftest import active_backend, first_json_obj, requires_json_backend
 
-from devlog import storage
+from devlog import _dates, storage
 from devlog.cli import main
 from devlog.models import Entry
 from devlog.storage import StorageBusyError, storage_write_lock
@@ -385,3 +390,162 @@ def test_git_sync_noop_when_journal_clean(tmp_path, monkeypatch, git_env):
     result = runner.invoke(main, ["git", "sync", "-q"])
     assert result.exit_code == 0, result.output
     assert len(_git(outer, "log", "--oneline").strip().splitlines()) == 2
+
+
+# ---------------------------------------------------------------------------
+# Date presets (P1: this-week/this-month collapsed to today-only;
+# this-year/year-to-date exited 2 on unparseable internal sentinels)
+# ---------------------------------------------------------------------------
+
+# 2026-11-18 is a Wednesday; Monday of that week is 2026-11-16.
+_WED_NOON = datetime.datetime(2026, 11, 18, 12, 0, 0, tzinfo=datetime.timezone.utc)
+
+
+def test_preset_this_week_covers_whole_calendar_week():
+    """`this-week` spans Monday..today, not just today."""
+    since, until = _dates.resolve_preset("this-week", now=_WED_NOON)
+    assert since == datetime.datetime(2026, 11, 16, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    assert until == datetime.datetime(2026, 11, 18, 23, 59, 59, tzinfo=datetime.timezone.utc)
+
+
+def test_preset_this_month_covers_month_start():
+    """`this-month` spans the 1st..today, not just today."""
+    since, _until = _dates.resolve_preset("this-month", now=_WED_NOON)
+    assert since == datetime.datetime(2026, 11, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+
+
+def test_preset_this_year_and_year_to_date_cover_jan_first():
+    """`this-year`/`year-to-date` resolve instead of raising `Invalid date "0y"`."""
+    for name in ("this-year", "year-to-date"):
+        since, until = _dates.resolve_preset(name, now=_WED_NOON)
+        assert since == datetime.datetime(2026, 1, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+        assert until == datetime.datetime(2026, 11, 18, 23, 59, 59, tzinfo=datetime.timezone.utc)
+
+
+def test_preset_rolling_names_keep_previous_bounds():
+    """today/yesterday/last-7d/last-30d semantics are unchanged by the fix."""
+    since, until = _dates.resolve_preset("today", now=_WED_NOON)
+    assert since == datetime.datetime(2026, 11, 18, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    assert until == datetime.datetime(2026, 11, 18, 23, 59, 59, tzinfo=datetime.timezone.utc)
+
+    since, until = _dates.resolve_preset("last-7d", now=_WED_NOON)
+    assert since == datetime.datetime(2026, 11, 11, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    assert until == datetime.datetime(2026, 11, 18, 23, 59, 59, tzinfo=datetime.timezone.utc)
+
+    since, _until = _dates.resolve_preset("yesterday", now=_WED_NOON)
+    assert since == datetime.datetime(2026, 11, 17, 0, 0, 0, tzinfo=datetime.timezone.utc)
+
+
+def test_preset_unknown_name_returns_none_pair():
+    assert _dates.resolve_preset("nope") == (None, None)
+
+
+def test_preset_this_week_honors_local_zone():
+    """Bounds are local-midnight based when a zone is supplied."""
+    ny = ZoneInfo("America/New_York")
+    now_ny = datetime.datetime(2026, 11, 18, 23, 30, tzinfo=ny)
+    since, _until = _dates.resolve_preset("this-week", tz=ny, now=now_ny)
+    # Monday Nov 16 00:00 EST (UTC-5) == 05:00Z.
+    assert since == datetime.datetime(2026, 11, 16, 5, 0, 0, tzinfo=datetime.timezone.utc)
+
+
+def test_list_preset_this_year_runs_clean(runner):
+    """`list --preset this-year` exits 0 and includes a current-year entry.
+
+    CLI-level regression: this preset used to exit 2 with
+    `Invalid date "0y"` leaking an internal sentinel.
+    """
+    seeded = runner.invoke(main, ["add", "ytd entry", "-q"])
+    assert seeded.exit_code == 0, seeded.output
+    result = runner.invoke(main, ["list", "--preset", "this-year", "--quiet"])
+    assert result.exit_code == 0, result.output
+    assert "ytd entry" in result.output
+
+
+# ---------------------------------------------------------------------------
+# config edit (P1: the editor's return value was discarded — every edit
+# was a silent no-op that still printed success)
+# ---------------------------------------------------------------------------
+
+
+def test_config_edit_saves_edited_content(runner, monkeypatch):
+    import devlog.cli._shared as cli_shared
+
+    monkeypatch.setattr(cli_shared, "_edit_in_editor", lambda _initial: '{"theme": "ocean"}')
+    result = runner.invoke(main, ["config", "edit"])
+    assert result.exit_code == 0, result.output
+
+    value = runner.invoke(main, ["config", "get", "theme"])
+    assert value.exit_code == 0, value.output
+    assert value.output.strip() == "ocean"
+
+
+def test_config_edit_rejects_invalid_json_and_keeps_old_file(runner, monkeypatch):
+    import devlog.cli._shared as cli_shared
+
+    monkeypatch.setattr(cli_shared, "_edit_in_editor", lambda _initial: "NOT JSON {{{")
+    result = runner.invoke(main, ["config", "edit"])
+    assert result.exit_code == 1
+    assert "not valid JSON" in result.output
+
+    # The previous on-disk config is untouched.
+    get = runner.invoke(main, ["config", "get", "watch_interval"])
+    assert get.output.strip() == "2"
+
+
+def test_config_edit_non_object_json_rejected(runner, monkeypatch):
+    import devlog.cli._shared as cli_shared
+
+    monkeypatch.setattr(cli_shared, "_edit_in_editor", lambda _initial: '["a", "list"]')
+    result = runner.invoke(main, ["config", "edit"])
+    assert result.exit_code == 1
+    assert "JSON object" in result.output
+
+
+def test_config_edit_editor_abort_leaves_file_alone(runner, monkeypatch):
+    import devlog.cli._shared as cli_shared
+
+    monkeypatch.setattr(cli_shared, "_edit_in_editor", lambda _initial: None)
+    result = runner.invoke(main, ["config", "edit"])
+    assert result.exit_code == 1
+    assert "abnormally" in result.output
+
+
+def test_config_edit_empty_buffer_resets_to_defaults(runner, monkeypatch):
+    import devlog.cli._shared as cli_shared
+
+    runner.invoke(main, ["config", "set", "watch_interval", "9"])
+    monkeypatch.setattr(cli_shared, "_edit_in_editor", lambda _initial: "  \n")
+    result = runner.invoke(main, ["config", "edit"])
+    assert result.exit_code == 0, result.output
+
+    get = runner.invoke(main, ["config", "get", "watch_interval"])
+    assert get.output.strip() == "2"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="uses a #!/bin/sh editor wrapper")
+def test_config_edit_with_editor_arguments(runner, monkeypatch, tmp_path):
+    """An $EDITOR value with arguments (e.g. `code -w`) now works.
+
+    Regression: ``_edit_in_editor`` passed the whole $EDITOR string as
+    ONE executable name, so any editor configured with flags failed
+    with 'Editor exited abnormally' — for ``edit``, ``template edit``
+    and ``config edit`` alike.
+    """
+    wrapper = tmp_path / "fakeed"
+    wrapper.write_text(
+        "#!/bin/sh\n"
+        'target=""\n'
+        'for arg in "$@"; do target="$arg"; done\n'
+        'printf \'{\\n  "theme": "ocean"\\n}\\n\' > "$target"\n',
+        encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+
+    monkeypatch.setenv("VISUAL", f"{wrapper} --wait")
+    result = runner.invoke(main, ["config", "edit"])
+    assert result.exit_code == 0, result.output
+
+    value = runner.invoke(main, ["config", "get", "theme"])
+    assert value.exit_code == 0, value.output
+    assert value.output.strip() == "ocean"

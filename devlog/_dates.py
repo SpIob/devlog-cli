@@ -452,35 +452,94 @@ def _parse_on_date(
 # Date-range presets
 # ---------------------------------------------------------------------------
 
+#: Valid ``--preset`` names. The (since, until) bounds are computed
+#: directly by :func:`resolve_preset` instead of being round-tripped
+#: through :func:`_parse_date_bound` strings — the original string
+#: table mapped ``this-week``/``this-month`` to ``"0w"`` (= today only)
+#: and ``this-year``/``year-to-date`` to unparseable sentinels
+#: (``"0y"`` / ``"year-start"``), which made four of the ten presets
+#: either silently wrong or unusable.
+PRESETS: frozenset[str] = frozenset(
+    {
+        "today",
+        "yesterday",
+        "last-7d",
+        "last-30d",
+        "last-week",
+        "last-month",
+        "this-week",
+        "this-month",
+        "this-year",
+        "year-to-date",
+    }
+)
 
-PRESETS: dict[str, tuple[str | None, str | None]] = {
-    # (since, until) — both relative to today in local zone (or UTC)
-    "today": ("today", "today"),
-    "yesterday": ("yesterday", "yesterday"),
-    "last-7d": ("7d", "today"),
-    "last-30d": ("30d", "today"),
-    "last-week": ("7d", "today"),
-    "last-month": ("30d", "today"),
-    "this-week": ("0w", "today"),
-    "this-month": ("0w", "today"),
-    "this-year": ("0y", "today"),
-    "year-to-date": ("year-start", "today"),
-}
+
+def _start_of_day(day: datetime.date, zone) -> datetime.datetime:
+    """Midnight of *day* in *zone*, converted to UTC."""
+    return datetime.datetime(day.year, day.month, day.day, tzinfo=zone).astimezone(
+        datetime.timezone.utc
+    )
+
+
+def _end_of_day(day: datetime.date, zone) -> datetime.datetime:
+    """23:59:59 of *day* in *zone*, converted to UTC (inclusive upper bound)."""
+    return datetime.datetime(day.year, day.month, day.day, 23, 59, 59, tzinfo=zone).astimezone(
+        datetime.timezone.utc
+    )
 
 
 def resolve_preset(
     preset: str,
     *,
     tz=None,
+    now: datetime.datetime | None = None,
 ) -> tuple[datetime.datetime | None, datetime.datetime | None]:
     """Resolve a date-range preset into (since, until) UTC datetimes.
+
+    Both bounds are inclusive and derive from *today* — the current date
+    in ``zone`` (the caller resolves ``DEVLOG_TZ``; UTC when ``tz`` is
+    ``None``). Pass ``now`` to anchor the computation to a fixed instant
+    (tests); a naive ``now`` is interpreted in ``zone``.
+
+    Semantics:
+        * ``today`` / ``yesterday``      — that single local day.
+        * ``last-7d`` / ``last-30d``     — rolling window ending today
+          (``last-week`` / ``last-month`` are documented aliases).
+        * ``this-week``                  — Monday (ISO) of the current
+          week through today.
+        * ``this-month`` / ``this-year`` — 1st of the current month /
+          year through today; ``year-to-date`` is a synonym of
+          ``this-year``.
 
     Returns (None, None) if preset is unknown (caller should handle).
     """
     if preset not in PRESETS:
         return None, None
 
-    since_raw, until_raw = PRESETS[preset]
-    since_dt = _parse_date_bound(since_raw, tz=tz) if since_raw else None
-    until_dt = _parse_date_bound(until_raw, is_upper=True, tz=tz) if until_raw else None
-    return since_dt, until_dt
+    zone = tz or datetime.timezone.utc
+    if now is None:
+        now = datetime.datetime.now(tz=zone)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=zone)
+    today = now.astimezone(zone).date()
+
+    if preset == "today":
+        return _start_of_day(today, zone), _end_of_day(today, zone)
+    if preset == "yesterday":
+        yest = today - datetime.timedelta(days=1)
+        return _start_of_day(yest, zone), _end_of_day(yest, zone)
+    if preset in ("last-7d", "last-week"):
+        since = today - datetime.timedelta(days=7)
+        return _start_of_day(since, zone), _end_of_day(today, zone)
+    if preset in ("last-30d", "last-month"):
+        since = today - datetime.timedelta(days=30)
+        return _start_of_day(since, zone), _end_of_day(today, zone)
+
+    week_start = today - datetime.timedelta(days=today.weekday())  # Monday (ISO)
+    if preset == "this-week":
+        return _start_of_day(week_start, zone), _end_of_day(today, zone)
+    if preset == "this-month":
+        return _start_of_day(today.replace(day=1), zone), _end_of_day(today, zone)
+    # this-year / year-to-date — the same Jan 1 → today range.
+    return _start_of_day(today.replace(month=1, day=1), zone), _end_of_day(today, zone)

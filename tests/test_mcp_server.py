@@ -201,6 +201,79 @@ class TestUnknownTool:
         assert response["result"]["isError"] is True
 
 
+class TestEntryIdResolution:
+    """get/edit/delete must refuse ambiguous prefixes, not silently pick one.
+
+    Regression: the three id-based tools used raw ``startswith()`` and
+    returned the FIRST match — a short prefix could edit or delete the
+    wrong entry (the CLI refuses the same prefix as ambiguous).
+    """
+
+    AMBIGUOUS = "aaaaaaaa"
+
+    def _seed_pair(self, seed_entry):
+        seed_entry(
+            "aaaaaaaa-0000-4000-8000-000000000001",
+            "victim-A",
+            "2026-10-27T09:15:00Z",
+            ["x"],
+        )
+        seed_entry(
+            "aaaaaaaa-0000-4000-8000-000000000002",
+            "victim-B",
+            "2026-10-27T10:15:00Z",
+            ["x"],
+        )
+
+    def test_get_entry_ambiguous_prefix_is_tool_error(self, seed_entry):
+        self._seed_pair(seed_entry)
+        response = _mcp_server.handle_message(_call_tool("get_entry", {"id": self.AMBIGUOUS}))
+        assert response is not None
+        assert response["result"]["isError"] is True
+        assert "matches multiple entries" in _result_text(response)
+
+    def test_delete_entry_ambiguous_prefix_is_refused(self, seed_entry):
+        self._seed_pair(seed_entry)
+        response = _mcp_server.handle_message(
+            _call_tool("delete_entry", {"id": self.AMBIGUOUS})
+        )
+        assert response is not None
+        assert response["result"]["isError"] is True
+        assert len(storage.load_entries()) == 2  # nothing was deleted
+
+    def test_edit_entry_ambiguous_prefix_is_refused(self, seed_entry):
+        self._seed_pair(seed_entry)
+        response = _mcp_server.handle_message(
+            _call_tool("edit_entry", {"id": self.AMBIGUOUS, "message": "hijacked"})
+        )
+        assert response is not None
+        assert response["result"]["isError"] is True
+        assert {e.message for e in storage.load_entries()} == {"victim-A", "victim-B"}
+
+    def test_exact_id_still_resolves(self, seed_entry):
+        self._seed_pair(seed_entry)
+        response = _mcp_server.handle_message(
+            _call_tool("get_entry", {"id": "aaaaaaaa-0000-4000-8000-000000000002"})
+        )
+        assert response is not None
+        assert "error" not in response
+        assert json.loads(_result_text(response))["message"] == "victim-B"
+
+    def test_unique_prefix_still_resolves(self, seed_entry):
+        seed_entry("cccccccc-0000-4000-8000-000000000009", "solo", "2026-10-27T09:15:00Z")
+        response = _mcp_server.handle_message(_call_tool("get_entry", {"id": "cccccccc"}))
+        assert response is not None
+        assert "error" not in response
+        assert json.loads(_result_text(response))["message"] == "solo"
+
+    def test_nonexistent_id_reports_tool_error(self, seed_entry):
+        seed_entry("e1", "one", "2026-10-27T09:15:00Z")
+        response = _mcp_server.handle_message(_call_tool("get_entry", {"id": "zzzzzzzz"}))
+        assert response is not None
+        assert response["result"]["isError"] is True
+        assert "not found" in _result_text(response).lower()
+
+
 # ---------------------------------------------------------------------------
 # stdio transport (end-to-end through the real loop)
 # ---------------------------------------------------------------------------

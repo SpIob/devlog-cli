@@ -11,6 +11,10 @@ Tools (all backed by the storage layer, so both backends work):
 - ``search_entries`` — case-insensitive substring search
 - ``add_entry``      — append an entry (message required, tags optional)
 - ``get_stats``      — totals, date range, top tags
+- ``get_entry``      — fetch one entry by exact id or unique prefix
+- ``edit_entry``     — rewrite an entry's message and/or tags
+- ``delete_entry``   — remove an entry by exact id or unique prefix
+- ``list_tags``      — every tag with usage counts
 
 Every response is a JSON string in a single text content block;
 tool failures use the MCP ``isError`` convention instead of crashing
@@ -37,6 +41,28 @@ _INVALID_REQUEST = -32603
 # ---------------------------------------------------------------------------
 # Tool implementations (storage-backed; no CLI/render dependency)
 # ---------------------------------------------------------------------------
+
+
+def _resolve_entry_or_error(entries: list, entry_id: str):
+    """Resolve an exact id or a unique short prefix; raise on ambiguity.
+
+    Mirrors the CLI's resolution rules (``storage.find_entry_by_id``):
+    an ambiguous prefix is an error — never a silent first-match, which
+    would let ``delete_entry`` remove the wrong entry.
+    """
+    from devlog import storage
+
+    match = storage.find_entry_by_id(entries, entry_id)
+    if match is not None:
+        return match
+    candidates = storage.find_entry_id_prefix_matches(entries, entry_id)
+    if len(candidates) > 1:
+        shorts = ", ".join(e.short_id for e in candidates)
+        raise ValueError(
+            f'ID prefix "{entry_id}" matches multiple entries: {shorts}. '
+            "Use a longer prefix."
+        )
+    return None
 
 
 def _tool_list_entries(arguments: dict) -> str:
@@ -150,7 +176,7 @@ def _tool_get_entry(arguments: dict) -> str:
     if not isinstance(entry_id, str) or not entry_id:
         raise ValueError("get_entry requires a non-empty 'id' string")
     entries = storage.load_entries()
-    entry = next((e for e in entries if e.id == entry_id or e.id.startswith(entry_id)), None)
+    entry = _resolve_entry_or_error(entries, entry_id)
     if entry is None:
         raise ValueError(f"Entry not found: {entry_id}")
     return json.dumps(
@@ -173,7 +199,7 @@ def _tool_edit_entry(arguments: dict) -> str:
         raise ValueError("edit_entry requires a non-empty 'id' string")
 
     entries = storage.load_entries()
-    entry = next((e for e in entries if e.id == entry_id or e.id.startswith(entry_id)), None)
+    entry = _resolve_entry_or_error(entries, entry_id)
     if entry is None:
         raise ValueError(f"Entry not found: {entry_id}")
 
@@ -213,7 +239,7 @@ def _tool_delete_entry(arguments: dict) -> str:
         raise ValueError("delete_entry requires a non-empty 'id' string")
 
     entries = storage.load_entries()
-    entry = next((e for e in entries if e.id == entry_id or e.id.startswith(entry_id)), None)
+    entry = _resolve_entry_or_error(entries, entry_id)
     if entry is None:
         raise ValueError(f"Entry not found: {entry_id}")
 

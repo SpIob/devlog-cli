@@ -134,7 +134,7 @@ def register(main) -> None:
 
     @config.command("edit")
     def config_edit() -> None:
-        """Open the config file in $EDITOR."""
+        """Open the config file in $EDITOR and save the edited content."""
         from devlog._store import AtomicStore
         from devlog.cli._shared import _edit_in_editor
 
@@ -142,5 +142,31 @@ def register(main) -> None:
         store._path.parent.mkdir(parents=True, exist_ok=True)
         store._path.touch(exist_ok=True)
 
-        _edit_in_editor(store._path.read_text(encoding="utf-8"))
-        console.print(ui.success_line(f"Edit {store._path} in your editor and save."))
+        edited = _edit_in_editor(store._path.read_text(encoding="utf-8"))
+        if edited is None:
+            ui.print_error("Editor exited abnormally; no changes saved.")
+            sys.exit(1)
+
+        # An empty buffer resets to defaults (AtomicStore treats a
+        # blank/missing file the same way); anything else must parse to
+        # a JSON object before it is allowed to touch the file — a
+        # typo'd save would otherwise be silently ignored on every
+        # later read, which reads as "config randomly reset".
+        if not edited.strip():
+            new_data: dict[str, Any] = {}
+        else:
+            try:
+                new_data = json.loads(edited)
+            except json.JSONDecodeError as exc:
+                ui.print_error(f"Config file is not valid JSON: {exc}")
+                ui.print_info("No changes were saved.")
+                sys.exit(1)
+            if not isinstance(new_data, dict):
+                ui.print_error(
+                    "Config file must contain a JSON object (keys mapping to values)."
+                )
+                ui.print_info("No changes were saved.")
+                sys.exit(1)
+
+        store.save(new_data)
+        console.print(ui.success_line(f"Saved config: {store._path}"))
