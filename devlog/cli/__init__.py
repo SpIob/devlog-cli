@@ -49,6 +49,31 @@ __all__ = ["COMMANDS", "main"]
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+
+def _force_utf8_stdio() -> None:
+    """Use UTF-8 for redirected stdout/stderr regardless of locale.
+
+    Rich output (✔/✘/ℹ) and the ``--quiet`` JSON contract are UTF-8, but
+    a *piped* stream inherits the locale codec — cp1252 on Western
+    Windows, ASCII under ``LC_ALL=C`` — so the first glyph write either
+    crashes with ``UnicodeEncodeError`` (Windows) or stalls the renderer
+    (Rich retry under a POSIX C locale). Reconfigure redirected streams
+    to UTF-8 before anything prints. Real consoles are left alone: Rich
+    speaks the Win32 console API there, and POSIX terminals are already
+    UTF-8.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if stream is None or stream.isatty() or not hasattr(stream, "reconfigure"):
+            continue
+        encoding = (getattr(stream, "encoding", "") or "").lower().replace("-", "")
+        if encoding == "utf8":
+            continue
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):  # pragma: no cover - stream refuses
+            pass
+
+
 @click.group(invoke_without_command=True)
 @click.option("--version", is_flag=True, help="Show version and exit.")
 @click.option(
@@ -58,6 +83,7 @@ __all__ = ["COMMANDS", "main"]
 @click.pass_context
 def main(ctx: click.Context, version: bool, interactive: bool) -> None:
     """devlog — a terminal-based developer journal."""
+    _force_utf8_stdio()
     if version:
         ui.version_banner()
         ctx.exit(0)
