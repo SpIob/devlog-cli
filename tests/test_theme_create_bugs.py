@@ -4,6 +4,7 @@ These tests guard against the bugs found during manual testing in
 the round-1..6 audit. They assert the *fixed* behavior so a future
 regression will surface as a test failure.
 """
+
 import os
 import stat
 import sys
@@ -32,8 +33,7 @@ def test_bug1_from_builtin_seeds_meta_name(tmp_path):
     out = tmp_path / "out.toml"
     result = runner.invoke(
         main,
-        ["theme", "create", "--from", "dracula", "--no-install",
-         "--output", str(out)],
+        ["theme", "create", "--from", "dracula", "--no-install", "--output", str(out)],
         input="\n" * 28,
     )
     assert result.exit_code == 0, result.output
@@ -46,8 +46,7 @@ def test_bug1_from_builtin_seeds_meta_description(tmp_path):
     out = tmp_path / "out.toml"
     result = runner.invoke(
         main,
-        ["theme", "create", "--from", "monokai", "--no-install",
-         "--output", str(out)],
+        ["theme", "create", "--from", "monokai", "--no-install", "--output", str(out)],
         input="\n" * 28,
     )
     assert result.exit_code == 0, result.output
@@ -60,8 +59,17 @@ def test_bug1_explicit_name_overrides_builtin_seed(tmp_path):
     out = tmp_path / "out.toml"
     result = runner.invoke(
         main,
-        ["theme", "create", "--from", "dracula", "--name", "my-dracula",
-         "--no-install", "--output", str(out)],
+        [
+            "theme",
+            "create",
+            "--from",
+            "dracula",
+            "--name",
+            "my-dracula",
+            "--no-install",
+            "--output",
+            str(out),
+        ],
         input="\n" * 28,
     )
     assert result.exit_code == 0, result.output
@@ -112,8 +120,7 @@ def test_bug4_cli_wizard_with_backslash_name_writes_valid_toml(tmp_path):
     out = tmp_path / "out.toml"
     result = runner.invoke(
         main,
-        ["theme", "create", "--no-install", "--output", str(out),
-         "--name", "back\\slash"],
+        ["theme", "create", "--no-install", "--output", str(out), "--name", "back\\slash"],
         input="\n" * 28,
     )
     assert result.exit_code == 0, result.output
@@ -190,8 +197,7 @@ def test_bug9_output_write_failure_no_traceback(tmp_path):
         runner = CliRunner()
         result = runner.invoke(
             main,
-            ["theme", "create", "--no-install",
-             "--output", str(ro_dir / "out.toml")],
+            ["theme", "create", "--no-install", "--output", str(ro_dir / "out.toml")],
             input="\n" * 28,
         )
         assert result.exit_code != 0
@@ -225,8 +231,7 @@ def test_bug13_wizard_shows_default_value(tmp_path):
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["theme", "create", "--no-install",
-         "--output", str(tmp_path / "out.toml")],
+        ["theme", "create", "--no-install", "--output", str(tmp_path / "out.toml")],
         input="\n" * 28,
     )
     # First prompt is error_border with default "red". The default
@@ -267,8 +272,7 @@ def test_bug16_wizard_with_whitespace_default_recovers(monkeypatch, tmp_path):
     runner = CliRunner()
     result = runner.invoke(
         main,
-        ["theme", "create", "--no-install",
-         "--output", str(tmp_path / "out.toml")],
+        ["theme", "create", "--no-install", "--output", str(tmp_path / "out.toml")],
         input="\n" * 28,
     )
     assert result.exit_code == 0, result.output

@@ -1,5 +1,4 @@
-"""devlog.ui.banner — The ``--version`` and root help banners.
-"""
+"""devlog.ui.banner — The ``--version`` and root help banners."""
 
 from __future__ import annotations
 
@@ -24,6 +23,7 @@ from devlog.ui.layout import (
 # ---------------------------------------------------------------------------
 # Version banner / root help
 # ---------------------------------------------------------------------------
+
 
 def version_banner() -> None:
     """Print a styled version line for ``--version``.
@@ -55,6 +55,7 @@ def root_banner(commands: Sequence[tuple[str, str]] | None = None) -> None:
     """
     if commands is None:
         from devlog._commands import COMMANDS as _COMMANDS
+
         commands = _COMMANDS
 
     console.print(

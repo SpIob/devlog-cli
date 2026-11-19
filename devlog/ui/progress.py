@@ -1,5 +1,4 @@
-"""devlog.ui.progress — The export progress bar.
-"""
+"""devlog.ui.progress — The export progress bar."""
 
 from __future__ import annotations
 
@@ -22,6 +21,7 @@ from devlog.ui._base import (
 # ---------------------------------------------------------------------------
 # Export progress
 # ---------------------------------------------------------------------------
+
 
 def export_progress(total: int) -> Progress:
     """Return a configured Rich ``Progress`` for the export command.

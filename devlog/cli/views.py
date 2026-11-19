@@ -34,9 +34,8 @@ err_console = ui.err_console
 # today
 # ---------------------------------------------------------------------------
 
-@click.option(
-    "--limit", "-n", type=int, default=50, show_default=True, help="Max entries to show."
-)
+
+@click.option("--limit", "-n", type=int, default=50, show_default=True, help="Max entries to show.")
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
 def today(limit: int, quiet: bool) -> None:
     """Show entries created today, newest first.
@@ -76,9 +75,8 @@ def today(limit: int, quiet: bool) -> None:
 # yesterday
 # ---------------------------------------------------------------------------
 
-@click.option(
-    "--limit", "-n", type=int, default=50, show_default=True, help="Max entries to show."
-)
+
+@click.option("--limit", "-n", type=int, default=50, show_default=True, help="Max entries to show.")
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
 def yesterday(limit: int, quiet: bool) -> None:
     """Show entries created yesterday, newest first.
@@ -119,12 +117,11 @@ def yesterday(limit: int, quiet: bool) -> None:
 # week
 # ---------------------------------------------------------------------------
 
+
 @click.option(
     "--limit", "-n", type=int, default=100, show_default=True, help="Max entries to show."
 )
-@click.option(
-    "--quiet", "-q", is_flag=True, help="Output raw JSON lines."
-)
+@click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
 @click.option(
     "--day",
     "anchor",
@@ -167,15 +164,10 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
         return
 
     if total == 0:
-        ui.print_info(
-            f"No entries in the last 7 days ({start_date} to {end_date})."
-        )
+        ui.print_info(f"No entries in the last 7 days ({start_date} to {end_date}).")
         return
 
-    title = (
-        f"Week · {start_date} → {end_date} · {total} "
-        f"{ui.plural_noun(total, 'entry')}"
-    )
+    title = f"Week · {start_date} → {end_date} · {total} {ui.plural_noun(total, 'entry')}"
     table = ui.entries_table(shown, total, title=title)
     console.print(table)
 
@@ -184,10 +176,9 @@ def week(limit: int, quiet: bool, anchor: str | None) -> None:
 # on
 # ---------------------------------------------------------------------------
 
+
 @click.argument("date", required=True)
-@click.option(
-    "--limit", "-n", type=int, default=50, show_default=True, help="Max entries to show."
-)
+@click.option("--limit", "-n", type=int, default=50, show_default=True, help="Max entries to show.")
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
 def on(date: str, limit: int, quiet: bool) -> None:
     """Show entries for a specific date.
@@ -196,7 +187,7 @@ def on(date: str, limit: int, quiet: bool) -> None:
     - "today" / "yesterday" (local zone when DEVLOG_TZ is set)
     - YYYY-MM-DD (absolute date)
     - Nd (relative days ago, e.g. "3d")
-    
+
     The bucket is computed in the DEVLOG_TZ zone when set, otherwise UTC.
     """
     _require_positive_int("--limit", limit)
@@ -205,7 +196,7 @@ def on(date: str, limit: int, quiet: bool) -> None:
 
     tz = _resolve_tz_or_exit()
     target_date = _dates._parse_on_date(date, tz=tz)
-    
+
     if target_date is None:
         ui.print_error(f"Invalid date: {date}")
         sys.exit(2)
@@ -233,6 +224,7 @@ def on(date: str, limit: int, quiet: bool) -> None:
 # ---------------------------------------------------------------------------
 # calendar
 # ---------------------------------------------------------------------------
+
 
 @click.option(
     "--year",
@@ -278,11 +270,26 @@ def calendar(year: int | None, quiet: bool) -> None:
 # tail
 # ---------------------------------------------------------------------------
 
+
 @click.argument("n", required=False, default=5, type=int)
 @click.option("--tag", "-t", "tags", multiple=True, help="Filter by tag (AND).")
 @click.option(
     "--preset",
-    type=click.Choice(["today", "yesterday", "last-7d", "last-30d", "last-week", "last-month", "this-week", "this-month", "this-year", "year-to-date"], case_sensitive=False),
+    type=click.Choice(
+        [
+            "today",
+            "yesterday",
+            "last-7d",
+            "last-30d",
+            "last-week",
+            "last-month",
+            "this-week",
+            "this-month",
+            "this-year",
+            "year-to-date",
+        ],
+        case_sensitive=False,
+    ),
     default=None,
     help="Date-range preset (overrides --since/--until).",
 )
@@ -395,7 +402,9 @@ def view_show(name: str, quiet: bool) -> None:
 @click.option("--since", default=None, help="Only show entries on/after this date.")
 @click.option("--until", default=None, help="Only show entries on/before this date.")
 @click.option("--limit", "-n", type=int, default=None, help="Max entries to show.")
-@click.option("--sort", type=click.Choice(["created_at", "updated_at"]), default=None, help="Sort field.")
+@click.option(
+    "--sort", type=click.Choice(["created_at", "updated_at"]), default=None, help="Sort field."
+)
 @click.option("--description", "-d", default="", help="Human-readable description.")
 def view_save(
     name: str,

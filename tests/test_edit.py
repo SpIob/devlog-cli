@@ -99,9 +99,7 @@ def test_edit_no_op_with_quiet_suppresses_noop_message(runner, data_dir):
     other success-path message.
     """
     sid = _add(runner, "Same", "backend")
-    result = runner.invoke(
-        main, ["edit", sid, "--message", "Same", "--tag", "backend", "--quiet"]
-    )
+    result = runner.invoke(main, ["edit", sid, "--message", "Same", "--tag", "backend", "--quiet"])
     assert result.exit_code == 0
     assert "No changes" not in result.output
     assert result.output.strip() == ""
@@ -165,6 +163,7 @@ def test_edit_not_found(runner):
 def test_edit_no_editor_configured(runner, data_dir, monkeypatch):
     """No $VISUAL / $EDITOR / fallback available → exit 1 with helpful msg."""
     import shutil
+
     monkeypatch.delenv("VISUAL", raising=False)
     monkeypatch.delenv("EDITOR", raising=False)
     monkeypatch.setenv("DEVLOG_ALLOW_EDITOR_IN_PIPE", "1")  # bypass TTY guard
@@ -196,9 +195,7 @@ def test_edit_rejects_whitespace_only_message_flag(runner, data_dir):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX editor fixtures (.sh scripts)")
-def test_edit_editor_path_can_produce_empty_message(
-    runner, data_dir, tmp_path, monkeypatch
-):
+def test_edit_editor_path_can_produce_empty_message(runner, data_dir, tmp_path, monkeypatch):
     """When the user uses the editor (no -m flag), an empty body is
     allowed: a user might intentionally save a blank note via the
     editor. This guards against over-restricting the editor flow when
@@ -239,9 +236,7 @@ def test_edit_no_flags_in_non_tty_errors(runner, data_dir, monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX editor fixtures (.sh scripts)")
-def test_edit_no_flags_in_non_tty_with_force_env_works(
-    runner, data_dir, tmp_path, monkeypatch
-):
+def test_edit_no_flags_in_non_tty_with_force_env_works(runner, data_dir, tmp_path, monkeypatch):
     """Setting DEVLOG_ALLOW_EDITOR_IN_PIPE=1 lets scripts drive the
     editor in a pipe (the previous behavior).
     """
@@ -276,9 +271,7 @@ def test_edit_at_with_yes_changes_created_at(runner, data_dir):
     """`edit --at … --yes` changes created_at and updates updated_at."""
     sid = _add(runner, "msg")
     original_created = storage.load_entries()[0].created_at
-    result = runner.invoke(
-        main, ["edit", sid, "--at", "2025-01-15T09:00:00Z", "--yes"]
-    )
+    result = runner.invoke(main, ["edit", sid, "--at", "2025-01-15T09:00:00Z", "--yes"])
     assert result.exit_code == 0
     entry = storage.load_entries()[0]
     assert entry.created_at == "2025-01-15T09:00:00Z"
@@ -287,6 +280,7 @@ def test_edit_at_with_yes_changes_created_at(runner, data_dir):
     assert entry.updated_at is not None
     # updated_at is recent (within the last 60 seconds).
     from datetime import datetime, timedelta, timezone
+
     upd = datetime.strptime(entry.updated_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     assert (datetime.now(tz=timezone.utc) - upd) < timedelta(seconds=60)
 
@@ -294,11 +288,13 @@ def test_edit_at_with_yes_changes_created_at(runner, data_dir):
 def test_edit_at_prompts_and_decline_aborts(runner, data_dir):
     """Without --yes, a `--at` change prompts; declining aborts."""
     from click.testing import CliRunner
+
     runner = CliRunner(env={"DEVLOG_DATA_DIR": str(data_dir)})
     sid = _add(runner, "msg")
     # Decline the prompt by feeding 'n' to stdin.
     result = runner.invoke(
-        main, ["edit", sid, "--at", "2025-01-15T09:00:00Z"],
+        main,
+        ["edit", sid, "--at", "2025-01-15T09:00:00Z"],
         input="n",
     )
     assert result.exit_code == 0
@@ -312,7 +308,8 @@ def test_edit_at_prompts_and_accept_writes(runner, data_dir):
     """Without --yes, accepting the prompt with 'y' writes the change."""
     sid = _add(runner, "msg")
     result = runner.invoke(
-        main, ["edit", sid, "--at", "2025-01-15T09:00:00Z"],
+        main,
+        ["edit", sid, "--at", "2025-01-15T09:00:00Z"],
         input="y",
     )
     assert result.exit_code == 0
@@ -322,6 +319,7 @@ def test_edit_at_prompts_and_accept_writes(runner, data_dir):
 def test_edit_at_relative(runner, data_dir):
     """`--at 2h` works on edit too."""
     from datetime import datetime, timedelta, timezone
+
     sid = _add(runner, "msg")
     before = datetime.now(tz=timezone.utc)
     result = runner.invoke(main, ["edit", sid, "--at", "2h", "--yes"])
@@ -364,4 +362,3 @@ def test_edit_at_same_value_is_noop(runner, data_dir):
     assert "No changes" in result.output
     # Storage unchanged.
     assert storage.load_entries()[0].created_at == current
-

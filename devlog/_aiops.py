@@ -113,9 +113,7 @@ def rank_by_query(
     Returns ``(id, score)`` pairs sorted by descending cosine similarity.
     *top* truncates the result when given.
     """
-    scored = [
-        (item_id, cosine_similarity(query_vec, vec)) for item_id, vec in vectors.items()
-    ]
+    scored = [(item_id, cosine_similarity(query_vec, vec)) for item_id, vec in vectors.items()]
     scored.sort(key=lambda pair: pair[1], reverse=True)
     if top is not None:
         scored = scored[:top]

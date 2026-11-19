@@ -45,9 +45,7 @@ class Entry:
                 names the first missing field).
         """
         if not isinstance(item, dict):
-            raise TypeError(
-                f"Entry payload must be a dict, got {type(item).__name__}"
-            )
+            raise TypeError(f"Entry payload must be a dict, got {type(item).__name__}")
         missing = [k for k in ("id", "message", "created_at") if k not in item]
         if missing:
             raise ValueError(f"Entry is missing required field(s): {', '.join(missing)}")

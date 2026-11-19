@@ -26,7 +26,7 @@ from devlog.models import Entry
 # Loose bounds chosen to fail loudly on real regressions but tolerate
 # noisy CI machines. The spec calls for "instant" (sub-second) on 1k
 # entries; we allow some headroom.
-INSTANT_THRESHOLD_S = 2.0      # 1k entries
+INSTANT_THRESHOLD_S = 2.0  # 1k entries
 ACCEPTABLE_THRESHOLD_S = 15.0  # 10k entries — should still feel snappy
 
 
@@ -55,7 +55,7 @@ def seeded_journal(
             {
                 "id": f"{i:08d}-aaaa-bbbb-cccc-{i:012d}",
                 "message": f"Entry number {i}: worked on the auth flow refactor "
-                           f"and fixed flaky test {i}.",
+                f"and fixed flaky test {i}.",
                 "tags": ["backend"] if i % 2 == 0 else ["backend", "bugfix"],
                 "created_at": ts,
                 "updated_at": None,
@@ -68,6 +68,7 @@ def seeded_journal(
     )
     # Also seed SQLite if the backend is active
     import os
+
     if os.environ.get("DEVLOG_BACKEND", "json").lower() == "sqlite":
         sqlite_path = tmp_path / "entries.db"
         # Remove any existing SQLite file
@@ -75,6 +76,7 @@ def seeded_journal(
             sqlite_path.unlink()
         # Import entries into SQLite
         import sqlite3
+
         conn = sqlite3.connect(sqlite_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
@@ -114,7 +116,7 @@ def seeded_journal(
             )
         conn.commit()
         conn.close()
-    
+
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path))
     return tmp_path
 
@@ -133,8 +135,7 @@ def test_load_entries_1k_is_instant(seeded_journal: Path) -> None:
     elapsed = time.perf_counter() - t0
     assert len(entries) == 1000
     assert elapsed < INSTANT_THRESHOLD_S, (
-        f"load_entries took {elapsed:.3f}s on 1000 entries; "
-        f"expected < {INSTANT_THRESHOLD_S}s"
+        f"load_entries took {elapsed:.3f}s on 1000 entries; expected < {INSTANT_THRESHOLD_S}s"
     )
 
 
@@ -147,8 +148,7 @@ def test_load_entries_10k_acceptable(seeded_journal: Path) -> None:
     elapsed = time.perf_counter() - t0
     assert len(entries) == 10_000
     assert elapsed < ACCEPTABLE_THRESHOLD_S, (
-        f"load_entries took {elapsed:.3f}s on 10000 entries; "
-        f"expected < {ACCEPTABLE_THRESHOLD_S}s"
+        f"load_entries took {elapsed:.3f}s on 10000 entries; expected < {ACCEPTABLE_THRESHOLD_S}s"
     )
 
 
@@ -166,8 +166,7 @@ def test_list_command_1k_instant(seeded_journal: Path) -> None:
     elapsed = time.perf_counter() - t0
     assert result.exit_code == 0, result.output
     assert elapsed < INSTANT_THRESHOLD_S, (
-        f"`list --quiet` on 1000 entries took {elapsed:.3f}s; "
-        f"expected < {INSTANT_THRESHOLD_S}s"
+        f"`list --quiet` on 1000 entries took {elapsed:.3f}s; expected < {INSTANT_THRESHOLD_S}s"
     )
 
 
@@ -180,8 +179,7 @@ def test_list_command_10k_acceptable(seeded_journal: Path) -> None:
     elapsed = time.perf_counter() - t0
     assert result.exit_code == 0, result.output
     assert elapsed < ACCEPTABLE_THRESHOLD_S, (
-        f"`list --quiet` on 10000 entries took {elapsed:.3f}s; "
-        f"expected < {ACCEPTABLE_THRESHOLD_S}s"
+        f"`list --quiet` on 10000 entries took {elapsed:.3f}s; expected < {ACCEPTABLE_THRESHOLD_S}s"
     )
 
 
@@ -195,8 +193,7 @@ def test_search_command_1k_instant(seeded_journal: Path) -> None:
     elapsed = time.perf_counter() - t0
     assert result.exit_code == 0, result.output
     assert elapsed < INSTANT_THRESHOLD_S, (
-        f"`search auth` on 1000 entries took {elapsed:.3f}s; "
-        f"expected < {INSTANT_THRESHOLD_S}s"
+        f"`search auth` on 1000 entries took {elapsed:.3f}s; expected < {INSTANT_THRESHOLD_S}s"
     )
 
 
@@ -209,8 +206,7 @@ def test_search_command_10k_acceptable(seeded_journal: Path) -> None:
     elapsed = time.perf_counter() - t0
     assert result.exit_code == 0, result.output
     assert elapsed < ACCEPTABLE_THRESHOLD_S, (
-        f"`search auth` on 10000 entries took {elapsed:.3f}s; "
-        f"expected < {ACCEPTABLE_THRESHOLD_S}s"
+        f"`search auth` on 10000 entries took {elapsed:.3f}s; expected < {ACCEPTABLE_THRESHOLD_S}s"
     )
 
 
@@ -269,9 +265,7 @@ def test_tags_command_1k_instant(seeded_journal: Path) -> None:
     result = runner.invoke(main, ["tags", "--quiet"])
     elapsed = time.perf_counter() - t0
     assert result.exit_code == 0, result.output
-    assert elapsed < INSTANT_THRESHOLD_S, (
-        f"`tags` on 1000 entries took {elapsed:.3f}s"
-    )
+    assert elapsed < INSTANT_THRESHOLD_S, f"`tags` on 1000 entries took {elapsed:.3f}s"
 
 
 @pytest.mark.benchmark
@@ -282,9 +276,7 @@ def test_tags_command_10k_acceptable(seeded_journal: Path) -> None:
     result = runner.invoke(main, ["tags", "--quiet"])
     elapsed = time.perf_counter() - t0
     assert result.exit_code == 0, result.output
-    assert elapsed < ACCEPTABLE_THRESHOLD_S, (
-        f"`tags` on 10000 entries took {elapsed:.3f}s"
-    )
+    assert elapsed < ACCEPTABLE_THRESHOLD_S, f"`tags` on 10000 entries took {elapsed:.3f}s"
 
 
 @pytest.mark.benchmark
@@ -335,6 +327,7 @@ def test_load_scales_linearly(
     Sizes are chosen to be large enough (≥8k) that we stay out of
     the warm-up / startup noise floor where any microbenchmark lies.
     """
+
     def seed(n: int, label: str) -> Path:
         base = datetime(2024, 1, 1, tzinfo=timezone.utc)
         entries = [
@@ -342,18 +335,14 @@ def test_load_scales_linearly(
                 "id": f"{i:08d}-aaaa-bbbb-cccc-{i:012d}",
                 "message": f"Entry {i}: short message.",
                 "tags": [],
-                "created_at": (
-                    base + timedelta(minutes=i)
-                ).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "created_at": (base + timedelta(minutes=i)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "updated_at": None,
             }
             for i in range(n)
         ]
         d = tmp_path / label
         d.mkdir()
-        (d / "entries.json").write_text(
-            json.dumps({"entries": entries}), encoding="utf-8"
-        )
+        (d / "entries.json").write_text(json.dumps({"entries": entries}), encoding="utf-8")
         return d
 
     d_a = seed(size_a, "small")
@@ -386,8 +375,8 @@ def test_load_scales_linearly(
     ratio = per_entry_b / max(per_entry_a, 1e-9)
     assert ratio < 3.0, (
         f"load scaling is super-linear: "
-        f"{size_a} -> {per_entry_a*1e6:.1f}µs/entry, "
-        f"{size_b} -> {per_entry_b*1e6:.1f}µs/entry (ratio {ratio:.2f}x)"
+        f"{size_a} -> {per_entry_a * 1e6:.1f}µs/entry, "
+        f"{size_b} -> {per_entry_b * 1e6:.1f}µs/entry (ratio {ratio:.2f}x)"
     )
 
 

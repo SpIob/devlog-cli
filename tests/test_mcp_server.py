@@ -37,9 +37,7 @@ def _result_text(response: dict) -> str:
 
 class TestProtocol:
     def test_initialize_returns_protocol_version_and_server_info(self):
-        response = _mcp_server.handle_message(
-            _rpc("initialize", {"protocolVersion": "2024-11-05"})
-        )
+        response = _mcp_server.handle_message(_rpc("initialize", {"protocolVersion": "2024-11-05"}))
         assert response["jsonrpc"] == "2.0"
         assert response["id"] == 1
         result = response["result"]
@@ -58,9 +56,7 @@ class TestProtocol:
 
     def test_notification_returns_none(self):
         assert (
-            _mcp_server.handle_message(
-                {"jsonrpc": "2.0", "method": "notifications/initialized"}
-            )
+            _mcp_server.handle_message({"jsonrpc": "2.0", "method": "notifications/initialized"})
             is None
         )
 
@@ -121,36 +117,28 @@ class TestListEntriesTool:
     def test_tag_filter_applies(self, seed_entry):
         seed_entry("e1", "one", "2026-10-27T09:15:00Z", ["a"])
         seed_entry("e2", "two", "2026-10-27T10:15:00Z", ["b"])
-        response = _mcp_server.handle_message(
-            _call_tool("list_entries", {"tag": "a"})
-        )
+        response = _mcp_server.handle_message(_call_tool("list_entries", {"tag": "a"}))
         entries = json.loads(_result_text(response))
         assert [e["id"] for e in entries] == ["e1"]
 
     def test_limit_applies(self, seed_entry):
         for i in range(3):
             seed_entry(f"e{i}", f"msg {i}", f"2026-10-2{i}T09:15:00Z")
-        response = _mcp_server.handle_message(
-            _call_tool("list_entries", {"limit": 2})
-        )
+        response = _mcp_server.handle_message(_call_tool("list_entries", {"limit": 2}))
         assert len(json.loads(_result_text(response))) == 2
 
 
 class TestSearchEntriesTool:
     def test_finds_case_insensitive_substring(self, seed_entry):
         seed_entry("e1", "Shipped the EXPORT command", "2026-10-27T09:15:00Z")
-        response = _mcp_server.handle_message(
-            _call_tool("search_entries", {"query": "export"})
-        )
+        response = _mcp_server.handle_message(_call_tool("search_entries", {"query": "export"}))
         results = json.loads(_result_text(response))
         assert len(results) == 1
         assert results[0]["id"] == "e1"
 
     def test_no_matches_returns_empty_list(self, seed_entry):
         seed_entry("e1", "unrelated", "2026-10-27T09:15:00Z")
-        response = _mcp_server.handle_message(
-            _call_tool("search_entries", {"query": "zzz"})
-        )
+        response = _mcp_server.handle_message(_call_tool("search_entries", {"query": "zzz"}))
         assert json.loads(_result_text(response)) == []
 
 
@@ -234,9 +222,7 @@ class TestEntryIdResolution:
 
     def test_delete_entry_ambiguous_prefix_is_refused(self, seed_entry):
         self._seed_pair(seed_entry)
-        response = _mcp_server.handle_message(
-            _call_tool("delete_entry", {"id": self.AMBIGUOUS})
-        )
+        response = _mcp_server.handle_message(_call_tool("delete_entry", {"id": self.AMBIGUOUS}))
         assert response is not None
         assert response["result"]["isError"] is True
         assert len(storage.load_entries()) == 2  # nothing was deleted
@@ -297,9 +283,7 @@ class TestServe:
 
         _mcp_server.serve()
 
-        outputs = [
-            json.loads(line) for line in fake_out.getvalue().splitlines() if line.strip()
-        ]
+        outputs = [json.loads(line) for line in fake_out.getvalue().splitlines() if line.strip()]
         # 3 responses: initialize, tools/call, parse error (no response for
         # the notification).
         assert len(outputs) == 3

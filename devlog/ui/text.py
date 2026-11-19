@@ -32,6 +32,7 @@ from devlog.ui._base import (
 # Small helpers
 # ---------------------------------------------------------------------------
 
+
 def pluralize(n: int, singular: str, plural: str | None = None) -> str:
     """Return ``f"{n} {singular|plural}"`` with the right word form.
 
@@ -84,6 +85,7 @@ def plural_s(n: int) -> str:
 # ---------------------------------------------------------------------------
 # Error / warning / info helpers
 # ---------------------------------------------------------------------------
+
 
 def print_error(message: str) -> None:
     """Print a red error panel to STDERR.
@@ -152,6 +154,7 @@ def print_info(message: str) -> None:
 # spacing, and surrounding Typography consistent across commands.
 # ---------------------------------------------------------------------------
 
+
 def _icon_line(*, icon: str, text: str, icon_role: str, text_role: str) -> Text:
     """Build a ``<icon> <text>`` single-line confirmation Text.
 
@@ -205,7 +208,9 @@ def dry_run_line(text: str) -> Text:
     Returns:
         A :class:`rich.text.Text` ready to ``console.print(...)``.
     """
-    return _icon_line(icon="DRY RUN: ", text=text, icon_role="warning_text", text_role="warning_text")
+    return _icon_line(
+        icon="DRY RUN: ", text=text, icon_role="warning_text", text_role="warning_text"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +221,7 @@ def dry_run_line(text: str) -> Text:
 # ---------------------------------------------------------------------------
 # Entry panel (`devlog add` success)
 # ---------------------------------------------------------------------------
+
 
 def format_dt(iso: str, *, tz=None, tz_label: str = "UTC") -> str:
     """Convert a stored ISO 8601 UTC string to display form.
@@ -278,9 +284,8 @@ def _styled_row(label: str, value, *, label_width: int = 9) -> Text:
 # Truncation & highlighting (`devlog list` / `devlog search`)
 # ---------------------------------------------------------------------------
 
-def smart_truncate(
-    message: str, query: str = "", limit: int = MSG_TRUNCATE_LEN
-) -> str:
+
+def smart_truncate(message: str, query: str = "", limit: int = MSG_TRUNCATE_LEN) -> str:
     """Truncate a message around the first match of *query*.
 
     - When *query* is empty, falls back to left-truncation with ``…``.
@@ -362,6 +367,7 @@ def _left_truncate(message: str, limit: int = MSG_TRUNCATE_LEN) -> str:
     """
     # Lazy import so tests can monkeypatch :data:`devlog.ui._ellipsis`.
     from devlog import ui
+
     el = ui._ellipsis()
     if len(message) <= limit:
         return message
@@ -399,6 +405,7 @@ def highlight_message(message: str, query: str) -> str:
 # ---------------------------------------------------------------------------
 # Entries table
 # ---------------------------------------------------------------------------
+
 
 def _short_id(entry: Entry, length: int | None = None) -> str:
     """Return the entry's short id, optionally truncated to *length* chars.

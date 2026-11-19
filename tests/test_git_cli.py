@@ -23,9 +23,7 @@ from tests.conftest import strip_ansi
 
 def _git(args: list[str], cwd) -> subprocess.CompletedProcess:
     """Run a git command in *cwd*, raising on a non-zero exit code."""
-    return subprocess.run(
-        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
-    )
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
 
 
 @pytest.fixture()

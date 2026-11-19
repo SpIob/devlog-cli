@@ -72,9 +72,9 @@ COL_ID_WIDTH = ID_DISPLAY_LEN  # 8
 COL_DATE_WIDTH = DATE_DISPLAY_LEN  # 20
 COL_TAGS_MIN = 10
 COL_MESSAGE_MIN = 27  # 27 chars is the smallest a journal message can be
-                       # read at a glance; below this the table feels
-                       # claustrophobic and the smart-truncated match
-                       # often falls off the right edge.
+# read at a glance; below this the table feels
+# claustrophobic and the smart-truncated match
+# often falls off the right edge.
 # Minimum terminal width we bother to lay out for. Below this, the table
 # cannot fit the full ID + date columns and Rich would start hiding
 # columns — the user is told to widen their terminal instead.
@@ -95,6 +95,7 @@ TAG_NONE = "(none)"
 # Console construction (NO_COLOR + non-TTY respected)
 # ---------------------------------------------------------------------------
 
+
 def _color_enabled(stream) -> bool:
     """Return True when ANSI color should be emitted on *stream*."""
     if "NO_COLOR" in os.environ:
@@ -103,6 +104,7 @@ def _color_enabled(stream) -> bool:
         return bool(stream.isatty())
     except (ValueError, AttributeError):
         return False
+
 
 # ---------------------------------------------------------------------------
 # Console references

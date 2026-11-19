@@ -1,5 +1,4 @@
-"""devlog CLI — The ``import`` and ``export`` commands.
-"""
+"""devlog CLI — The ``import`` and ``export`` commands."""
 
 from __future__ import annotations
 
@@ -17,14 +16,13 @@ from devlog import (
 # import
 # ---------------------------------------------------------------------------
 
+
 @click.argument("path", type=click.Path(exists=True, dir_okay=False, readable=True))
 @click.option(
     "--format",
     "-f",
     "fmt",
-    type=click.Choice(
-        ["auto", "json", "markdown", "jrnl", "dayone"], case_sensitive=False
-    ),
+    type=click.Choice(["auto", "json", "markdown", "jrnl", "dayone"], case_sensitive=False),
     default="auto",
     show_default=True,
     help="Input format. 'auto' detects by file extension/content. 'jrnl' and 'dayone' import from those journal formats.",
@@ -98,6 +96,7 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
 # export
 # ---------------------------------------------------------------------------
 
+
 @click.option(
     "--output",
     "-o",
@@ -127,7 +126,21 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
 @click.option("--until", default=None, help="Only export entries on/before this date (UTC).")
 @click.option(
     "--preset",
-    type=click.Choice(["today", "yesterday", "last-7d", "last-30d", "last-week", "last-month", "this-week", "this-month", "this-year", "year-to-date"], case_sensitive=False),
+    type=click.Choice(
+        [
+            "today",
+            "yesterday",
+            "last-7d",
+            "last-30d",
+            "last-week",
+            "last-month",
+            "this-week",
+            "this-month",
+            "this-year",
+            "year-to-date",
+        ],
+        case_sensitive=False,
+    ),
     default=None,
     help="Date-range preset (overrides --since/--until).",
 )

@@ -103,7 +103,9 @@ def register(main) -> None:
 
         console.print(Panel(t.description or "No description", title=f"Template: {t.name}"))
         console.print(f"[bold]Tags:[/bold] {', '.join(t.tags) if t.tags else '—'}")
-        console.print(f"[bold]Variables:[/bold] {', '.join(t.variables.keys()) if t.variables else '—'}")
+        console.print(
+            f"[bold]Variables:[/bold] {', '.join(t.variables.keys()) if t.variables else '—'}"
+        )
         console.print()
         console.print(Syntax(t.message, "markdown", theme="monokai"))
 
@@ -113,7 +115,13 @@ def register(main) -> None:
     @click.option("--tag", "-t", "tags", multiple=True, help="Default tags (repeatable).")
     @click.option("--message", "-m", default=None, help="Template message (use - for stdin).")
     @click.option("--var", "variables", multiple=True, help="Variable as 'name=hint' (repeatable).")
-    def template_save(name: str, description: str, tags: tuple[str, ...], message: str | None, variables: tuple[str, ...]) -> None:
+    def template_save(
+        name: str,
+        description: str,
+        tags: tuple[str, ...],
+        message: str | None,
+        variables: tuple[str, ...],
+    ) -> None:
         """Save a new template (or overwrite an existing one)."""
         import sys
 

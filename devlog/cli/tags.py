@@ -35,6 +35,7 @@ err_console = ui.err_console
 # tags
 # ---------------------------------------------------------------------------
 
+
 @click.option(
     "--sort",
     type=click.Choice(["count", "name", "recent"], case_sensitive=False),
@@ -42,9 +43,7 @@ err_console = ui.err_console
     show_default=True,
     help="Sort order for the tag list.",
 )
-@click.option(
-    "--limit", "-n", type=int, default=50, show_default=True, help="Max tags to show."
-)
+@click.option("--limit", "-n", type=int, default=50, show_default=True, help="Max tags to show.")
 @click.option("--all", "show_all", is_flag=True, help="Show all tags (overrides --limit).")
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON lines.")
 def tags(sort: str, limit: int, show_all: bool, quiet: bool) -> None:
@@ -96,6 +95,7 @@ def tags(sort: str, limit: int, show_all: bool, quiet: bool) -> None:
 # ---------------------------------------------------------------------------
 # tag (per-tag page + delete)
 # ---------------------------------------------------------------------------
+
 
 @click.argument("name")
 @click.option(
@@ -169,14 +169,13 @@ def tag(
         )
         return
 
-    _tag_show_impl(
-        all_entries, norm_tag, limit=limit, show_all=show_all, quiet=quiet
-    )
+    _tag_show_impl(all_entries, norm_tag, limit=limit, show_all=show_all, quiet=quiet)
 
 
 # ---------------------------------------------------------------------------
 # rename-tag
 # ---------------------------------------------------------------------------
+
 
 @click.argument("old")
 @click.argument("new")
@@ -218,9 +217,7 @@ def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
         return
 
     for entry in affected:
-        _tagops._rewrite_tag_in_entry(
-            entry, old_normalized, new_tag, now=storage.utc_now_iso()
-        )
+        _tagops._rewrite_tag_in_entry(entry, old_normalized, new_tag, now=storage.utc_now_iso())
 
     try:
         storage.save_entries(all_entries)
@@ -239,6 +236,7 @@ def rename_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
 # ---------------------------------------------------------------------------
 # merge-tag
 # ---------------------------------------------------------------------------
+
 
 @click.argument("old")
 @click.argument("new")
@@ -301,9 +299,7 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
         return
 
     for entry in touched:
-        _tagops._rewrite_tag_in_entry(
-            entry, old_normalized, new_tag, now=storage.utc_now_iso()
-        )
+        _tagops._rewrite_tag_in_entry(entry, old_normalized, new_tag, now=storage.utc_now_iso())
 
     try:
         storage.save_entries(all_entries)
@@ -314,7 +310,7 @@ def merge_tag(old: str, new: str, dry_run: bool, quiet: bool) -> None:
     if not quiet:
         added = len(touched) - already_had_new
         line = ui.success_line(
-            f"Merged \"{old_normalized}\" into \"{new_tag}\" across "
+            f'Merged "{old_normalized}" into "{new_tag}" across '
             f"{len(touched)} {ui.plural_noun(len(touched), 'entry')}"
         )
         if already_had_new:

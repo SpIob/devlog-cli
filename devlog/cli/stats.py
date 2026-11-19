@@ -1,5 +1,4 @@
-"""devlog CLI — The ``stats`` command.
-"""
+"""devlog CLI — The ``stats`` command."""
 
 from __future__ import annotations
 
@@ -30,11 +29,26 @@ err_console = ui.err_console
 # stats
 # ---------------------------------------------------------------------------
 
+
 @click.option("--since", default=None, help="Only include entries on/after this date (UTC).")
 @click.option("--until", default=None, help="Only include entries on/before this date (UTC).")
 @click.option(
     "--preset",
-    type=click.Choice(["today", "yesterday", "last-7d", "last-30d", "last-week", "last-month", "this-week", "this-month", "this-year", "year-to-date"], case_sensitive=False),
+    type=click.Choice(
+        [
+            "today",
+            "yesterday",
+            "last-7d",
+            "last-30d",
+            "last-week",
+            "last-month",
+            "this-week",
+            "this-month",
+            "this-year",
+            "year-to-date",
+        ],
+        case_sensitive=False,
+    ),
     default=None,
     help="Date-range preset (overrides --since/--until).",
 )
@@ -43,7 +57,9 @@ def stats(since: str | None, until: str | None, preset: str | None, quiet: bool)
     """Show a summary of the journal: total entries, date range, top tags, and a 30-day sparkline."""
     all_entries = _load_entries_or_exit()
 
-    all_entries = _filter.filter_pipeline(all_entries, since=since, until=until, preset=preset, sort=False)
+    all_entries = _filter.filter_pipeline(
+        all_entries, since=since, until=until, preset=preset, sort=False
+    )
     # Also drop entries whose created_at cannot be parsed at all, so
     # downstream formatting (which assumes a valid ISO timestamp) never
     # crashes. Other commands go through this filter implicitly via
@@ -115,13 +131,10 @@ def stats(since: str | None, until: str | None, preset: str | None, quiet: bool)
                     "first": first_iso,
                     "last": last_iso,
                     "top_tags": [{"tag": t, "count": c} for t, c in top_tags],
-                    "last_30_days": [
-                        {"date": d, "count": c} for d, c in last_30_days
-                    ],
+                    "last_30_days": [{"date": d, "count": c} for d, c in last_30_days],
                     "streaks": {"current": streaks[0], "longest": streaks[1]},
                     "top_tag_pairs": [
-                        {"tags": list(pair), "count": c}
-                        for pair, c in top_tag_pairs
+                        {"tags": list(pair), "count": c} for pair, c in top_tag_pairs
                     ],
                     "days_since_last": days_since,
                 },

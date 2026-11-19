@@ -64,7 +64,9 @@ def _request(host: str, path: str, payload: dict, timeout: float) -> dict:
         raise OllamaError(f"Ollama returned malformed JSON for {path}") from exc
 
 
-def generate(prompt: str, *, model: str, host: str | None = None, timeout: float = DEFAULT_TIMEOUT_S) -> str:
+def generate(
+    prompt: str, *, model: str, host: str | None = None, timeout: float = DEFAULT_TIMEOUT_S
+) -> str:
     """POST to ``/api/generate`` and return the assistant's reply text."""
     response = _request(
         host or default_host(),
@@ -77,7 +79,9 @@ def generate(prompt: str, *, model: str, host: str | None = None, timeout: float
     return str(response["response"])
 
 
-def embed(texts: list[str], *, model: str, host: str | None = None, timeout: float = DEFAULT_TIMEOUT_S) -> list[list[float]]:
+def embed(
+    texts: list[str], *, model: str, host: str | None = None, timeout: float = DEFAULT_TIMEOUT_S
+) -> list[list[float]]:
     """POST to ``/api/embed`` and return one vector per input text."""
     response = _request(
         host or default_host(),

@@ -35,7 +35,9 @@ def _capture_errors(monkeypatch):
     return seen
 
 
-def _markdown_block(message: str, short_id: str = "abcdef01", date: str = "2025-01-01 00:00 UTC") -> str:
+def _markdown_block(
+    message: str, short_id: str = "abcdef01", date: str = "2025-01-01 00:00 UTC"
+) -> str:
     return f"## {date} — {short_id}\n\n{message}\n\n**Tags:** t\n\n---\n"
 
 
@@ -181,18 +183,14 @@ def test_dedup_skips_by_fingerprint_even_with_unknown_id():
 
 
 def test_emit_import_summary_reports_unreadable_rows():
-    out = capture_console(
-        lambda: _io._emit_import_summary(2, 1, 3, dry_run=False)
-    )
+    out = capture_console(lambda: _io._emit_import_summary(2, 1, 3, dry_run=False))
     assert "Imported 2 entries" in out
     assert "skip 1 duplicate." in out
     assert "Ignored 3 unreadable rows." in out
 
 
 def test_emit_import_summary_dry_run_singular():
-    out = capture_console(
-        lambda: _io._emit_import_summary(1, 0, 0, dry_run=True)
-    )
+    out = capture_console(lambda: _io._emit_import_summary(1, 0, 0, dry_run=True))
     assert "DRY RUN:" in out
     assert "would import 1 entry" in out
     assert "skip 0 duplicates." in out
@@ -204,11 +202,7 @@ def test_emit_import_summary_dry_run_singular():
 
 
 def test_parse_markdown_entry_without_tags_line():
-    content = (
-        "## 2025-05-11 10:22 UTC — a1b2c3d4\n\n"
-        "Message with no tags line.\n\n"
-        "---\n"
-    )
+    content = "## 2025-05-11 10:22 UTC — a1b2c3d4\n\nMessage with no tags line.\n\n---\n"
     entries = _io._parse_markdown_export(content)
     assert len(entries) == 1
     assert entries[0].message == "Message with no tags line."
@@ -331,9 +325,7 @@ def test_cli_json_import_reports_unreadable_rows(runner, data_dir, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_markdown_export_import_round_trip_is_idempotent(
-    runner, data_dir, tmp_path, add_entry_cmd
-):
+def test_markdown_export_import_round_trip_is_idempotent(runner, data_dir, tmp_path, add_entry_cmd):
     """Export via the CLI, import it back, and assert the store is a no-op.
 
     Dedupe keys on ``(created_at, message)``: because the exporter embeds
@@ -344,9 +336,7 @@ def test_markdown_export_import_round_trip_is_idempotent(
     add_entry_cmd("round trip two", "frontend")
 
     out = tmp_path / "roundtrip.md"
-    result = runner.invoke(
-        main, ["export", "--format", "markdown", "--output", str(out)]
-    )
+    result = runner.invoke(main, ["export", "--format", "markdown", "--output", str(out)])
     assert result.exit_code == 0
     assert "<!-- created_at:" in out.read_text(encoding="utf-8")
 
@@ -413,9 +403,7 @@ def test_io_import_cmd_save_failure_exits_2(data_dir, tmp_path, monkeypatch):
 def test_io_import_cmd_json_all_unreadable_reports_and_skips(data_dir, tmp_path):
     f = tmp_path / "junk.json"
     f.write_text(json.dumps({"entries": ["nope", 7]}), encoding="utf-8")
-    out = capture_console(
-        lambda: _io.import_cmd(str(f), "json", dry_run=False, quiet=False)
-    )
+    out = capture_console(lambda: _io.import_cmd(str(f), "json", dry_run=False, quiet=False))
     assert "No new entries to import (2 unreadable rows ignored)." in out
     assert storage.load_entries() == []
 
@@ -423,9 +411,7 @@ def test_io_import_cmd_json_all_unreadable_reports_and_skips(data_dir, tmp_path)
 def test_io_import_cmd_json_empty_store_reports_nothing_to_do(data_dir, tmp_path):
     f = tmp_path / "empty.json"
     f.write_text(json.dumps({"entries": []}), encoding="utf-8")
-    out = capture_console(
-        lambda: _io.import_cmd(str(f), "json", dry_run=False, quiet=False)
-    )
+    out = capture_console(lambda: _io.import_cmd(str(f), "json", dry_run=False, quiet=False))
     assert "No entries to import." in out
 
 

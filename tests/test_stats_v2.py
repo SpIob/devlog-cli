@@ -106,9 +106,21 @@ def test_streaks_duplicates_collapse():
 
 def test_cooccurrence_counts_pairs():
     entries = [
-        Entry(id="1", message="m", tags=["backend", "bugfix", "urgent"], created_at=_utc_iso(datetime.now(tz=timezone.utc))),
-        Entry(id="2", message="m", tags=["backend", "bugfix"], created_at=_utc_iso(datetime.now(tz=timezone.utc))),
-        Entry(id="3", message="m", tags=["docs"], created_at=_utc_iso(datetime.now(tz=timezone.utc))),
+        Entry(
+            id="1",
+            message="m",
+            tags=["backend", "bugfix", "urgent"],
+            created_at=_utc_iso(datetime.now(tz=timezone.utc)),
+        ),
+        Entry(
+            id="2",
+            message="m",
+            tags=["backend", "bugfix"],
+            created_at=_utc_iso(datetime.now(tz=timezone.utc)),
+        ),
+        Entry(
+            id="3", message="m", tags=["docs"], created_at=_utc_iso(datetime.now(tz=timezone.utc))
+        ),
     ]
     pairs = storage.compute_tag_cooccurrence(entries)
     assert pairs[0] == (("backend", "bugfix"), 2)
@@ -118,7 +130,12 @@ def test_cooccurrence_counts_pairs():
 
 def test_cooccurrence_pair_order_is_alphabetical():
     entries = [
-        Entry(id="1", message="m", tags=["zulu", "alpha"], created_at=_utc_iso(datetime.now(tz=timezone.utc))),
+        Entry(
+            id="1",
+            message="m",
+            tags=["zulu", "alpha"],
+            created_at=_utc_iso(datetime.now(tz=timezone.utc)),
+        ),
     ]
     pairs = storage.compute_tag_cooccurrence(entries)
     assert pairs == [(("alpha", "zulu"), 1)]
@@ -126,7 +143,12 @@ def test_cooccurrence_pair_order_is_alphabetical():
 
 def test_cooccurrence_top_limits_output():
     entries = [
-        Entry(id="1", message="m", tags=["a", "b", "c", "d"], created_at=_utc_iso(datetime.now(tz=timezone.utc))),
+        Entry(
+            id="1",
+            message="m",
+            tags=["a", "b", "c", "d"],
+            created_at=_utc_iso(datetime.now(tz=timezone.utc)),
+        ),
     ]
     assert len(storage.compute_tag_cooccurrence(entries, top=2)) == 2
 
@@ -151,7 +173,9 @@ def test_days_since_last_today_is_zero():
 
 def test_days_since_last_uses_max_date():
     today = datetime.now(tz=timezone.utc).date()
-    assert storage.compute_days_since_last([today - timedelta(days=9), today - timedelta(days=2)]) == 2
+    assert (
+        storage.compute_days_since_last([today - timedelta(days=9), today - timedelta(days=2)]) == 2
+    )
 
 
 # ---------------------------------------------------------------------------

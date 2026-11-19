@@ -1,5 +1,4 @@
-"""devlog CLI — Meta commands (shell completions).
-"""
+"""devlog CLI — Meta commands (shell completions)."""
 
 from __future__ import annotations
 
@@ -10,6 +9,7 @@ from devlog import _completions
 # ---------------------------------------------------------------------------
 # completions
 # ---------------------------------------------------------------------------
+
 
 @click.argument(
     "shell",

@@ -46,6 +46,7 @@ err_console = ui.err_console
 # add
 # ---------------------------------------------------------------------------
 
+
 @click.argument("message", required=False, default="")
 @click.option(
     "--tag",
@@ -93,7 +94,15 @@ err_console = ui.err_console
         "non-interactively with --template; unset variables expand empty."
     ),
 )
-def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_commit: str | None, template_name: str | None, template_vars: tuple[str, ...]) -> None:
+def add(
+    message: str,
+    tag: tuple[str, ...],
+    quiet: bool,
+    at: str | None,
+    from_commit: str | None,
+    template_name: str | None,
+    template_vars: tuple[str, ...],
+) -> None:
     """Add a new journal entry.
 
     Pass `-` as the message to read from stdin (e.g., `git log -1 --format=%B | devlog add -`).
@@ -169,9 +178,7 @@ def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_co
             values = {}
             for raw_var in template_vars:
                 if "=" not in raw_var:
-                    ui.print_error(
-                        f"Invalid variable format: {raw_var} (use 'name=value')"
-                    )
+                    ui.print_error(f"Invalid variable format: {raw_var} (use 'name=value')")
                     sys.exit(1)
                 var_name, var_value = raw_var.split("=", 1)
                 values[var_name.strip()] = var_value
@@ -246,6 +253,7 @@ def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_co
 # list
 # ---------------------------------------------------------------------------
 
+
 @click.option("--tag", "-t", "tags", multiple=True, help="Filter by tag (AND).")
 @click.option(
     "--limit",
@@ -260,7 +268,21 @@ def add(message: str, tag: tuple[str, ...], quiet: bool, at: str | None, from_co
 @click.option("--until", default=None, help="Only show entries on/before this date (UTC).")
 @click.option(
     "--preset",
-    type=click.Choice(["today", "yesterday", "last-7d", "last-30d", "last-week", "last-month", "this-week", "this-month", "this-year", "year-to-date"], case_sensitive=False),
+    type=click.Choice(
+        [
+            "today",
+            "yesterday",
+            "last-7d",
+            "last-30d",
+            "last-week",
+            "last-month",
+            "this-week",
+            "this-month",
+            "this-year",
+            "year-to-date",
+        ],
+        case_sensitive=False,
+    ),
     default=None,
     help="Date-range preset (overrides --since/--until).",
 )
@@ -281,7 +303,9 @@ def list_entries(
     all_entries = _load_entries_or_exit()
 
     total_all = len(all_entries)
-    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until, preset=preset)
+    filtered = _filter.filter_pipeline(
+        all_entries, tags=tags, since=since, until=until, preset=preset
+    )
 
     total_filtered = len(filtered)
     shown = filtered if show_all else filtered[:limit]
@@ -300,10 +324,7 @@ def list_entries(
     # Show filtered count, and total count when filters are applied
     has_filters = bool(tags or since or until)
     if has_filters:
-        title = (
-            f"Journal · {total_filtered} of {total_all} "
-            f"{ui.plural_noun(total_all, 'entry')}"
-        )
+        title = f"Journal · {total_filtered} of {total_all} {ui.plural_noun(total_all, 'entry')}"
     else:
         title = f"Journal · {total_filtered} {ui.plural_noun(total_filtered, 'entry')}"
     table = ui.entries_table(shown, total_filtered, title=title)
@@ -314,16 +335,29 @@ def list_entries(
 # search
 # ---------------------------------------------------------------------------
 
+
 @click.argument("query")
 @click.option("--tag", "-t", "tags", multiple=True, help="Filter by tag (AND).")
-@click.option(
-    "--limit", "-n", type=int, default=20, show_default=True, help="Max entries to show."
-)
+@click.option("--limit", "-n", type=int, default=20, show_default=True, help="Max entries to show.")
 @click.option("--since", default=None, help="Only show entries on/after this date (UTC).")
 @click.option("--until", default=None, help="Only show entries on/before this date (UTC).")
 @click.option(
     "--preset",
-    type=click.Choice(["today", "yesterday", "last-7d", "last-30d", "last-week", "last-month", "this-week", "this-month", "this-year", "year-to-date"], case_sensitive=False),
+    type=click.Choice(
+        [
+            "today",
+            "yesterday",
+            "last-7d",
+            "last-30d",
+            "last-week",
+            "last-month",
+            "this-week",
+            "this-month",
+            "this-year",
+            "year-to-date",
+        ],
+        case_sensitive=False,
+    ),
     default=None,
     help="Date-range preset (overrides --since/--until).",
 )
@@ -357,10 +391,13 @@ def search(
 
     all_entries = _load_entries_or_exit()
 
-    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until, preset=preset)
+    filtered = _filter.filter_pipeline(
+        all_entries, tags=tags, since=since, until=until, preset=preset
+    )
 
     if regex:
         import re
+
         try:
             pattern = re.compile(query, re.IGNORECASE)
         except re.error as exc:
@@ -375,11 +412,7 @@ def search(
         if not terms:
             ui.print_error("QUERY cannot be empty.")
             sys.exit(1)
-        matched = [
-            e
-            for e in filtered
-            if all(term.lower() in e.message.lower() for term in terms)
-        ]
+        matched = [e for e in filtered if all(term.lower() in e.message.lower() for term in terms)]
         display_query = query
 
     total = len(matched)
@@ -407,6 +440,7 @@ def search(
 # show
 # ---------------------------------------------------------------------------
 
+
 @click.argument("id")
 @click.option("--quiet", "-q", is_flag=True, help="Output raw JSON line.")
 def show(id: str, quiet: bool) -> None:
@@ -431,12 +465,8 @@ def show(id: str, quiet: bool) -> None:
 @click.option(
     "--tag", "-t", "set_tags", multiple=True, help="Replace tags with this set (AND replaces)."
 )
-@click.option(
-    "--add-tag", "add_tags", multiple=True, help="Append tags (repeatable)."
-)
-@click.option(
-    "--remove-tag", "remove_tags", multiple=True, help="Remove tags (repeatable)."
-)
+@click.option("--add-tag", "add_tags", multiple=True, help="Append tags (repeatable).")
+@click.option("--remove-tag", "remove_tags", multiple=True, help="Remove tags (repeatable).")
 @click.option("--quiet", "-q", is_flag=True, help="Suppress output.")
 @click.option(
     "--at",
@@ -482,9 +512,7 @@ def edit(
         # blast terminal-control sequences to stdout and fail noisily.
         # Scripts that intentionally want the editor in a pipe can set
         # DEVLOG_ALLOW_EDITOR_IN_PIPE=1 to opt in.
-        if not sys.stdin.isatty() and not os.environ.get(
-            "DEVLOG_ALLOW_EDITOR_IN_PIPE"
-        ):
+        if not sys.stdin.isatty() and not os.environ.get("DEVLOG_ALLOW_EDITOR_IN_PIPE"):
             ui.print_error(
                 "`devlog edit <id>` with no flags needs a TTY to open "
                 "your editor. Pass --message, --tag, --add-tag, or "
@@ -542,6 +570,7 @@ def edit(
 # ---------------------------------------------------------------------------
 # delete
 # ---------------------------------------------------------------------------
+
 
 @click.argument("id")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt.")

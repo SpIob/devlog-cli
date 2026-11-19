@@ -82,11 +82,9 @@ def test_doctor_quiet_clean(runner, data_dir):
 # Issues detected
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(
-        active_backend() == "sqlite",
-        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
-    )
-
-
+    active_backend() == "sqlite",
+    reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+)
 def test_doctor_detects_bad_tags(runner, data_dir, tmp_path):
     """Hand-written entries.json with bad tags should be flagged."""
     (tmp_path / "entries.json").write_text(
@@ -101,19 +99,20 @@ def test_doctor_detects_bad_tags(runner, data_dir, tmp_path):
                     }
                 ]
             }
-        )
-    , encoding="utf-8")
+        ),
+        encoding="utf-8",
+    )
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 1
     assert "attention" in result.output
     assert "validation issue" in result.output
     assert "devlog repair" in result.output
+
+
 @pytest.mark.skipif(
-        active_backend() == "sqlite",
-        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
-    )
-
-
+    active_backend() == "sqlite",
+    reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+)
 def test_doctor_quiet_with_issues(runner, data_dir, tmp_path):
     (tmp_path / "entries.json").write_text(
         json.dumps(
@@ -127,31 +126,36 @@ def test_doctor_quiet_with_issues(runner, data_dir, tmp_path):
                     }
                 ]
             }
-        )
-    , encoding="utf-8")
+        ),
+        encoding="utf-8",
+    )
     result = runner.invoke(main, ["doctor", "--quiet"])
     assert result.exit_code == 1
     obj = json.loads(result.output.strip())
     assert obj["ok"] is False
     assert any(i["kind"] == "bad_tag" for i in obj["issues"])
+
+
 @pytest.mark.skipif(
-        active_backend() == "sqlite",
-        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
-    )
-
-
+    active_backend() == "sqlite",
+    reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+)
 def test_doctor_detects_corrupt_json(runner, data_dir, tmp_path):
     (tmp_path / "entries.json").write_text("{ not valid", encoding="utf-8")
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 2
     # Should mention the corruption
-    assert "corrupt" in result.output.lower() or "valid" in result.output.lower() or "Doctor" in result.output
-@pytest.mark.skipif(
-        active_backend() == "sqlite",
-        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+    assert (
+        "corrupt" in result.output.lower()
+        or "valid" in result.output.lower()
+        or "Doctor" in result.output
     )
 
 
+@pytest.mark.skipif(
+    active_backend() == "sqlite",
+    reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+)
 def test_doctor_quiet_corrupt_json(runner, data_dir, tmp_path):
     (tmp_path / "entries.json").write_text("{ not valid", encoding="utf-8")
     result = runner.invoke(main, ["doctor", "--quiet"])
@@ -159,12 +163,12 @@ def test_doctor_quiet_corrupt_json(runner, data_dir, tmp_path):
     obj = json.loads(result.output.strip())
     assert obj["ok"] is False
     assert any(i["kind"] == "corrupt_json" for i in obj["issues"])
+
+
 @pytest.mark.skipif(
-        active_backend() == "sqlite",
-        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
-    )
-
-
+    active_backend() == "sqlite",
+    reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+)
 def test_doctor_recovers_truncated_trailing_garbage(runner, data_dir, tmp_path):
     """A trailing half-written entry should not doom the whole file.
 
@@ -216,7 +220,10 @@ def test_doctor_handles_future_dated_entry(runner, data_dir):
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 0
     # The negative delta must never appear in the user-facing output
-    assert "days ago" not in result.output or "-" not in result.output.split("Last entry")[1].split("\n")[0]
+    assert (
+        "days ago" not in result.output
+        or "-" not in result.output.split("Last entry")[1].split("\n")[0]
+    )
     assert "future-dated" in result.output
     # And the quiet JSON must keep a numeric value (negative is
     # the wire-format sentinel for "in the future").
@@ -255,12 +262,12 @@ def test_doctor_reports_file_size(runner, data_dir):
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 0
     assert "bytes" in result.output
+
+
 @pytest.mark.skipif(
-        active_backend() == "sqlite",
-        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
-    )
-
-
+    active_backend() == "sqlite",
+    reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+)
 def test_doctor_lists_specific_issues_inline(runner, data_dir):
     """When the store has validation issues, the doctor panel must
     enumerate them inline (up to 5) rather than only printing a count
@@ -309,12 +316,12 @@ def test_doctor_lists_specific_issues_inline(runner, data_dir):
     # And the kind tag is shown too.
     assert "bad_timestamp" in result.output
     assert "bad_tag" in result.output
+
+
 @pytest.mark.skipif(
-        active_backend() == "sqlite",
-        reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
-    )
-
-
+    active_backend() == "sqlite",
+    reason="test plants a hand-written entries.json; corrupt-JSON detection is JSON-backend semantics",
+)
 def test_doctor_truncates_long_issue_lists(runner, data_dir):
     """When there are more than 5 issues, doctor shows the first 5 and
     a '…and N more' summary line."""
@@ -330,13 +337,16 @@ def test_doctor_truncates_long_issue_lists(runner, data_dir):
         }
         for i in range(7)
     ]
-    entries.insert(0, {
-        "id": "00000000-0000-0000-0000-000000000000",
-        "message": "good",
-        "tags": [],
-        "created_at": "2026-08-29T00:00:00Z",
-        "updated_at": None,
-    })
+    entries.insert(
+        0,
+        {
+            "id": "00000000-0000-0000-0000-000000000000",
+            "message": "good",
+            "tags": [],
+            "created_at": "2026-08-29T00:00:00Z",
+            "updated_at": None,
+        },
+    )
     (data_dir / "entries.json").write_text(json.dumps({"entries": entries}), encoding="utf-8")
 
     result = runner.invoke(main, ["doctor"])

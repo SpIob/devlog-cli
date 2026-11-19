@@ -1,6 +1,5 @@
 """Tests for the `devlog completions` command."""
 
-
 from devlog.cli import main
 
 # ---------------------------------------------------------------------------

@@ -31,21 +31,18 @@ def register(main) -> None:
     # theme
     # ---------------------------------------------------------------------------
 
-
     @main.group()
     def theme() -> None:
         """View or change the active color theme."""
 
-
     @theme.command("list")
     @click.option("--flat", is_flag=True, default=False, help="Disable section grouping.")
-    @click.option("--no-preview", is_flag=True, default=False, help="Hide the preview swatch column.")
+    @click.option(
+        "--no-preview", is_flag=True, default=False, help="Hide the preview swatch column."
+    )
     def theme_list(flat: bool, no_preview: bool) -> None:
         """Print every theme role and its current style."""
-        console.print(
-            ui.theme_table(grouped=not flat, show_preview=not no_preview)
-        )
-
+        console.print(ui.theme_table(grouped=not flat, show_preview=not no_preview))
 
     @theme.command("show")
     @click.argument("role", required=False)
@@ -67,7 +64,6 @@ def register(main) -> None:
             return
         themes.write_default_theme(sys.stdout)
 
-
     def _read_theme_source(path: Path) -> dict[str, str]:
         """Read a theme file and convert parse errors into a clean error path.
 
@@ -82,7 +78,6 @@ def register(main) -> None:
         except (OSError, TypeError) as exc:
             ui.print_error(f"Cannot read theme file: {exc}")
             sys.exit(1)
-
 
     @theme.command("set")
     @click.argument(
@@ -114,8 +109,7 @@ def register(main) -> None:
             ui.print_warning(f"theme role '{key}' is unknown and will be ignored.")
         for key in invalid:
             ui.print_warning(
-                f"theme role '{key}' has invalid style {raw[key]!r}; "
-                "fix before installing."
+                f"theme role '{key}' has invalid style {raw[key]!r}; fix before installing."
             )
 
         if invalid:
@@ -136,7 +130,6 @@ def register(main) -> None:
 
         print(f"Theme installed at {themes.get_theme_path()} ({len(active)} roles).")
 
-
     @theme.command("use")
     @click.argument("name")
     def theme_use(name: str) -> None:
@@ -150,9 +143,7 @@ def register(main) -> None:
             src = themes.get_builtin_theme_path(name)
         except themes.ThemeNotFoundError:
             names = ", ".join(themes.list_builtin_themes())
-            ui.print_error(
-                f'Unknown builtin theme "{name}". Available: {names}'
-            )
+            ui.print_error(f'Unknown builtin theme "{name}". Available: {names}')
             sys.exit(1)
 
         raw = _read_theme_source(src)
@@ -166,9 +157,7 @@ def register(main) -> None:
             )
 
         if invalid:
-            ui.print_error(
-                f"Refusing to install builtin {name!r}: {len(invalid)} invalid role(s)."
-            )
+            ui.print_error(f"Refusing to install builtin {name!r}: {len(invalid)} invalid role(s).")
             sys.exit(1)
 
         try:
@@ -178,7 +167,6 @@ def register(main) -> None:
             sys.exit(1)
 
         print(f"Theme '{name}' installed at {themes.get_theme_path()} ({len(active)} roles).")
-
 
     @theme.command("builtins")
     def theme_builtins() -> None:
@@ -202,7 +190,6 @@ def register(main) -> None:
             table.add_row(name, meta.get("description", ""))
         console.print(table)
 
-
     @theme.command("reset")
     @click.confirmation_option(prompt="Remove the active theme file?")
     def theme_reset() -> None:
@@ -216,7 +203,6 @@ def register(main) -> None:
                 sys.exit(1)
         themes.reset_cache()
         print("Theme file removed (if it existed). Active palette reset to defaults.")
-
 
     @theme.command("edit")
     def theme_edit() -> None:
@@ -235,7 +221,6 @@ def register(main) -> None:
         except click.ClickException as exc:
             ui.print_error(str(exc))
             sys.exit(1)
-
 
     @theme.command("create")
     @click.option(
@@ -309,9 +294,7 @@ def register(main) -> None:
                 seed_meta = themes.get_builtin_meta(seed_from)
             except themes.ThemeNotFoundError:
                 names = ", ".join(themes.list_builtin_themes())
-                ui.print_error(
-                    f'Unknown builtin theme "{seed_from}". Available: {names}'
-                )
+                ui.print_error(f'Unknown builtin theme "{seed_from}". Available: {names}')
                 sys.exit(1)
         else:
             seed = dict(themes.get_active_theme())
@@ -348,9 +331,7 @@ def register(main) -> None:
             if not value:
                 raise click.BadParameter("value cannot be empty")
             if not themes.is_valid_style(value):
-                raise click.BadParameter(
-                    f"{value!r} is not a valid Rich style"
-                )
+                raise click.BadParameter(f"{value!r} is not a valid Rich style")
             return value
 
         for section_name, roles in themes.SECTIONS.items():
@@ -385,9 +366,7 @@ def register(main) -> None:
                 except themes.ThemeInstallError as exc:
                     ui.print_error(str(exc))
                     sys.exit(1)
-                click.echo(
-                    f"Installed as the active theme at {themes.get_theme_path()}."
-                )
+                click.echo(f"Installed as the active theme at {themes.get_theme_path()}.")
             return
 
         if install:
@@ -408,7 +387,6 @@ def register(main) -> None:
                 f"Custom theme '{name}' generated but not installed "
                 "(--no-install with no --output)."
             )
-
 
     @theme.command("diff")
     @click.option(
@@ -436,10 +414,7 @@ def register(main) -> None:
                 if active_value != default:
                     rows.append((role, default, active_value, "!"))
         if not rows:
-            msg = (
-                "No overrides" if not show_defaults
-                else "All roles match the defaults"
-            )
+            msg = "No overrides" if not show_defaults else "All roles match the defaults"
             print(msg)
             return
 
@@ -469,12 +444,29 @@ def register(main) -> None:
             )
         console.print(table)
 
-
     @theme.command("export")
     @click.option("--stdout", "use_stdout", is_flag=True, default=False, help="Write to STDOUT.")
-    @click.option("--output", "output", type=click.Path(dir_okay=False, writable=True), default=None, help="Write to a file path.")
-    @click.option("--name", "name", default="exported", show_default=True, help="Value to embed as the exported theme's [meta].name.")
-    @click.option("--description", "description", default="Exported active theme", show_default=True, help="Value to embed as the exported theme's [meta].description.")
+    @click.option(
+        "--output",
+        "output",
+        type=click.Path(dir_okay=False, writable=True),
+        default=None,
+        help="Write to a file path.",
+    )
+    @click.option(
+        "--name",
+        "name",
+        default="exported",
+        show_default=True,
+        help="Value to embed as the exported theme's [meta].name.",
+    )
+    @click.option(
+        "--description",
+        "description",
+        default="Exported active theme",
+        show_default=True,
+        help="Value to embed as the exported theme's [meta].description.",
+    )
     def theme_export(use_stdout: bool, output: str | None, name: str, description: str) -> None:
         """Write the active palette as a complete, uncommented ``theme.toml``.
 
@@ -498,10 +490,7 @@ def register(main) -> None:
         out_path.write_text(text, encoding="utf-8")
         print(f"Exported active theme to {out_path}.")
 
-
     @theme.command("path")
     def theme_path() -> None:
         """Print the path to the active theme file."""
         print(themes.get_theme_path())
-
-

@@ -59,8 +59,7 @@ def _resolve_entry_or_error(entries: list, entry_id: str):
     if len(candidates) > 1:
         shorts = ", ".join(e.short_id for e in candidates)
         raise ValueError(
-            f'ID prefix "{entry_id}" matches multiple entries: {shorts}. '
-            "Use a longer prefix."
+            f'ID prefix "{entry_id}" matches multiple entries: {shorts}. Use a longer prefix.'
         )
     return None
 
@@ -71,9 +70,7 @@ def _tool_list_entries(arguments: dict) -> str:
     limit = arguments.get("limit")
     tag = arguments.get("tag")
     entries = storage.load_entries()
-    filtered = _filter.filter_pipeline(
-        entries, tags=(tag,) if tag else (), sort=True
-    )
+    filtered = _filter.filter_pipeline(entries, tags=(tag,) if tag else (), sort=True)
     if isinstance(limit, int) and limit > 0:
         filtered = filtered[:limit]
     payload = [
@@ -222,6 +219,7 @@ def _tool_edit_entry(arguments: dict) -> str:
         entry.tags = tags
 
     from devlog.storage import utc_now_iso
+
     entry.updated_at = utc_now_iso()
 
     storage.save_entries(entries)
@@ -426,9 +424,7 @@ def handle_message(message: object) -> dict | None:
         arguments = params.get("arguments") or {}
         handler = TOOLS.get(name) if isinstance(name, str) else None
         if handler is None:
-            return _tool_response(
-                msg_id, f"Unknown tool: {name!r}", is_error=True
-            )
+            return _tool_response(msg_id, f"Unknown tool: {name!r}", is_error=True)
         try:
             return _tool_response(msg_id, handler(arguments))
         except Exception as exc:

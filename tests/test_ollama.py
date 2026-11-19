@@ -39,15 +39,11 @@ class TestGenerate:
 
 class TestEmbed:
     def test_posts_to_api_embed_and_returns_vectors(self, ollama_server):
-        vectors = _ollama.embed(
-            ["hello world"], model="nomic-embed-text", host=ollama_server.url
-        )
+        vectors = _ollama.embed(["hello world"], model="nomic-embed-text", host=ollama_server.url)
         # One vector per input, all floats, deterministic across calls.
         assert len(vectors) == 1
         assert all(isinstance(x, float) for x in vectors[0])
-        again = _ollama.embed(
-            ["hello world"], model="nomic-embed-text", host=ollama_server.url
-        )
+        again = _ollama.embed(["hello world"], model="nomic-embed-text", host=ollama_server.url)
         assert vectors == again
         assert ollama_server.last_path == "/api/embed"
         sent = ollama_server.last_payload

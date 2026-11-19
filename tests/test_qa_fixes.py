@@ -114,9 +114,7 @@ def test_list_invalid_since_date_clean_error(runner):
 )
 def test_repair_reports_zero_removed_for_non_list_entries(runner, data_dir):
     """`{"entries": "not a list"}` must report "Removed 0", not len(str)."""
-    (data_dir / "entries.json").write_text(
-        json.dumps({"entries": "not a list"}), encoding="utf-8"
-    )
+    (data_dir / "entries.json").write_text(json.dumps({"entries": "not a list"}), encoding="utf-8")
     result = runner.invoke(main, ["repair", "--yes"])
     assert result.exit_code == 0, result.output
     assert "Removed 0 entries" in result.output
@@ -378,9 +376,7 @@ def test_git_sync_noop_when_journal_clean(tmp_path, monkeypatch, git_env):
     _git(outer, "commit", "-m", "initial")
 
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(journal))
-    (journal / "entries.json").write_text(
-        json.dumps({"entries": []}), encoding="utf-8"
-    )
+    (journal / "entries.json").write_text(json.dumps({"entries": []}), encoding="utf-8")
     _git(outer, "add", "journal/entries.json")
     _git(outer, "commit", "-m", "journal seed")
 
@@ -589,9 +585,18 @@ def test_atomicstore_parallel_config_sets_keep_all_keys(tmp_path):
     ]
     procs = [
         subprocess.Popen(
-            [sys.executable, "-c", "from devlog.cli import main; main()",
-             "config", "set", key, value],
-            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            [
+                sys.executable,
+                "-c",
+                "from devlog.cli import main; main()",
+                "config",
+                "set",
+                key,
+                value,
+            ],
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
         )
         for key, value in pairs
     ]
@@ -602,9 +607,7 @@ def test_atomicstore_parallel_config_sets_keep_all_keys(tmp_path):
         for (key, _v), rc, (out, err) in zip(pairs, exit_codes, results)
         if rc != 0
     ]
-    assert all(rc == 0 for rc in exit_codes), (
-        f"nonzero exits: {exit_codes}; failures={failures}"
-    )
+    assert all(rc == 0 for rc in exit_codes), f"nonzero exits: {exit_codes}; failures={failures}"
 
     stored = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     for key, _value in pairs:
@@ -625,9 +628,9 @@ def test_template_save_traversal_does_not_clobber_config(runner, data_dir):
     assert "path separators" in result.output
 
     # The store file outside templates/ is untouched.
-    assert json.loads((data_dir / "config.json").read_text(encoding="utf-8"))[
-        "watch_interval"
-    ] == 42
+    assert (
+        json.loads((data_dir / "config.json").read_text(encoding="utf-8"))["watch_interval"] == 42
+    )
 
 
 def test_template_save_rejects_slash_dot_and_empty_names(runner):
@@ -700,13 +703,14 @@ def test_add_template_with_var_flag_non_interactive(runner):
         runner,
         "deploy-note",
         "Deploy {service} to {env}",
-        "--var", "service=Service name",
-        "--var", "env=Environment",
+        "--var",
+        "service=Service name",
+        "--var",
+        "env=Environment",
     )
     result = runner.invoke(
         main,
-        ["add", "--template", "deploy-note",
-         "--var", "service=api", "--var", "env=prod", "-q"],
+        ["add", "--template", "deploy-note", "--var", "service=api", "--var", "env=prod", "-q"],
     )
     assert result.exit_code == 0, result.output
     entry = first_json_obj(runner.invoke(main, ["list", "--quiet"]).output)
@@ -715,9 +719,7 @@ def test_add_template_with_var_flag_non_interactive(runner):
 
 def test_add_template_missing_var_expands_empty(runner):
     _save_template(runner, "onevar", "Hello {name} and {other}", "--var", "name=Who")
-    result = runner.invoke(
-        main, ["add", "--template", "onevar", "--var", "name=Alice", "-q"]
-    )
+    result = runner.invoke(main, ["add", "--template", "onevar", "--var", "name=Alice", "-q"])
     assert result.exit_code == 0, result.output
     entry = first_json_obj(runner.invoke(main, ["list", "--quiet"]).output)
     assert entry["message"] == "Hello Alice and "

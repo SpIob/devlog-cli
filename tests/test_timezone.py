@@ -106,9 +106,7 @@ def test_list_since_unchanged_without_tz_env(runner, data_dir, monkeypatch):
     now = datetime.now(tz=timezone.utc)
     _seed("33333333-aaaa-bbbb-cccc-333333333333", "today", _utc_iso(now))
     _seed("44444444-aaaa-bbbb-cccc-444444444444", "old", _utc_iso(now - timedelta(days=30)))
-    result = _invoke(
-        runner, data_dir, "list", "--since", "7d", "--quiet", monkeypatch=monkeypatch
-    )
+    result = _invoke(runner, data_dir, "list", "--since", "7d", "--quiet", monkeypatch=monkeypatch)
     assert result.exit_code == 0
     lines = [ln for ln in result.output.splitlines() if ln.strip()]
     assert len(lines) == 1
@@ -147,7 +145,11 @@ def test_today_buckets_by_local_date(runner, data_dir, monkeypatch):
     # that an entry whose local date is *different* from its UTC date
     # is NOT bucketed on its UTC date when the local zone is set.
     # We do that by checking the local_date_for helper directly.
-    assert "ny dec 31" in result.output or "ny jan 1" in result.output or "No entries yet today" in result.output
+    assert (
+        "ny dec 31" in result.output
+        or "ny jan 1" in result.output
+        or "No entries yet today" in result.output
+    )
 
 
 def test_today_bucketing_helper_excludes_other_local_day(runner, data_dir):
@@ -201,8 +203,14 @@ def test_list_since_nd_local_zone(runner, data_dir, monkeypatch):
     yesterday_utc = yesterday_ny.astimezone(timezone.utc)
     _seed("88888888-aaaa-bbbb-cccc-888888888888", "yesterday-ny", _utc_iso(yesterday_utc))
     result = _invoke(
-        runner, data_dir, "list", "--since", "1d", "--quiet",
-        tz="America/New_York", monkeypatch=monkeypatch,
+        runner,
+        data_dir,
+        "list",
+        "--since",
+        "1d",
+        "--quiet",
+        tz="America/New_York",
+        monkeypatch=monkeypatch,
     )
     assert result.exit_code == 0
     lines = [ln for ln in result.output.splitlines() if ln.strip()]
@@ -224,7 +232,9 @@ def test_bad_tz_name_exits_with_error(runner, data_dir, monkeypatch):
 
 
 def test_bad_tz_name_in_list(runner, data_dir, monkeypatch):
-    result = _invoke(runner, data_dir, "list", "--since", "7d", tz="Not/A_Real_Zone", monkeypatch=monkeypatch)
+    result = _invoke(
+        runner, data_dir, "list", "--since", "7d", tz="Not/A_Real_Zone", monkeypatch=monkeypatch
+    )
     assert result.exit_code == 1
     assert "Invalid DEVLOG_TZ" in result.output
 
@@ -236,12 +246,14 @@ def test_bad_tz_name_in_list(runner, data_dir, monkeypatch):
 
 def test_local_date_for_returns_utc_date_when_tz_is_none():
     from devlog.storage import local_date_for
+
     # 2025-01-01 02:00 UTC → local date == 2025-01-01 (UTC) when tz is None
     assert local_date_for("2025-01-01T02:00:00Z", None).isoformat() == "2025-01-01"
 
 
 def test_local_date_for_converts_to_local_zone():
     from devlog.storage import local_date_for
+
     # 2025-01-01 02:00 UTC → 2024-12-31 21:00 in NY
     ny = ZoneInfo("America/New_York")
     assert local_date_for("2025-01-01T02:00:00Z", ny).isoformat() == "2024-12-31"
@@ -249,5 +261,6 @@ def test_local_date_for_converts_to_local_zone():
 
 def test_local_date_for_unparseable_returns_epoch():
     from devlog.storage import local_date_for
+
     assert local_date_for("not-a-date", None).isoformat() == "1970-01-01"
     assert local_date_for("", None).isoformat() == "1970-01-01"

@@ -107,6 +107,7 @@ def test_yesterday_local_zone_bucketing(runner, data_dir, monkeypatch):
     # the yesterday code path to use the same helper. (yesterday uses
     # `storage.local_date_for` exactly like `today`.)
     from devlog.storage import local_date_for
+
     iso = "2025-01-01T02:00:00Z"
     assert local_date_for(iso, ZoneInfo("America/New_York")).isoformat() == "2024-12-31"
 
@@ -294,5 +295,6 @@ def test_on_local_zone_bucketing(runner, data_dir, monkeypatch):
     """An entry at 2025-01-01 02:00 UTC is on 2024-12-31 in NY, so when
     today_local is 2024-12-31 NY, that entry must appear in `on yesterday`."""
     from devlog.storage import local_date_for
+
     iso = "2025-01-01T02:00:00Z"
     assert local_date_for(iso, ZoneInfo("America/New_York")).isoformat() == "2024-12-31"

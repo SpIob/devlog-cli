@@ -63,7 +63,15 @@ class TestDigestExtractive:
         payload = json.loads(result.output)
         assert payload["entry_count"] == 2
         assert "Shipped the export command" in payload["digest"]
-        assert set(payload) == {"week_start", "week_end", "start", "end", "period", "entry_count", "digest"}
+        assert set(payload) == {
+            "week_start",
+            "week_end",
+            "start",
+            "end",
+            "period",
+            "entry_count",
+            "digest",
+        }
 
     def test_empty_week_prints_info_and_exits_zero(self, runner):
         result = runner.invoke(main, ["digest", "--week"])
@@ -86,9 +94,7 @@ class TestDigestExtractive:
 
 
 class TestDigestLLM:
-    def test_llm_flag_sends_digest_to_ollama_and_prints_reply(
-        self, runner, week_entries, ai_on
-    ):
+    def test_llm_flag_sends_digest_to_ollama_and_prints_reply(self, runner, week_entries, ai_on):
         result = runner.invoke(main, ["digest", "--week", "--llm"])
         assert result.exit_code == 0, result.output
         assert "You shipped the importers." in result.output

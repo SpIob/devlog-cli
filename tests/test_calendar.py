@@ -72,9 +72,7 @@ def test_calendar_grid_empty_year():
     for m in range(1, 13):
         month_chars.update(_dt.date(2025, m, 1).strftime("%b"))
     for ch in text:
-        assert ch in {" ", "·", "▪", "▫", "█", "\n"} | month_chars, (
-            f"unexpected char {ch!r}"
-        )
+        assert ch in {" ", "·", "▪", "▫", "█", "\n"} | month_chars, f"unexpected char {ch!r}"
 
 
 def test_calendar_grid_buckets_by_year():
@@ -90,9 +88,7 @@ def test_calendar_grid_buckets_by_year():
     assert len(lines) == 8, f"expected 1 header + 7 weekday rows, got {len(lines)}"
     data_rows = lines[1:]  # every line after the header is a data row
     heatmap_chars = {"·", "▪", "▫", "█"}
-    non_space = sum(
-        1 for row in data_rows for ch in row if ch in heatmap_chars
-    )
+    non_space = sum(1 for row in data_rows for ch in row if ch in heatmap_chars)
     assert non_space >= 1  # at least 2025-06-15
     # And the count shouldn't be 2 — only 2025 entries count.
     # 2024 is in a different year, so the cell for that calendar date
@@ -122,8 +118,8 @@ def test_calendar_grid_label_alignment():
     """
     expected = {
         "Jan": 0,
-        "Feb": 4,   # (3 + 31)  // 7
-        "Mar": 8,   # (3 + 59)  // 7
+        "Feb": 4,  # (3 + 31)  // 7
+        "Mar": 8,  # (3 + 59)  // 7
         "Apr": 13,  # (3 + 90)  // 7
         "May": 17,  # (3 + 120) // 7
         "Jun": 22,  # (3 + 151) // 7
@@ -139,8 +135,7 @@ def test_calendar_grid_label_alignment():
     header = lines[0]
     for month, col in expected.items():
         assert header.find(month) == col, (
-            f"{month} should start at column {col}, "
-            f"but the header is: {header!r}"
+            f"{month} should start at column {col}, but the header is: {header!r}"
         )
 
 
@@ -155,8 +150,18 @@ def test_calendar_grid_all_twelve_months_labeled():
     grid = ui.calendar_grid({}, year=2025)
     text = grid.plain
     for month in (
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
     ):
         assert month in text, f"missing month label: {month}"
 
@@ -228,13 +233,27 @@ def test_calendar_local_tz_bucketing(runner, data_dir, monkeypatch):
     appear; with --year 2025, it should not."""
     _seed("66666666-aaaa-bbbb-cccc-666666666666", "ny", "2025-01-01T02:00:00Z")
     # Year 2024 — entry should appear under 2024-12-31.
-    result = _invoke(runner, "calendar", "--year", "2024", "--quiet",
-                     tz="America/New_York", monkeypatch=monkeypatch)
+    result = _invoke(
+        runner,
+        "calendar",
+        "--year",
+        "2024",
+        "--quiet",
+        tz="America/New_York",
+        monkeypatch=monkeypatch,
+    )
     obj = json.loads(result.output.strip())
     assert obj.get("2024-12-31") == 1
     # Year 2025 — no entry (it bucketed to 2024).
-    result = _invoke(runner, "calendar", "--year", "2025", "--quiet",
-                     tz="America/New_York", monkeypatch=monkeypatch)
+    result = _invoke(
+        runner,
+        "calendar",
+        "--year",
+        "2025",
+        "--quiet",
+        tz="America/New_York",
+        monkeypatch=monkeypatch,
+    )
     obj = json.loads(result.output.strip())
     assert obj == {}
 

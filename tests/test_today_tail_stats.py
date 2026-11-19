@@ -57,11 +57,17 @@ def test_today_shows_todays_entries(runner, data_dir):
     # a naive `now - 30 minutes` lands in *yesterday* whenever the test runs
     # within 30 minutes after midnight, which is a real flake (observed at
     # 00:08 UTC). Midnight-anchored seeds are always inside "today".
-    midnight = datetime.now(tz=timezone.utc).replace(
-        hour=0, minute=0, second=0, microsecond=0
+    midnight = datetime.now(tz=timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    _seed(
+        "11111111-aaaa-bbbb-cccc-111111111111",
+        "today one",
+        _utc_iso(midnight + timedelta(seconds=1)),
     )
-    _seed("11111111-aaaa-bbbb-cccc-111111111111", "today one", _utc_iso(midnight + timedelta(seconds=1)))
-    _seed("22222222-aaaa-bbbb-cccc-222222222222", "today two", _utc_iso(midnight + timedelta(seconds=2)))
+    _seed(
+        "22222222-aaaa-bbbb-cccc-222222222222",
+        "today two",
+        _utc_iso(midnight + timedelta(seconds=2)),
+    )
     result = runner.invoke(main, ["today"])
     assert result.exit_code == 0
     assert "today one" in result.output
@@ -100,7 +106,11 @@ def test_today_invalid_limit(runner):
 
 def test_tail_default_n(runner, data_dir):
     for i in range(10):
-        _seed(f"{i:08d}-aaaa-bbbb-cccc-dddddddddddd", f"msg {i}", _utc_iso(datetime.now(tz=timezone.utc)))
+        _seed(
+            f"{i:08d}-aaaa-bbbb-cccc-dddddddddddd",
+            f"msg {i}",
+            _utc_iso(datetime.now(tz=timezone.utc)),
+        )
     result = runner.invoke(main, ["tail"])
     assert result.exit_code == 0
     # Default is 5
@@ -109,7 +119,11 @@ def test_tail_default_n(runner, data_dir):
 
 def test_tail_explicit_n(runner, data_dir):
     for i in range(10):
-        _seed(f"{i:08d}-bbbb-bbbb-cccc-dddddddddddd", f"m {i}", _utc_iso(datetime.now(tz=timezone.utc)))
+        _seed(
+            f"{i:08d}-bbbb-bbbb-cccc-dddddddddddd",
+            f"m {i}",
+            _utc_iso(datetime.now(tz=timezone.utc)),
+        )
     result = runner.invoke(main, ["tail", "3"])
     assert result.exit_code == 0
     assert "Showing 3" in result.output
@@ -150,7 +164,12 @@ def test_stats_empty(runner):
 
 def test_stats_summary(runner, data_dir):
     now = datetime.now(tz=timezone.utc)
-    _seed("88888888-aaaa-bbbb-cccc-888888888888", "a", _utc_iso(now - timedelta(days=2)), ["backend", "bugfix"])
+    _seed(
+        "88888888-aaaa-bbbb-cccc-888888888888",
+        "a",
+        _utc_iso(now - timedelta(days=2)),
+        ["backend", "bugfix"],
+    )
     _seed("99999999-aaaa-bbbb-cccc-999999999999", "b", _utc_iso(now), ["backend"])
     _seed("aaaaaaaa-bbbb-cccc-dddd-aaaaaaaaaaaa", "c", _utc_iso(now), ["docs"])
 
@@ -176,12 +195,12 @@ def test_stats_quiet(runner, data_dir):
     assert "top_tags" in obj
     assert "last_30_days" in obj
     assert len(obj["last_30_days"]) == 30
+
+
 @pytest.mark.skipif(
-        active_backend() == "sqlite",
-        reason="asserts entries.json on-disk semantics (JSON backend only)",
-    )
-
-
+    active_backend() == "sqlite",
+    reason="asserts entries.json on-disk semantics (JSON backend only)",
+)
 def test_stats_does_not_crash_on_unparseable_created_at(runner, data_dir):
     """A store containing one valid entry and one with a bogus
     created_at must not crash `stats` — the bad row is dropped and the

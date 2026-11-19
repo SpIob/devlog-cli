@@ -49,9 +49,6 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 # ---------------------------------------------------------------------------
 
 
-
-
-
 def is_valid_style(value: str) -> bool:
     """Return True iff *value* parses as a Rich style string.
 
@@ -81,34 +78,34 @@ def is_valid_style(value: str) -> bool:
 #: template is generated from the same list by :func:`_theme_template`
 #: so adding a role only requires editing one place.
 _ROLE_DEFAULTS: list[tuple[str, str]] = [
-    ("error_border",     "red"),
-    ("error_text",       "red"),
-    ("warning_text",     "yellow"),
-    ("info_text",        "dim"),
-    ("success_border",   "green"),
-    ("success_text",     "green"),
-    ("success_title",    "bold green"),
-    ("show_border",      "cyan"),
-    ("delete_border",    "red"),
-    ("edit_border",      "blue"),
-    ("date",             "cyan"),
-    ("updated",          "yellow"),
-    ("tags",             "magenta"),
-    ("id_dim",           "dim white"),
-    ("match_highlight",  "bold yellow"),
-    ("banner_version",   "bold cyan"),
-    ("banner_command",   "bold cyan"),
-    ("prompt_border",    "magenta"),
-    ("table_caption",    "dim"),
-    ("table_footer",     "bold"),
-    ("sparkline",        "cyan"),
-    ("zebra_alt",        "dim"),
-    ("heatmap_base",     "green"),
-    ("heatmap_empty",    "grey15"),
-    ("heatmap_l1",       "green"),
-    ("heatmap_l2",       "color(34)"),
-    ("heatmap_l3",       "color(40)"),
-    ("heatmap_l4",       "color(46)"),
+    ("error_border", "red"),
+    ("error_text", "red"),
+    ("warning_text", "yellow"),
+    ("info_text", "dim"),
+    ("success_border", "green"),
+    ("success_text", "green"),
+    ("success_title", "bold green"),
+    ("show_border", "cyan"),
+    ("delete_border", "red"),
+    ("edit_border", "blue"),
+    ("date", "cyan"),
+    ("updated", "yellow"),
+    ("tags", "magenta"),
+    ("id_dim", "dim white"),
+    ("match_highlight", "bold yellow"),
+    ("banner_version", "bold cyan"),
+    ("banner_command", "bold cyan"),
+    ("prompt_border", "magenta"),
+    ("table_caption", "dim"),
+    ("table_footer", "bold"),
+    ("sparkline", "cyan"),
+    ("zebra_alt", "dim"),
+    ("heatmap_base", "green"),
+    ("heatmap_empty", "grey15"),
+    ("heatmap_l1", "green"),
+    ("heatmap_l2", "color(34)"),
+    ("heatmap_l3", "color(40)"),
+    ("heatmap_l4", "color(46)"),
 ]
 
 
@@ -248,9 +245,7 @@ def _parse_file(path: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     for k, v in palette.items():
         if not isinstance(v, str):
-            raise TypeError(
-                f"palette key {k!r} has non-string value of type {type(v).__name__}"
-            )
+            raise TypeError(f"palette key {k!r} has non-string value of type {type(v).__name__}")
         out[str(k)] = v
     return out
 
@@ -294,20 +289,14 @@ def load_theme(warn_stream=None, *, strict: bool = False):
     try:
         raw = _parse_file(path)
     except tomllib.TOMLDecodeError as exc:
-        msg = (
-            f"Warning: theme file at {path} is invalid ({exc}); "
-            "using default theme."
-        )
+        msg = f"Warning: theme file at {path} is invalid ({exc}); using default theme."
         print(msg, file=warn_stream)
         if strict:
             warnings.append(msg)
             return dict(DEFAULT_THEME), warnings
         return dict(DEFAULT_THEME)
     except (OSError, TypeError) as exc:
-        msg = (
-            f"Warning: cannot read theme file at {path} ({exc}); "
-            "using default theme."
-        )
+        msg = f"Warning: cannot read theme file at {path} ({exc}); using default theme."
         print(msg, file=warn_stream)
         if strict:
             warnings.append(msg)
@@ -443,16 +432,14 @@ def _theme_template() -> str:
         "#\n"
         "# Override any role below to customize colors. Roles you omit use the\n"
         "# built-in default. Any Rich style string is accepted: named colors\n"
-        "# (e.g. \"red\"), hex (\"#ff8800\"), 256-color (\"color(208)\"),\n"
-        "# true-color (\"rgb(255,136,0)\"), or composites like \"bold yellow\".\n"
+        '# (e.g. "red"), hex ("#ff8800"), 256-color ("color(208)"),\n'
+        '# true-color ("rgb(255,136,0)"), or composites like "bold yellow".\n'
         "#\n"
         "# Run `devlog theme list` to see every role and its current value.\n"
         "\n"
         "[palette]\n"
     )
-    body = "\n".join(
-        f"# {role:<16} = \"{default}\"" for role, default in _ROLE_DEFAULTS
-    )
+    body = "\n".join(f'# {role:<16} = "{default}"' for role, default in _ROLE_DEFAULTS)
     return header + body + "\n"
 
 

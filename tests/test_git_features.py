@@ -32,13 +32,15 @@ def repo(tmp_path, monkeypatch):
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(
         ["git", "commit", "-q", "-m", "feat(auth): add login flow"],
-        cwd=tmp_path, check=True,
+        cwd=tmp_path,
+        check=True,
     )
     (tmp_path / "f.txt").write_text("two\n")
     subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
     subprocess.run(
         ["git", "commit", "-q", "-m", "fix(api): handle null session"],
-        cwd=tmp_path, check=True,
+        cwd=tmp_path,
+        check=True,
     )
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "journal"))
@@ -105,18 +107,14 @@ def test_add_from_commit_backdates_to_author_date(repo):
     # The commit was made "now", so the entry date should be within a minute.
     from datetime import datetime, timezone
 
-    ts = datetime.strptime(entries[0].created_at, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=timezone.utc
-    )
+    ts = datetime.strptime(entries[0].created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     delta = abs((datetime.now(tz=timezone.utc) - ts).total_seconds())
     assert delta < 120
 
 
 def test_add_from_commit_ignores_invalid_tags_option(repo):
     # -t values pass through normal validation; valid ones merge in front.
-    result = CliRunner().invoke(
-        main, ["add", "--from-commit", "HEAD", "", "-t", "deploy"]
-    )
+    result = CliRunner().invoke(main, ["add", "--from-commit", "HEAD", "", "-t", "deploy"])
     assert result.exit_code == 0, result.output
     entries = storage.load_entries()
     assert entries[0].tags[0] == "deploy"

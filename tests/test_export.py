@@ -182,16 +182,14 @@ def test_export_markdown_extension_writes_md(runner, tmp_path):
     content = out.read_text()
     assert "MD export target" in content
     assert "##" in content  # markdown heading
-    assert "{ \"entries\":" not in content  # not JSON
+    assert '{ "entries":' not in content  # not JSON
 
 
 def test_export_explicit_format_overrides_extension(runner, tmp_path):
     """--format json wins even with a .md extension."""
     _add(runner, "Override target")
     out = tmp_path / "out.md"
-    result = runner.invoke(
-        main, ["export", "--output", str(out), "--format", "json", "--quiet"]
-    )
+    result = runner.invoke(main, ["export", "--output", str(out), "--format", "json", "--quiet"])
     assert result.exit_code == 0
     payload = json.loads(out.read_text())
     assert payload["entries"][0]["message"] == "Override target"
@@ -266,6 +264,7 @@ def test_export_markdown_filename_uses_correct_date(runner, tmp_path, data_dir):
     """The auto-generated filename must use %Y%m%d (digits), not the
     literal ``dd`` that produced ``devlog-202609dd-...``."""
     from datetime import datetime, timezone
+
     _add(runner, "x")
     result = runner.invoke(main, ["export", "--quiet"])
     assert result.exit_code == 0
@@ -278,13 +277,12 @@ def test_export_markdown_filename_uses_correct_date(runner, tmp_path, data_dir):
     assert "dd" not in fname, f"filename {fname!r} contains literal 'dd'"
 
 
-def test_export_markdown_includes_full_timestamp_for_round_trip(
-    runner, data_dir, tmp_path
-):
+def test_export_markdown_includes_full_timestamp_for_round_trip(runner, data_dir, tmp_path):
     """The Markdown exporter must embed the full ISO timestamp in a
     hidden comment so ``devlog export → import`` does not create
     duplicate entries due to seconds-truncation."""
     from devlog import storage
+
     _add(runner, "alpha")
     _add(runner, "beta")
     out = tmp_path / "roundtrip.md"

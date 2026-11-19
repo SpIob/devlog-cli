@@ -50,9 +50,7 @@ def register(main) -> None:
         if not status["is_git_repo"]:
             ui.print_info("Journal directory is not a git repository.")
             if status["repo_root"]:
-                console.print(
-                    f"  Found git repo at parent: {status['repo_root']}"
-                )
+                console.print(f"  Found git repo at parent: {status['repo_root']}")
             return
 
         console.print(ui.success_line(f"Git repository: {status['repo_root']}"))
@@ -67,9 +65,7 @@ def register(main) -> None:
                 console.print(f"    {change}")
 
     @git.command("sync")
-    @click.option(
-        "--message", "-m", default="devlog: journal update", help="Commit message."
-    )
+    @click.option("--message", "-m", default="devlog: journal update", help="Commit message.")
     @click.option("--quiet", "-q", is_flag=True, help="Suppress output.")
     def git_sync(message: str, quiet: bool) -> None:
         """Auto-commit journal changes to git."""
@@ -110,13 +106,9 @@ def register(main) -> None:
         from devlog._gitops import _run_git
 
         if oneline:
-            exit_code, stdout, stderr = _run_git(
-                ["log", "--oneline", f"-{limit}"], repo_root
-            )
+            exit_code, stdout, stderr = _run_git(["log", "--oneline", f"-{limit}"], repo_root)
         else:
-            exit_code, stdout, stderr = _run_git(
-                ["log", f"-{limit}"], repo_root
-            )
+            exit_code, stdout, stderr = _run_git(["log", f"-{limit}"], repo_root)
 
         if exit_code != 0:
             ui.print_error(f"git log failed: {stderr}")

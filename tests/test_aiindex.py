@@ -16,9 +16,7 @@ from devlog.models import Entry
 
 
 def _entry(entry_id: str, message: str, iso: str, tags=None) -> Entry:
-    return Entry(
-        id=entry_id, message=message, created_at=iso, tags=list(tags or [])
-    )
+    return Entry(id=entry_id, message=message, created_at=iso, tags=list(tags or []))
 
 
 @pytest.fixture()
@@ -53,9 +51,7 @@ class TestIndexFile:
         assert _aiindex.load_index(data_dir) is None
 
     def test_load_wrong_shape_returns_none(self, data_dir):
-        (data_dir / "embeddings.json").write_text(
-            json.dumps({"wrong": "shape"}), encoding="utf-8"
-        )
+        (data_dir / "embeddings.json").write_text(json.dumps({"wrong": "shape"}), encoding="utf-8")
         assert _aiindex.load_index(data_dir) is None
 
 
@@ -152,9 +148,7 @@ class TestSearchEntries:
         assert isinstance(ranked[0][1], float)
 
     def test_limit_truncates(self, data_dir, _ollama_host):
-        entries = [
-            _entry(f"e{i}", f"message {i}", f"2026-10-2{i}T09:15:00Z") for i in range(3)
-        ]
+        entries = [_entry(f"e{i}", f"message {i}", f"2026-10-2{i}T09:15:00Z") for i in range(3)]
         idx = _aiindex.ensure_index(entries, data_dir)
         ranked = _aiindex.search_entries("query", entries, idx, top=2)
         assert len(ranked) == 2

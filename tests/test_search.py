@@ -174,7 +174,7 @@ def test_search_quoted_phrase_with_other_terms(runner):
     _add(runner, "Fixed the login bug in auth")
     _add(runner, "Fixed the login page")
     # "login bug" AND "auth" should match only first
-    result = runner.invoke(main, ['search', '"login bug" auth'])
+    result = runner.invoke(main, ["search", '"login bug" auth'])
     assert result.exit_code == 0
     assert "login bug in auth" in result.output
     assert "login page" not in result.output

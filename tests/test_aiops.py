@@ -17,9 +17,7 @@ from devlog.models import Entry
 
 
 def _entry(entry_id: str, message: str, iso: str, tags=None) -> Entry:
-    return Entry(
-        id=entry_id, message=message, created_at=iso, tags=list(tags or [])
-    )
+    return Entry(id=entry_id, message=message, created_at=iso, tags=list(tags or []))
 
 
 # ---------------------------------------------------------------------------
@@ -46,9 +44,7 @@ class TestSummarizeWeekText:
         assert "2 entries" in text
 
     def test_entry_lines_include_local_time_and_tags(self):
-        entries = [
-            _entry("e1", "Fixed the bug", "2026-10-27T09:15:00Z", ["bug", "tz"])
-        ]
+        entries = [_entry("e1", "Fixed the bug", "2026-10-27T09:15:00Z", ["bug", "tz"])]
         text = _aiops.summarize_week_text(
             entries, start_date=date(2026, 10, 27), end_date=date(2026, 10, 27)
         )
@@ -128,9 +124,9 @@ class TestRankEntries:
     def test_returns_ids_sorted_by_similarity_descending(self):
         query = [1.0, 0.0]
         vectors = {
-            "a": [0.9, 0.1],   # high
-            "b": [0.0, 1.0],   # zero
-            "c": [0.5, 0.5],   # middle
+            "a": [0.9, 0.1],  # high
+            "b": [0.0, 1.0],  # zero
+            "c": [0.5, 0.5],  # middle
         }
         ranked = _aiops.rank_by_query(query, vectors)
         assert [item_id for item_id, _score in ranked] == ["a", "c", "b"]

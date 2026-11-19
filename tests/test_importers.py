@@ -34,7 +34,9 @@ def data_dir(monkeypatch, tmp_path):
 
 def test_detect_jrnl(tmp_path):
     f = tmp_path / "jrnl.json"
-    f.write_text(json.dumps({"entries": [{"date": "2024-01-01T10:00:00", "text": "hi", "starred": False}]}))
+    f.write_text(
+        json.dumps({"entries": [{"date": "2024-01-01T10:00:00", "text": "hi", "starred": False}]})
+    )
     assert detect_format(str(f)) == "jrnl"
 
 
@@ -46,7 +48,9 @@ def test_detect_dayone(tmp_path):
 
 def test_detect_devlog_json(tmp_path):
     f = tmp_path / "d.json"
-    f.write_text(json.dumps({"entries": [{"id": "x", "message": "m", "created_at": "2024-01-01T00:00:00Z"}]}))
+    f.write_text(
+        json.dumps({"entries": [{"id": "x", "message": "m", "created_at": "2024-01-01T00:00:00Z"}]})
+    )
     assert detect_format(str(f)) == "json"
 
 
@@ -73,8 +77,18 @@ def test_jrnl_import_basic(tmp_path):
         json.dumps(
             {
                 "entries": [
-                    {"date": "2024-01-15T10:30:00", "text": "jrnl entry one", "tags": ["work"], "starred": False},
-                    {"date": "2024-01-16T09:00:00", "text": "jrnl entry two", "tags": [], "starred": True},
+                    {
+                        "date": "2024-01-15T10:30:00",
+                        "text": "jrnl entry one",
+                        "tags": ["work"],
+                        "starred": False,
+                    },
+                    {
+                        "date": "2024-01-16T09:00:00",
+                        "text": "jrnl entry two",
+                        "tags": [],
+                        "starred": True,
+                    },
                 ]
             }
         )
@@ -90,7 +104,9 @@ def test_jrnl_import_basic(tmp_path):
 
 def test_jrnl_import_naive_date_treated_as_utc(tmp_path):
     f = tmp_path / "jrnl.json"
-    f.write_text(json.dumps({"entries": [{"date": "2024-01-15T10:30:00", "text": "x", "starred": False}]}))
+    f.write_text(
+        json.dumps({"entries": [{"date": "2024-01-15T10:30:00", "text": "x", "starred": False}]})
+    )
     entries = import_jrnl_json(str(f))
     assert entries[0].created_at == "2024-01-15T10:30:00Z"
 
@@ -126,7 +142,9 @@ def test_dayone_import_preserves_uuid_and_tags(tmp_path):
 
 def test_dayone_import_mints_ids_when_missing(tmp_path):
     f = tmp_path / "dayone.json"
-    f.write_text(json.dumps({"entries": [{"creationDate": "2024-02-20T08:15:30Z", "text": "no uuid"}]}))
+    f.write_text(
+        json.dumps({"entries": [{"creationDate": "2024-02-20T08:15:30Z", "text": "no uuid"}]})
+    )
     entries = import_dayone_json(str(f))
     assert len(entries[0].id) >= 8
 
@@ -142,7 +160,12 @@ def test_cli_import_jrnl(runner, data_dir, tmp_path):
         json.dumps(
             {
                 "entries": [
-                    {"date": "2024-01-15T10:30:00", "text": "from jrnl", "tags": ["work"], "starred": False}
+                    {
+                        "date": "2024-01-15T10:30:00",
+                        "text": "from jrnl",
+                        "tags": ["work"],
+                        "starred": False,
+                    }
                 ]
             }
         )
@@ -158,9 +181,7 @@ def test_cli_import_jrnl(runner, data_dir, tmp_path):
 def test_cli_import_jrnl_auto_detected(runner, data_dir, tmp_path):
     f = tmp_path / "whatever.json"
     f.write_text(
-        json.dumps(
-            {"entries": [{"date": "2024-01-15T10:30:00", "text": "auto", "starred": False}]}
-        )
+        json.dumps({"entries": [{"date": "2024-01-15T10:30:00", "text": "auto", "starred": False}]})
     )
     result = runner.invoke(main, ["import", str(f)])
     assert result.exit_code == 0, result.output
@@ -173,7 +194,12 @@ def test_cli_import_dayone(runner, data_dir, tmp_path):
         json.dumps(
             {
                 "entries": [
-                    {"uuid": "D1", "creationDate": "2024-02-20T08:15:30Z", "text": "from day one", "tags": ["x"]}
+                    {
+                        "uuid": "D1",
+                        "creationDate": "2024-02-20T08:15:30Z",
+                        "text": "from day one",
+                        "tags": ["x"],
+                    }
                 ]
             }
         )
@@ -205,9 +231,7 @@ def test_cli_import_jrnl_idempotent(runner, data_dir, tmp_path):
 def test_cli_import_jrnl_dry_run_does_not_write(runner, data_dir, tmp_path):
     f = tmp_path / "jrnl.json"
     f.write_text(
-        json.dumps(
-            {"entries": [{"date": "2024-01-15T10:30:00", "text": "dry", "starred": False}]}
-        )
+        json.dumps({"entries": [{"date": "2024-01-15T10:30:00", "text": "dry", "starred": False}]})
     )
     result = runner.invoke(main, ["import", str(f), "--format", "jrnl", "--dry-run"])
     assert result.exit_code == 0

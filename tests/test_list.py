@@ -104,11 +104,9 @@ def test_list_invalid_limit(runner):
 # Corrupted storage
 # ---------------------------------------------------------------------------
 @pytest.mark.skipif(
-        active_backend() == "sqlite",
-        reason="asserts entries.json on-disk semantics (JSON backend only)",
-    )
-
-
+    active_backend() == "sqlite",
+    reason="asserts entries.json on-disk semantics (JSON backend only)",
+)
 def test_list_corrupted_file(tmp_path):
     entries_file = tmp_path / "entries.json"
     entries_file.write_text("not valid json", encoding="utf-8")

@@ -82,9 +82,7 @@ def _interactive_repl(main_cli) -> None:
                 # this, a typo like ``lis`` would dump the Click
                 # usage block and the user would have to read it
                 # carefully to know it was a failure.
-                ui.print_error(
-                    f"Command {argv[0]!r} failed (exit {result.exit_code})."
-                )
+                ui.print_error(f"Command {argv[0]!r} failed (exit {result.exit_code}).")
                 console.print(result.output, highlight=False)
             elif result.output:
                 console.print(result.output, highlight=False)

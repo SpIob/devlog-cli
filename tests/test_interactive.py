@@ -23,6 +23,7 @@ def test_interactive_quit_via_stdin(monkeypatch, tmp_path):
     monkeypatch.setenv("DEVLOG_INTERACTIVE_FORCE", "1")  # bypass TTY check for tests
 
     from rich import prompt as _rp
+
     monkeypatch.setattr(_rp.Prompt, "ask", lambda *a, **kw: "q")
 
     result = CliRunner().invoke(main, ["--interactive"])
@@ -35,6 +36,7 @@ def test_interactive_help(monkeypatch, tmp_path):
     monkeypatch.setenv("DEVLOG_INTERACTIVE_FORCE", "1")
 
     from rich import prompt as _rp
+
     responses = iter(["help", "q"])
     monkeypatch.setattr(_rp.Prompt, "ask", lambda *a, **kw: next(responses))
 
@@ -45,10 +47,30 @@ def test_interactive_help(monkeypatch, tmp_path):
     assert "Available commands" in result.output or "add" in result.output
     # Every command group + its sub-commands should be discoverable.
     for cmd in [
-        "add", "show", "edit", "delete", "list", "search", "today",
-        "yesterday", "week", "tail", "tags", "tag", "merge-tag", "stats",
-        "calendar", "rename-tag", "import", "completions",
-        "export", "repair", "backup", "restore", "doctor", "theme",
+        "add",
+        "show",
+        "edit",
+        "delete",
+        "list",
+        "search",
+        "today",
+        "yesterday",
+        "week",
+        "tail",
+        "tags",
+        "tag",
+        "merge-tag",
+        "stats",
+        "calendar",
+        "rename-tag",
+        "import",
+        "completions",
+        "export",
+        "repair",
+        "backup",
+        "restore",
+        "doctor",
+        "theme",
     ]:
         assert cmd in result.output, f"REPL help missing command: {cmd}"
 
@@ -73,6 +95,7 @@ def test_interactive_add_dispatches_to_cli(data_dir, monkeypatch):
     monkeypatch.setenv("DEVLOG_INTERACTIVE_FORCE", "1")
 
     from rich import prompt as _rp
+
     # Quoted message so shlex doesn't split it across argv tokens.
     responses = iter(['add "hello from repl" -t repltest', "q"])
     monkeypatch.setattr(_rp.Prompt, "ask", lambda *a, **kw: next(responses))
@@ -103,6 +126,7 @@ def test_interactive_failed_command_prints_error_panel(monkeypatch, tmp_path):
     monkeypatch.setenv("DEVLOG_INTERACTIVE_FORCE", "1")
 
     from rich import prompt as _rp
+
     # ``lis`` is not a real command. Click will exit 2 with usage text.
     responses = iter(["lis", "q"])
     monkeypatch.setattr(_rp.Prompt, "ask", lambda *a, **kw: next(responses))

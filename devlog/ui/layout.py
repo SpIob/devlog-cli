@@ -1,5 +1,4 @@
-"""devlog.ui.layout — Terminal-width arithmetic and the table renderers.
-"""
+"""devlog.ui.layout — Terminal-width arithmetic and the table renderers."""
 
 from __future__ import annotations
 
@@ -262,9 +261,7 @@ def entries_table(
     msg_limit = min(MSG_TRUNCATE_LEN, widths["message"])
     for entry in entries:
         if highlight_query:
-            msg_cell = smart_truncate(
-                entry.message, highlight_query, msg_limit
-            )
+            msg_cell = smart_truncate(entry.message, highlight_query, msg_limit)
         else:
             msg_cell = escape(_left_truncate(entry.message, msg_limit))
         id_cell = _short_id(entry, length=6 if very_narrow else None)
@@ -298,6 +295,7 @@ def entries_table(
 # ---------------------------------------------------------------------------
 # Tags table (`devlog tags`)
 # ---------------------------------------------------------------------------
+
 
 def tags_table(
     rows: Sequence[tuple[str, int, str]],
@@ -366,6 +364,7 @@ def command_table(commands: Sequence[tuple[str, str]]) -> Table:
 # ---------------------------------------------------------------------------
 # Theme table (`devlog theme list` / `devlog theme show`)
 # ---------------------------------------------------------------------------
+
 
 def theme_table(
     palette: Mapping[str, str] | None = None,

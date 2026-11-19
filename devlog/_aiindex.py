@@ -41,9 +41,7 @@ def save_index(data_dir: Path, index: EmbeddingIndex) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     payload = {"model": index.model, "entries": index.entries}
     tmp_path = _index_path(data_dir).with_suffix(".tmp")
-    tmp_path.write_text(
-        json.dumps(payload, ensure_ascii=False), encoding="utf-8"
-    )
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp_path, _index_path(data_dir))
 
 
@@ -93,9 +91,7 @@ def ensure_index(
 
     missing = [e for e in entries if e.id not in index.entries]
     if missing:
-        vectors = _ollama.embed(
-            [e.message for e in missing], model=model, host=host
-        )
+        vectors = _ollama.embed([e.message for e in missing], model=model, host=host)
         for e, vec in zip(missing, vectors):
             index.entries[e.id] = vec
 

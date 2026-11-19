@@ -75,17 +75,14 @@ def _validate_tags(raw_tags: tuple[str, ...]) -> list[str]:
                 )
             if len(part) > MAX_TAG_LENGTH:
                 raise click.UsageError(
-                    f'Tag "{part}" exceeds maximum length of '
-                    f"{MAX_TAG_LENGTH} characters per tag."
+                    f'Tag "{part}" exceeds maximum length of {MAX_TAG_LENGTH} characters per tag.'
                 )
             if part not in seen_set:
                 seen_set.add(part)
                 seen.append(part)
 
     if len(seen) > MAX_TAGS:
-        raise click.UsageError(
-            f"Maximum {MAX_TAGS} tags per entry. You provided {len(seen)}."
-        )
+        raise click.UsageError(f"Maximum {MAX_TAGS} tags per entry. You provided {len(seen)}.")
 
     return seen
 
@@ -160,7 +157,7 @@ def parse_tag_query(raw_tags: tuple[str, ...]) -> TagQuery:
             else:
                 if not _is_valid_tag(part):
                     raise click.UsageError(
-                        f"Tag \"{part}\" contains invalid characters. "
+                        f'Tag "{part}" contains invalid characters. '
                         f"Tags are normalised to lowercase; allowed: a-z, 0-9, hyphen."
                     )
                 if len(parts) > 1:
@@ -251,9 +248,7 @@ def _validate_new_tag(raw: str) -> str:
     return norm[0]
 
 
-def _rewrite_tag_in_entry(
-    entry: Entry, old: str, new: str, *, now: str | None = None
-) -> None:
+def _rewrite_tag_in_entry(entry: Entry, old: str, new: str, *, now: str | None = None) -> None:
     """Replace every occurrence of ``old`` with ``new`` in ``entry.tags``.
 
     Handles dedup: if ``entry.tags`` already contains ``new``, a

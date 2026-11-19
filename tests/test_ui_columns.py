@@ -227,10 +227,9 @@ def test_search_match_is_ansi_styled(monkeypatch, fixed_terminal_width):
     out = buf.getvalue()
     # Rich translates [bold yellow]X[/bold yellow] to ESC[1;33mX ESC[0m
     # (or ESC[33;1m in some terminals); accept either ordering.
-    assert (
-        "\x1b[1;33mbrown\x1b[0m" in out
-        or "\x1b[33;1mbrown\x1b[0m" in out
-    ), f"bold-yellow styling missing for match:\n{out}"
+    assert "\x1b[1;33mbrown\x1b[0m" in out or "\x1b[33;1mbrown\x1b[0m" in out, (
+        f"bold-yellow styling missing for match:\n{out}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -245,8 +244,7 @@ def test_column_widths_fit_terminal(monkeypatch, fixed_terminal_width, width):
     widths = ui._column_widths()
     total = sum(widths.values()) + 4 * ui._COL_PADDING + 5
     assert total <= width, (
-        f"column widths {widths} require {total} chars but "
-        f"terminal is {width} wide"
+        f"column widths {widths} require {total} chars but terminal is {width} wide"
     )
 
 
@@ -338,8 +336,7 @@ def test_stats_panel_anchors_scale_labels_to_sparkline_width():
         top_tags=[],
         # Busiest day is 99 entries; the scale label must be 2 chars wide
         # and the previous 30-char-pad math would have under-padded.
-        last_30_days=[(f"2025-01-{i:02d}", 1) for i in range(1, 30)]
-        + [("2025-01-30", 99)],
+        last_30_days=[(f"2025-01-{i:02d}", 1) for i in range(1, 30)] + [("2025-01-30", 99)],
     )
     buf = io.StringIO()
     Console(file=buf, no_color=True, width=120).print(panel)
@@ -364,9 +361,7 @@ def test_repair_panel_uses_repair_icon():
     hammer-and-pick (``⚒``); we only assert the panel is recognisably
     a repair panel and is not the edit pencil.
     """
-    panel = ui.repair_summary(
-        issues=[], dropped=0, kept=5, dry_run=True, backup_path=None
-    )
+    panel = ui.repair_summary(issues=[], dropped=0, kept=5, dry_run=True, backup_path=None)
     buf = io.StringIO()
     Console(file=buf, no_color=True, width=120).print(panel)
     out = strip_ansi(buf.getvalue())
@@ -444,9 +439,7 @@ def test_narrow_terminal_drops_tags_column(monkeypatch, fixed_terminal_width):
     assert "Tags" not in header_line
 
 
-def test_narrow_terminal_at_min_width_keeps_full_id_and_date(
-    monkeypatch, fixed_terminal_width
-):
+def test_narrow_terminal_at_min_width_keeps_full_id_and_date(monkeypatch, fixed_terminal_width):
     """At 70 cols (>=_NARROW_TABLE_MIN_WIDTH=65) the full 8-char id and
     20-char date must survive in the 3-column layout."""
     ui.console = Console(no_color=True, width=70, force_terminal=True)

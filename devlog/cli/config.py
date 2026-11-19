@@ -173,9 +173,7 @@ def register(main) -> None:
                 ui.print_info("No changes were saved.")
                 sys.exit(1)
             if not isinstance(new_data, dict):
-                ui.print_error(
-                    "Config file must contain a JSON object (keys mapping to values)."
-                )
+                ui.print_error("Config file must contain a JSON object (keys mapping to values).")
                 ui.print_info("No changes were saved.")
                 sys.exit(1)
 

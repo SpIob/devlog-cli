@@ -34,7 +34,7 @@ def test_backup_filename_format(runner, data_dir, seed_entry):
     # Format: entries-YYYYMMDD-HHMMSS.json
     assert filename.startswith("entries-")
     assert filename.endswith(".json")
-    ts_part = filename[len("entries-"):-len(".json")]
+    ts_part = filename[len("entries-") : -len(".json")]
     # Should be parseable as YYYYMMDD-HHMMSS
     datetime.strptime(ts_part, "%Y%m%d-%H%M%S")
 
@@ -125,8 +125,9 @@ def test_restore_writes_entries(runner, data_dir, tmp_path):
                     }
                 ]
             }
-        )
-    , encoding="utf-8")
+        ),
+        encoding="utf-8",
+    )
     result = runner.invoke(main, ["restore", str(backup_file), "-y"])
     assert result.exit_code == 0
     assert "Restored" in result.output
@@ -161,8 +162,9 @@ def test_restore_salvages_invalid_rows(runner, data_dir, tmp_path):
                     },
                 ]
             }
-        )
-    , encoding="utf-8")
+        ),
+        encoding="utf-8",
+    )
     result = runner.invoke(main, ["restore", str(backup_file), "-y"])
     assert result.exit_code == 0
     assert "Skipped" in result.output
@@ -194,8 +196,9 @@ def test_restore_drops_unrecoverable_rows(runner, data_dir, tmp_path):
                     },
                 ]
             }
-        )
-    , encoding="utf-8")
+        ),
+        encoding="utf-8",
+    )
     result = runner.invoke(main, ["restore", str(backup_file), "-y"])
     assert result.exit_code == 0
     assert "Skipped" in result.output
@@ -218,8 +221,9 @@ def test_restore_prompts_when_existing(runner, data_dir, tmp_path, seed_entry):
                     }
                 ]
             }
-        )
-    , encoding="utf-8")
+        ),
+        encoding="utf-8",
+    )
     # Without -y: the default is "no" → abort
     result = runner.invoke(main, ["restore", str(backup_file)], input="n\n")
     assert result.exit_code == 1  # Click abort=True → SystemExit(1) when user says no
@@ -275,8 +279,9 @@ def test_restore_dry_run_does_not_write(runner, data_dir, tmp_path, seed_entry):
                     }
                 ]
             }
-        )
-    , encoding="utf-8")
+        ),
+        encoding="utf-8",
+    )
     result = runner.invoke(main, ["restore", str(backup_file), "--dry-run"])
     assert result.exit_code == 0
     assert "DRY RUN" in result.output

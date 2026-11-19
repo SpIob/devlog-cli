@@ -34,6 +34,7 @@ _BY_CREATED_AT = BY_CREATED_AT
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _handle_storage_error(exc: StorageError) -> None:
     """Render a storage error and exit with code 2.
 
@@ -69,8 +70,7 @@ def _resolve_tz_or_exit():
         return _dates._resolve_local_tz()
     except ValueError as exc:
         ui.print_error(
-            f'Invalid DEVLOG_TZ: {exc}. '
-            "Use an IANA name like America/New_York or Europe/Berlin."
+            f"Invalid DEVLOG_TZ: {exc}. Use an IANA name like America/New_York or Europe/Berlin."
         )
         sys.exit(1)
 
@@ -106,8 +106,7 @@ def _resolve_entry_by_id_or_exit(
             return None
         short_ids = ", ".join(e.short_id for e in candidates)
         ui.print_error(
-            f'ID prefix "{entry_id}" matches multiple entries: {short_ids}. '
-            "Use a longer prefix."
+            f'ID prefix "{entry_id}" matches multiple entries: {short_ids}. Use a longer prefix.'
         )
         sys.exit(1)
     # Distinguish "not found" from "ambiguous"
@@ -115,8 +114,7 @@ def _resolve_entry_by_id_or_exit(
     if len(candidates) > 1:
         short_ids = ", ".join(e.short_id for e in candidates)
         ui.print_error(
-            f'ID prefix "{entry_id}" matches multiple entries: {short_ids}. '
-            "Use a longer prefix."
+            f'ID prefix "{entry_id}" matches multiple entries: {short_ids}. Use a longer prefix.'
         )
     else:
         ui.print_error(f'No entry found with id "{entry_id}".')
@@ -155,6 +153,7 @@ def _parse_search_query(query: str) -> list[str]:
         List of terms (strings) to match with AND logic
     """
     import shlex
+
     try:
         # shlex.split handles quoted strings properly
         return shlex.split(query)
@@ -166,6 +165,7 @@ def _parse_search_query(query: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # edit
 # ---------------------------------------------------------------------------
+
 
 def _validate_tags_or_exit(raw_tags: tuple[str, ...]) -> list[str]:
     """Run :func:`_tagops._validate_tags` and bail on ``click.UsageError``.
@@ -207,9 +207,7 @@ def _edit_compute_tags(
     return out
 
 
-def _edit_resolve_at(
-    match: Entry, at: str | None, *, yes: bool
-) -> str:
+def _edit_resolve_at(match: Entry, at: str | None, *, yes: bool) -> str:
     """Return the new ``created_at`` string after applying ``--at`` (if any).
 
     Prompts the user for confirmation when ``--at`` would change the
@@ -224,9 +222,7 @@ def _edit_resolve_at(
     except click.BadParameter as exc:
         ui.print_error(str(exc))
         sys.exit(2)
-    new_created_at = parsed.astimezone(datetime.timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    new_created_at = parsed.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if new_created_at != match.created_at and not yes:
         old_h = ui.format_dt(match.created_at)
         new_h = ui.format_dt(new_created_at)
@@ -239,9 +235,7 @@ def _edit_resolve_at(
     return new_created_at
 
 
-def _edit_resolve_message(
-    match: Entry, new_message: str | None, *, from_flag: bool
-) -> str | None:
+def _edit_resolve_message(match: Entry, new_message: str | None, *, from_flag: bool) -> str | None:
     """Pick the final message body for the edit, validating it.
 
     Returns the message to persist, or ``None`` to signal "the user
@@ -283,9 +277,7 @@ def _edit_in_editor(initial: str) -> str | None:
         )
         sys.exit(1)
 
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".md", delete=False, encoding="utf-8"
-    ) as tf:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as tf:
         tf.write(initial)
         tmp_path = tf.name
 
@@ -338,7 +330,7 @@ def _tag_delete_impl(
         if not quiet:
             console.print(
                 ui.dry_run_line(
-                    f"would remove tag \"{norm_tag}\" from {len(affected)} "
+                    f'would remove tag "{norm_tag}" from {len(affected)} '
                     f"{ui.plural_noun(len(affected), 'entry')}."
                 )
             )
@@ -346,7 +338,7 @@ def _tag_delete_impl(
 
     if not yes and not quiet:
         prompt = (
-            f"Remove tag \"{norm_tag}\" from {len(affected)} "
+            f'Remove tag "{norm_tag}" from {len(affected)} '
             f"{ui.plural_noun(len(affected), 'entry')}?"
         )
         if not click.confirm(prompt, default=False):
@@ -367,7 +359,7 @@ def _tag_delete_impl(
     if not quiet:
         console.print(
             ui.success_line(
-                f"Removed tag \"{norm_tag}\" from {len(affected)} "
+                f'Removed tag "{norm_tag}" from {len(affected)} '
                 f"{ui.plural_noun(len(affected), 'entry')}."
             )
         )
@@ -409,7 +401,7 @@ def _tag_show_impl(
         for e in shown
     ]
 
-    title = f'Tag · {norm_tag} · {total} {ui.plural_noun(total, "entry")}'
+    title = f"Tag · {norm_tag} · {total} {ui.plural_noun(total, 'entry')}"
     table = ui.entries_table(shown_for_display, total, title=title)
     console.print(table)
 
@@ -444,10 +436,7 @@ def _doctor_collect_issues(raw: object) -> tuple[list[dict], list[Entry], bool]:
     Returns ``(issue_dicts, valid_entries, ok)``.
     """
     issues = storage.validate_entries(raw)
-    issue_dicts = [
-        {"kind": i.kind, "message": i.message, "entry_id": i.entry_id}
-        for i in issues
-    ]
+    issue_dicts = [{"kind": i.kind, "message": i.message, "entry_id": i.entry_id} for i in issues]
 
     valid_entries: list[Entry] = []
     if isinstance(raw, dict) and isinstance(raw.get("entries"), list):

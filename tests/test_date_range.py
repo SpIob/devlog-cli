@@ -19,9 +19,9 @@ def _mk_entry(eid, when_iso):
 
 def _utc_iso(year, month, day, hour=12, minute=0, second=0):
     """Local helper for unit tests - takes date parts, not datetime object."""
-    return datetime.datetime(year, month, day, hour, minute, second, tzinfo=datetime.timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    return datetime.datetime(
+        year, month, day, hour, minute, second, tzinfo=datetime.timezone.utc
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +177,17 @@ def test_filter_drops_unparseable_timestamps():
 
 def test_list_since_filter(runner, data_dir, seed_entry, utc_iso):
     from datetime import datetime, timezone
-    seed_entry("aaaaaaaa-1111-1111-1111-111111111111", "old", utc_iso(datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)))
-    seed_entry("bbbbbbbb-2222-2222-2222-222222222222", "new", utc_iso(datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)))
+
+    seed_entry(
+        "aaaaaaaa-1111-1111-1111-111111111111",
+        "old",
+        utc_iso(datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
+    seed_entry(
+        "bbbbbbbb-2222-2222-2222-222222222222",
+        "new",
+        utc_iso(datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
     result = runner.invoke(main, ["list", "--since", "2025-01-01"])
     assert result.exit_code == 0
     assert "new" in result.output
@@ -187,8 +196,17 @@ def test_list_since_filter(runner, data_dir, seed_entry, utc_iso):
 
 def test_list_until_filter(runner, data_dir, seed_entry, utc_iso):
     from datetime import datetime, timezone
-    seed_entry("aaaaaaaa-1111-1111-1111-111111111111", "old", utc_iso(datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)))
-    seed_entry("bbbbbbbb-2222-2222-2222-222222222222", "new", utc_iso(datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)))
+
+    seed_entry(
+        "aaaaaaaa-1111-1111-1111-111111111111",
+        "old",
+        utc_iso(datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
+    seed_entry(
+        "bbbbbbbb-2222-2222-2222-222222222222",
+        "new",
+        utc_iso(datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
     result = runner.invoke(main, ["list", "--until", "2024-12-31"])
     assert result.exit_code == 0
     assert "old" in result.output
@@ -197,9 +215,22 @@ def test_list_until_filter(runner, data_dir, seed_entry, utc_iso):
 
 def test_list_window(runner, data_dir, seed_entry, utc_iso):
     from datetime import datetime, timezone
-    seed_entry("aaaaaaaa-1111-1111-1111-111111111111", "before", utc_iso(datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)))
-    seed_entry("bbbbbbbb-2222-2222-2222-222222222222", "inside", utc_iso(datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)))
-    seed_entry("cccccccc-3333-3333-3333-333333333333", "after", utc_iso(datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)))
+
+    seed_entry(
+        "aaaaaaaa-1111-1111-1111-111111111111",
+        "before",
+        utc_iso(datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
+    seed_entry(
+        "bbbbbbbb-2222-2222-2222-222222222222",
+        "inside",
+        utc_iso(datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
+    seed_entry(
+        "cccccccc-3333-3333-3333-333333333333",
+        "after",
+        utc_iso(datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
     result = runner.invoke(
         main,
         ["list", "--since", "2025-01-01", "--until", "2025-12-31"],
@@ -218,6 +249,7 @@ def test_list_invalid_since(runner, data_dir):
 
 def test_list_natural_today(runner, data_dir, seed_entry, utc_iso):
     from datetime import datetime, timezone
+
     today_iso = utc_iso(datetime.now(tz=timezone.utc))
     seed_entry("aaaaaaaa-1111-1111-1111-111111111111", "today msg", today_iso)
     result = runner.invoke(main, ["list", "--since", "today"])
@@ -227,6 +259,7 @@ def test_list_natural_today(runner, data_dir, seed_entry, utc_iso):
 
 def test_list_relative_days(runner, data_dir, seed_entry, utc_iso):
     from datetime import datetime, timedelta, timezone
+
     # Seed an entry 30 days ago — should NOT match a 7d filter
     old = utc_iso(datetime.now(tz=timezone.utc) - timedelta(days=30))
     recent = utc_iso(datetime.now(tz=timezone.utc))
@@ -260,6 +293,7 @@ def test_parse_relative_minutes():
 
 def test_list_relative_hours(runner, data_dir, seed_entry, utc_iso):
     from datetime import datetime, timedelta, timezone
+
     # Entry from 5 hours ago (should NOT match 2h)
     old = utc_iso(datetime.now(tz=timezone.utc) - timedelta(hours=5))
     # Entry from 1 hour ago (should match 2h)
@@ -274,6 +308,7 @@ def test_list_relative_hours(runner, data_dir, seed_entry, utc_iso):
 
 def test_list_relative_minutes(runner, data_dir, seed_entry, utc_iso):
     from datetime import datetime, timedelta, timezone
+
     # Entry from 45 minutes ago (should NOT match 15m)
     old = utc_iso(datetime.now(tz=timezone.utc) - timedelta(minutes=45))
     # Entry from 5 minutes ago (should match 15m)
@@ -288,6 +323,7 @@ def test_list_relative_minutes(runner, data_dir, seed_entry, utc_iso):
 
 def test_since_4h_until_1h_window(runner, data_dir, seed_entry, utc_iso):
     from datetime import datetime, timedelta, timezone
+
     # Entry from 5 hours ago (outside window)
     e1 = utc_iso(datetime.now(tz=timezone.utc) - timedelta(hours=5))
     # Entry from 3 hours ago (inside 4h..1h window)
@@ -311,8 +347,17 @@ def test_since_4h_until_1h_window(runner, data_dir, seed_entry, utc_iso):
 
 def test_search_since(runner, data_dir, seed_entry, utc_iso):
     from datetime import datetime, timezone
-    seed_entry("aaaaaaaa-1111-1111-1111-111111111111", "auth pass", utc_iso(datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)))
-    seed_entry("bbbbbbbb-2222-2222-2222-222222222222", "auth fail", utc_iso(datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)))
+
+    seed_entry(
+        "aaaaaaaa-1111-1111-1111-111111111111",
+        "auth pass",
+        utc_iso(datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
+    seed_entry(
+        "bbbbbbbb-2222-2222-2222-222222222222",
+        "auth fail",
+        utc_iso(datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
     result = runner.invoke(main, ["search", "auth", "--since", "2025-01-01"])
     assert result.exit_code == 0
     assert "auth fail" in result.output
@@ -326,8 +371,17 @@ def test_search_since(runner, data_dir, seed_entry, utc_iso):
 
 def test_export_since(tmp_path, data_dir, seed_entry, utc_iso, runner):
     from datetime import datetime, timezone
-    seed_entry("aaaaaaaa-1111-1111-1111-111111111111", "old export", utc_iso(datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)))
-    seed_entry("bbbbbbbb-2222-2222-2222-222222222222", "new export", utc_iso(datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)))
+
+    seed_entry(
+        "aaaaaaaa-1111-1111-1111-111111111111",
+        "old export",
+        utc_iso(datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
+    seed_entry(
+        "bbbbbbbb-2222-2222-2222-222222222222",
+        "new export",
+        utc_iso(datetime(2025, 6, 1, 12, 0, 0, tzinfo=timezone.utc)),
+    )
     out_path = tmp_path / "out.md"
     result = runner.invoke(
         main,

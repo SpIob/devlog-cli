@@ -187,9 +187,7 @@ def entry_panel(
         border_style = _s("success_border")
     short_id = entry.id[:ID_DISPLAY_LEN]
     tags_display = (
-        Text(", ".join(entry.tags), style=_s("tags"))
-        if entry.tags
-        else Text(TAG_NONE, style="dim")
+        Text(", ".join(entry.tags), style=_s("tags")) if entry.tags else Text(TAG_NONE, style="dim")
     )
     date_text = Text(format_dt(entry.created_at), style=_s("date"))
 
@@ -237,6 +235,7 @@ def entry_panel(
 # Show panel (single entry detail)
 # ---------------------------------------------------------------------------
 
+
 def show_panel(entry: Entry) -> Panel:
     """Render a single entry as a detailed view (used by `devlog show`).
 
@@ -261,9 +260,7 @@ def show_panel(entry: Entry) -> Panel:
         Text(entry.message),
     )
 
-    title = _panel_title(
-        icon=None, label="Entry", short_id=short_id, role="show_border"
-    )
+    title = _panel_title(icon=None, label="Entry", short_id=short_id, role="show_border")
 
     return _themed_panel(
         body,
@@ -285,9 +282,7 @@ def delete_panel(entry: Entry) -> Panel:
         Text(entry.message, style="strike dim"),
     )
 
-    title = _panel_title(
-        icon="✘", label="Entry deleted", short_id=short_id, role="delete_border"
-    )
+    title = _panel_title(icon="✘", label="Entry deleted", short_id=short_id, role="delete_border")
 
     return _themed_panel(
         body,
@@ -309,9 +304,7 @@ def edit_panel(entry: Entry) -> Panel:
         Text(entry.message),
     )
 
-    title = _panel_title(
-        icon="✎", label="Entry updated", short_id=short_id, role="edit_border"
-    )
+    title = _panel_title(icon="✎", label="Entry updated", short_id=short_id, role="edit_border")
 
     return _themed_panel(
         body,
@@ -452,7 +445,9 @@ def stats_panel(
     # streak is broken"); days-since-last only renders with a value.
     current_streak, longest_streak = streaks
     rows.append(
-        _styled_row("Streak", f"{current_streak} day{plural_s(current_streak)} (longest {longest_streak})")
+        _styled_row(
+            "Streak", f"{current_streak} day{plural_s(current_streak)} (longest {longest_streak})"
+        )
     )
     if days_since is not None:
         # Mirror the doctor panel's phrasing: a future-dated newest entry
@@ -470,9 +465,7 @@ def stats_panel(
                 )
             )
         else:
-            rows.append(
-                _styled_row("Last entry", f"{days_since} day{plural_s(days_since)} ago")
-            )
+            rows.append(_styled_row("Last entry", f"{days_since} day{plural_s(days_since)} ago"))
 
     rows.append(Text())
     if top_tags:
@@ -523,6 +516,7 @@ def stats_panel(
 # ---------------------------------------------------------------------------
 # Repair summary (`devlog repair`)
 # ---------------------------------------------------------------------------
+
 
 def repair_summary(
     issues: list,
@@ -579,12 +573,8 @@ def repair_summary(
     else:
         parts = [f"Removed {dropped} {plural_noun(dropped, 'entry')}", f"kept {kept}"]
         if tags_stripped:
-            parts.append(
-                f"stripped {tags_stripped} bad tag{plural_s(tags_stripped)}"
-            )
-        rows.append(
-            Text(", ".join(parts) + ".", style=_s("success_border"))
-        )
+            parts.append(f"stripped {tags_stripped} bad tag{plural_s(tags_stripped)}")
+        rows.append(Text(", ".join(parts) + ".", style=_s("success_border")))
     if backup_path:
         rows.append(Text(f"Backup written to {backup_path}", style="dim"))
 
@@ -606,6 +596,7 @@ def repair_summary(
 # Backup result (`devlog backup`)
 # ---------------------------------------------------------------------------
 
+
 def backup_result(path: str, count: int) -> Text:
     """Build a one-line confirmation for a successful backup.
 
@@ -614,9 +605,7 @@ def backup_result(path: str, count: int) -> Text:
     would otherwise read as a sequence of separate words in the
     success line).
     """
-    line = success_line(
-        f"Backed up {count} {plural_noun(count, 'entry')} to "
-    )
+    line = success_line(f"Backed up {count} {plural_noun(count, 'entry')} to ")
     line.append(f'"{path}"', style="dim")
     return line
 
@@ -629,6 +618,7 @@ def backup_result(path: str, count: int) -> Text:
 # ---------------------------------------------------------------------------
 # Doctor report (`devlog doctor`)
 # ---------------------------------------------------------------------------
+
 
 def doctor_report(report: dict) -> Panel:
     """Render a `devlog doctor` health report as a panel.
@@ -660,7 +650,9 @@ def doctor_report(report: dict) -> Panel:
     rows.append(
         _styled_row(
             "Writable",
-            Text("yes", style=_s("success_border")) if report["writable"] else Text("no", style=_s("error_text")),
+            Text("yes", style=_s("success_border"))
+            if report["writable"]
+            else Text("no", style=_s("error_text")),
         )
     )
     rows.append(_styled_row("Entries", Text(str(report["entry_count"]), style="bold")))
@@ -706,11 +698,16 @@ def doctor_report(report: dict) -> Panel:
             _capped_enumerate(
                 issues,
                 5,
-                lambda issue: Text()
-                .append("    • ", style="dim")
-                .append(f"[{issue.get('kind', 'issue')}] ", style=_s("warning_text"))
-                .append(f"{(issue.get('entry_id') or '—')[:8] + '…' if issue.get('entry_id') and len(issue.get('entry_id')) > 8 else (issue.get('entry_id') or '—')} ", style=_s("id_dim"))
-                .append(issue.get("message", ""), style="dim"),
+                lambda issue: (
+                    Text()
+                    .append("    • ", style="dim")
+                    .append(f"[{issue.get('kind', 'issue')}] ", style=_s("warning_text"))
+                    .append(
+                        f"{(issue.get('entry_id') or '—')[:8] + '…' if issue.get('entry_id') and len(issue.get('entry_id')) > 8 else (issue.get('entry_id') or '—')} ",
+                        style=_s("id_dim"),
+                    )
+                    .append(issue.get("message", ""), style="dim")
+                ),
                 tail_prefix="    …and {remaining} more",
             )
         )

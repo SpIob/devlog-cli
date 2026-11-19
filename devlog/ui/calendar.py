@@ -1,5 +1,4 @@
-"""devlog.ui.calendar — The activity heatmap: ``sparkline`` and ``calendar_grid``.
-"""
+"""devlog.ui.calendar — The activity heatmap: ``sparkline`` and ``calendar_grid``."""
 
 from __future__ import annotations
 
@@ -34,6 +33,7 @@ _HEATMAP_TIERS: tuple[tuple[float, str, str], ...] = (
 # ---------------------------------------------------------------------------
 # Stats panel (`devlog stats`)
 # ---------------------------------------------------------------------------
+
 
 def sparkline(values: list[int]) -> str:
     """Build a compact horizontal sparkline using block characters.

@@ -75,9 +75,7 @@ def register(main) -> None:
     )
     @click.option("--model", default=None, help="Ollama model for --llm (default: llama3.2).")
     @click.option("--quiet", "-q", is_flag=True, help="Print the digest text only.")
-    @click.option(
-        "--json", "as_json", is_flag=True, help="Output a single JSON summary object."
-    )
+    @click.option("--json", "as_json", is_flag=True, help="Output a single JSON summary object.")
     def digest(
         period: str,
         days: int | None,
@@ -119,11 +117,25 @@ def register(main) -> None:
             if since_dt:
                 start_date = since_dt.astimezone(tz).date() if tz else since_dt.date()
             else:
-                start_date = min((e.created_dt.astimezone(tz).date() for e in filtered if e.created_dt.year > 1970), default=_dates.today_local_date(tz))
+                start_date = min(
+                    (
+                        e.created_dt.astimezone(tz).date()
+                        for e in filtered
+                        if e.created_dt.year > 1970
+                    ),
+                    default=_dates.today_local_date(tz),
+                )
             if until_dt:
                 end_date = until_dt.astimezone(tz).date() if tz else until_dt.date()
             else:
-                end_date = max((e.created_dt.astimezone(tz).date() for e in filtered if e.created_dt.year > 1970), default=_dates.today_local_date(tz))
+                end_date = max(
+                    (
+                        e.created_dt.astimezone(tz).date()
+                        for e in filtered
+                        if e.created_dt.year > 1970
+                    ),
+                    default=_dates.today_local_date(tz),
+                )
             entries = filtered
         else:
             # Use period/anchor
@@ -149,9 +161,7 @@ def register(main) -> None:
 
         if llm:
             try:
-                reply = _ollama.generate(
-                    _digest_prompt(text), model=model or "llama3.2"
-                )
+                reply = _ollama.generate(_digest_prompt(text), model=model or "llama3.2")
             except OllamaError as exc:
                 _handle_ollama_error(exc)
                 return
@@ -197,9 +207,7 @@ def register(main) -> None:
     @main.command()
     @click.argument("query", required=True)
     @click.option("--top", "-n", default=5, show_default=True, help="Max matches to show.")
-    @click.option(
-        "--json", "as_json", is_flag=True, help="Output structured JSON results."
-    )
+    @click.option("--json", "as_json", is_flag=True, help="Output structured JSON results.")
     @click.option("--model", default=None, help="Embedding model (default: nomic-embed-text).")
     def ask(query: str, top: int, as_json: bool, model: str | None) -> None:
         """Search the journal semantically: ASK "what did I do on auth?".

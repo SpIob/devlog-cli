@@ -51,6 +51,7 @@ def written_theme(tmp_path, monkeypatch):
     write backups, derive a destination path, etc. The autouse
     ``_clean_theme_cache`` fixture still handles the cache reset.
     """
+
     def _plant(content: str, *, name: str = "theme.toml", dir_name: str = "d") -> Path:
         d = tmp_path / dir_name
         d.mkdir(exist_ok=True)
@@ -112,8 +113,7 @@ def test_default_theme_values_match_pre_theming_strings():
     }
     for role, value in expected.items():
         assert themes.DEFAULT_THEME[role] == value, (
-            f"default for {role!r} drifted from {value!r} to "
-            f"{themes.DEFAULT_THEME[role]!r}"
+            f"default for {role!r} drifted from {value!r} to {themes.DEFAULT_THEME[role]!r}"
         )
 
 
@@ -306,9 +306,7 @@ def test_get_active_theme_uses_cache(tmp_path, monkeypatch):
 
 def test_set_active_theme_validates_against_roles():
     """Setting a theme must never expose a role outside ROLES to renderers."""
-    themes.set_active_theme(
-        {"date": "yellow", "made_up_role": "purple", "tags": "white"}
-    )
+    themes.set_active_theme({"date": "yellow", "made_up_role": "purple", "tags": "white"})
     palette = themes.get_active_theme()
     assert palette["date"] == "yellow"
     assert palette["tags"] == "white"
@@ -443,9 +441,7 @@ def test_theme_cli_set_rejects_bad_toml(theme_runner, tmp_path):
 
 def test_theme_cli_set_warns_on_unknown_roles(theme_runner, tmp_path):
     src = tmp_path / "mixed.toml"
-    src.write_text(
-        '[palette]\ndate = "red"\nmade_up = "blue"\n', encoding="utf-8"
-    )
+    src.write_text('[palette]\ndate = "red"\nmade_up = "blue"\n', encoding="utf-8")
     result = theme_runner.invoke(main, ["theme", "set", str(src)])
     assert result.exit_code == 0
     assert "made_up" in result.output
@@ -513,9 +509,7 @@ def test_load_theme_strict_returns_warnings(tmp_path, monkeypatch):
     """`strict=True` returns (palette, warnings) so the CLI can fail loud."""
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
     (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "theme.toml").write_text(
-        '[palette]\ndate = "bol yellow"\n', encoding="utf-8"
-    )
+    (tmp_path / "d" / "theme.toml").write_text('[palette]\ndate = "bol yellow"\n', encoding="utf-8")
     palette, warnings = themes.load_theme(strict=True)
     assert any("date" in w for w in warnings)
     assert palette["date"] == themes.DEFAULT_THEME["date"]
@@ -524,9 +518,7 @@ def test_load_theme_strict_returns_warnings(tmp_path, monkeypatch):
 def test_load_theme_strict_clean_file_has_no_warnings(tmp_path, monkeypatch):
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
     (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "theme.toml").write_text(
-        '[palette]\ndate = "red"\n', encoding="utf-8"
-    )
+    (tmp_path / "d" / "theme.toml").write_text('[palette]\ndate = "red"\n', encoding="utf-8")
     palette, warnings = themes.load_theme(strict=True)
     assert warnings == []
     assert palette["date"] == "red"
@@ -536,9 +528,7 @@ def test_load_theme_rejects_non_string_value(tmp_path, monkeypatch):
     """Non-string values raise TypeError from _parse_file, surfaced via OSError handler."""
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
     (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "theme.toml").write_text(
-        '[palette]\ndate = 1234\n', encoding="utf-8"
-    )
+    (tmp_path / "d" / "theme.toml").write_text("[palette]\ndate = 1234\n", encoding="utf-8")
     buf = io.StringIO()
     palette = themes.load_theme(warn_stream=buf)
     # Falls back to defaults with a warning (TypeError caught by OSError handler)
@@ -549,9 +539,7 @@ def test_load_theme_rejects_non_string_value(tmp_path, monkeypatch):
 def test_theme_set_rejects_invalid_values(theme_runner, tmp_path):
     """`theme set` exits non-zero and does not install when a value is invalid."""
     src = tmp_path / "bad-style.toml"
-    src.write_text(
-        '[palette]\ndate = "bol yellow"\n', encoding="utf-8"
-    )
+    src.write_text('[palette]\ndate = "bol yellow"\n', encoding="utf-8")
     result = theme_runner.invoke(main, ["theme", "set", str(src)])
     assert result.exit_code == 1
     assert "invalid" in result.output.lower()
@@ -607,15 +595,14 @@ def test_get_theme_status(monkeypatch, tmp_path, content, predicate):
 def test_theme_list_includes_status_footer(theme_runner, tmp_path, monkeypatch):
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
     (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "theme.toml").write_text(
-        '[palette]\ndate = "red"\n', encoding="utf-8"
-    )
+    (tmp_path / "d" / "theme.toml").write_text('[palette]\ndate = "red"\n', encoding="utf-8")
     # The CLI's console is auto-detected and narrow under CliRunner;
     # render via ui.theme_table directly with a wide console so the
     # footer's three tokens line up on one line.
     import io as _io
 
     from rich.console import Console
+
     themes.reset_cache()
     table = ui.theme_table()
     buf = _io.StringIO()
@@ -629,6 +616,7 @@ def test_theme_list_default_status_when_no_file(theme_runner, tmp_path, monkeypa
     import io as _io
 
     from rich.console import Console
+
     themes.reset_cache()
     table = ui.theme_table()
     buf = _io.StringIO()
@@ -684,9 +672,7 @@ def test_theme_list_no_preview_drops_swatch(theme_runner):
 def test_theme_reset_removes_file_and_falls_back(theme_runner, tmp_path, monkeypatch):
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
     (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "theme.toml").write_text(
-        '[palette]\ndate = "red"\n', encoding="utf-8"
-    )
+    (tmp_path / "d" / "theme.toml").write_text('[palette]\ndate = "red"\n', encoding="utf-8")
     result = theme_runner.invoke(main, ["theme", "reset"], input="y\n")
     assert result.exit_code == 0
     assert not themes.get_theme_path().exists()
@@ -729,9 +715,7 @@ def test_theme_diff_lists_overrides(theme_runner, tmp_path, monkeypatch):
 def test_theme_diff_default_flag_shows_audit(theme_runner, tmp_path, monkeypatch):
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
     (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "theme.toml").write_text(
-        '[palette]\ndate = "red"\n', encoding="utf-8"
-    )
+    (tmp_path / "d" / "theme.toml").write_text('[palette]\ndate = "red"\n', encoding="utf-8")
     result = theme_runner.invoke(main, ["theme", "diff", "--default"])
     assert result.exit_code == 0
     # In audit mode, overridden roles are excluded. The "date" role
@@ -752,9 +736,7 @@ def test_theme_diff_default_flag_shows_audit(theme_runner, tmp_path, monkeypatch
 def test_theme_export_stdout_writes_active_palette(theme_runner, tmp_path, monkeypatch):
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
     (tmp_path / "d").mkdir()
-    (tmp_path / "d" / "theme.toml").write_text(
-        '[palette]\ndate = "red"\n', encoding="utf-8"
-    )
+    (tmp_path / "d" / "theme.toml").write_text('[palette]\ndate = "red"\n', encoding="utf-8")
     result = theme_runner.invoke(main, ["theme", "export", "--stdout"])
     assert result.exit_code == 0
     assert "[palette]" in result.output
@@ -765,7 +747,9 @@ def test_theme_export_stdout_writes_active_palette(theme_runner, tmp_path, monke
 def test_theme_export_to_file(theme_runner, tmp_path, monkeypatch):
     monkeypatch.setenv("DEVLOG_DATA_DIR", str(tmp_path / "d"))
     out = tmp_path / "out.toml"
-    result = theme_runner.invoke(main, ["theme", "export", "--output", str(out), "--name", "my-theme"])
+    result = theme_runner.invoke(
+        main, ["theme", "export", "--output", str(out), "--name", "my-theme"]
+    )
     assert result.exit_code == 0
     assert out.exists()
     data = tomllib.loads(out.read_text(encoding="utf-8"))
@@ -810,8 +794,14 @@ def test_theme_export_roundtrips_through_set(theme_runner, tmp_path, monkeypatch
 def test_list_builtin_themes_includes_all_curated():
     names = themes.list_builtin_themes()
     expected = {
-        "default", "solarized", "monokai", "high_contrast",
-        "nord", "gruvbox", "dracula", "one_dark",
+        "default",
+        "solarized",
+        "monokai",
+        "high_contrast",
+        "nord",
+        "gruvbox",
+        "dracula",
+        "one_dark",
     }
     assert expected.issubset(set(names)), f"missing: {expected - set(names)}"
 
@@ -951,9 +941,7 @@ def test_export_template_round_trip():
 
 def test_build_theme_toml_round_trip():
     palette = {"date": "red", "tags": "white"}
-    text = themes.build_theme_toml(
-        palette, name="my-theme", description="A test"
-    )
+    text = themes.build_theme_toml(palette, name="my-theme", description="A test")
     data = tomllib.loads(text)
     assert data["meta"]["name"] == "my-theme"
     assert data["meta"]["description"] == "A test"
@@ -1106,9 +1094,7 @@ def test_theme_create_seeds_from_builtin(theme_runner, tmp_path):
 
 
 def test_theme_create_unknown_builtin_fails(theme_runner):
-    result = theme_runner.invoke(
-        main, ["theme", "create", "--from", "bogus"]
-    )
+    result = theme_runner.invoke(main, ["theme", "create", "--from", "bogus"])
     assert result.exit_code == 1
     assert "Unknown builtin theme" in result.output
 
@@ -1121,9 +1107,11 @@ def test_theme_create_rejects_invalid_style_then_accepts(theme_runner, tmp_path)
     result = theme_runner.invoke(
         main,
         [
-            "theme", "create",
+            "theme",
+            "create",
             "--no-install",
-            "--output", str(out),
+            "--output",
+            str(out),
         ],
         input=bad_then_good,
     )

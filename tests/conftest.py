@@ -73,12 +73,14 @@ class _FakeOllama(BaseHTTPRequestHandler):
                 vectors = []
                 for text in payload.get("input", []):
                     h = sum(ord(c) for c in str(text))
-                    vectors.append([
-                        ((h % 17) + 1) / 18.0,
-                        ((h % 13) + 1) / 14.0,
-                        ((h % 7) + 1) / 8.0,
-                        1.0,
-                    ])
+                    vectors.append(
+                        [
+                            ((h % 17) + 1) / 18.0,
+                            ((h % 13) + 1) / 14.0,
+                            ((h % 7) + 1) / 8.0,
+                            1.0,
+                        ]
+                    )
                 self._reply({"embeddings": vectors})
         else:
             self._reply({"error": "unknown path"}, status=404)
@@ -129,6 +131,7 @@ def median_of(fn, *args, runs: int = 5) -> float:
         times.append(time.perf_counter() - t0)
     times.sort()
     return times[runs // 2]
+
 
 # Re-export ANSI-stripping helper. Three test files previously inlined
 # the same one-liner; now they all import from conftest.
@@ -211,6 +214,7 @@ def write_entries():
     inlined; reusable by any test that needs to plant a malformed or
     custom store without going through ``storage.add_entry``.
     """
+
     def _write(data_dir: Path, payload: dict) -> None:
         path = data_dir / "entries.json"
         path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -252,13 +256,13 @@ def data_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 @pytest.fixture()
 def make_entry():
     """Factory: ``make_entry(id, msg, created_at=None, tags=None) -> Entry``."""
+
     def _make(entry_id: str, message: str, created_at: str | None = None, tags=None):
         return Entry(
             id=entry_id,
             message=message,
             tags=list(tags) if tags else [],
-            created_at=created_at
-            or datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            created_at=created_at or datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
 
     return _make
@@ -267,6 +271,7 @@ def make_entry():
 @pytest.fixture()
 def seed_entry(make_entry):
     """Factory that injects an entry via ``storage.add_entry()``."""
+
     def _seed(entry_id: str, message: str, created_at: str | None = None, tags=None):
         storage.add_entry(make_entry(entry_id, message, created_at, tags))
 
@@ -276,6 +281,7 @@ def seed_entry(make_entry):
 @pytest.fixture()
 def utc_iso():
     """Factory: format a datetime as a UTC ISO string."""
+
     def _fmt(dt: datetime) -> str:
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -289,6 +295,7 @@ def add_entry_cmd(runner: CliRunner):
     Raises if the CLI invocation fails or the short id cannot be parsed
     from the output.
     """
+
     def _add(message: str, *tags: str) -> str:
         args = ["add", message]
         for t in tags:
@@ -322,6 +329,7 @@ def first_json_line(output: str) -> str:
             return line
     raise ValueError(f"no non-empty line in: {output!r}")
 
+
 # ---------------------------------------------------------------------------
 # Backend-aware test helpers
 # ---------------------------------------------------------------------------
@@ -353,4 +361,3 @@ def requires_json_backend(reason: str = "asserts entries.json on-disk semantics"
     (or per-test with the same skipif expression).
     """
     return f"JSON-backend only: {reason}"
-

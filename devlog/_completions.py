@@ -50,7 +50,13 @@ complete -F _devlog_completion devlog
 def _zsh_completion() -> str:
     """Generate a zsh completion script driven by :data:`COMMANDS`."""
     COMMANDS = _get_commands()
-    lines = ["#compdef devlog", "# zsh completion for devlog", "_devlog() {", "    local -a commands", "    commands=("]
+    lines = [
+        "#compdef devlog",
+        "# zsh completion for devlog",
+        "_devlog() {",
+        "    local -a commands",
+        "    commands=(",
+    ]
     for name, desc in COMMANDS:
         # zsh single-quoted strings: escape any embedded single quote.
         safe = desc.replace("'", "'\\''")
@@ -72,9 +78,7 @@ def _fish_completion() -> str:
     for name, desc in COMMANDS:
         # fish double-quoted strings: escape backslash, double-quote, $.
         safe = desc.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
-        lines.append(
-            f'complete -c devlog -n "__fish_use_subcommand" -a "{name}" -d "{safe}"'
-        )
+        lines.append(f'complete -c devlog -n "__fish_use_subcommand" -a "{name}" -d "{safe}"')
     return "\n".join(lines) + "\n"
 
 

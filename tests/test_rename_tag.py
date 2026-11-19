@@ -1,6 +1,5 @@
 """Tests for the `devlog rename-tag` command."""
 
-
 from devlog import storage
 from devlog.cli import main
 

@@ -50,8 +50,7 @@ def _sniff_import_format(path: str) -> str:
     if stripped.startswith("#"):
         return "markdown"
     ui.print_error(
-        f'Cannot auto-detect format for "{path}". '
-        "Use --format=json or --format=markdown."
+        f'Cannot auto-detect format for "{path}". Use --format=json or --format=markdown.'
     )
     sys.exit(2)
 
@@ -140,9 +139,7 @@ def _dedup_against_existing(
     return to_add, skipped
 
 
-def _emit_import_summary(
-    to_add: int, skipped: int, unreadable: int, *, dry_run: bool
-) -> None:
+def _emit_import_summary(to_add: int, skipped: int, unreadable: int, *, dry_run: bool) -> None:
     """Print the import dry-run / success headline to the user.
 
     Both branches (dry-run yellow, success green) build the same
@@ -157,9 +154,7 @@ def _emit_import_summary(
         f"skip {skipped} duplicate{ui.plural_s(skipped)}.",
     ]
     if unreadable:
-        parts.append(
-            f" Ignored {unreadable} unreadable row{ui.plural_s(unreadable)}."
-        )
+        parts.append(f" Ignored {unreadable} unreadable row{ui.plural_s(unreadable)}.")
     console = ui.console
     console.print(line_factory("".join(parts)))
 
@@ -197,9 +192,7 @@ def _parse_markdown_export(content: str) -> list[Entry]:
     # Hidden metadata: full-precision ISO timestamp embedded in a
     # comment so it survives the Markdown round-trip without
     # cluttering the human-readable view.
-    created_at_re = _re.compile(
-        r"^<!--\s*created_at:\s*(\S+)\s*-->\s*$", _re.MULTILINE
-    )
+    created_at_re = _re.compile(r"^<!--\s*created_at:\s*(\S+)\s*-->\s*$", _re.MULTILINE)
 
     entries: list[Entry] = []
     matches = list(heading_re.finditer(content))
@@ -282,6 +275,7 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
 
     try:
         from devlog import storage
+
         existing = storage.load_entries()
     except Exception as exc:
         ui.print_error(str(exc))
@@ -297,6 +291,7 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
     if to_add:
         try:
             from devlog import storage
+
             existing.extend(to_add)
             storage.save_entries(existing)
         except Exception as exc:
@@ -312,9 +307,7 @@ def import_cmd(path: str, fmt: str, dry_run: bool, quiet: bool) -> None:
             if skipped or unreadable_rows:
                 parts = []
                 if skipped:
-                    parts.append(
-                        f"{skipped} duplicate{ui.plural_s(skipped)} skipped"
-                    )
+                    parts.append(f"{skipped} duplicate{ui.plural_s(skipped)} skipped")
                 if unreadable_rows:
                     parts.append(
                         f"{unreadable_rows} unreadable row{ui.plural_s(unreadable_rows)} ignored"
@@ -346,7 +339,9 @@ def export(
         ui.print_error(str(exc))
         sys.exit(2)
 
-    filtered = _filter.filter_pipeline(all_entries, tags=tags, since=since, until=until, preset=preset)
+    filtered = _filter.filter_pipeline(
+        all_entries, tags=tags, since=since, until=until, preset=preset
+    )
 
     if not filtered:
         ui.print_warning("Warning: No entries to export.")
@@ -360,9 +355,7 @@ def export(
     # Resolve output path. If the user did not pass -o, write into
     # <data-dir>/exports/ instead of polluting the current working dir.
     if output is None:
-        ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime(
-            "%Y%m%d-%H%M%S"
-        )
+        ts = datetime.datetime.now(tz=datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
         ext = "json" if fmt_resolved == "json" else "md"
         export_dir = storage.get_data_dir() / "exports"
         export_dir.mkdir(parents=True, exist_ok=True)

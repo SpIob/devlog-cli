@@ -91,7 +91,9 @@ def test_json_without_entries_list_raises_value_error(tmp_path):
     assert "entries" in msg  # explains the expected shape
 
 
-@pytest.mark.parametrize("payload", [[], {}, {"entries": "nope"}, {"entries": 3}, {"entries": None}, 42, 3.5, True])
+@pytest.mark.parametrize(
+    "payload", [[], {}, {"entries": "nope"}, {"entries": 3}, {"entries": None}, 42, 3.5, True]
+)
 def test_non_object_or_bad_entries_shape_raises_value_error(tmp_path, payload):
     f = _write(tmp_path, "bad.json", payload)
     with pytest.raises(ValueError, match="Invalid import file"):
@@ -121,11 +123,13 @@ def test_jrnl_skips_entry_without_text(tmp_path):
     f = _write(
         tmp_path,
         "jrnl.json",
-        {"entries": [
-            {"date": "2024-01-01T00:00:00", "text": "", "starred": False},
-            {"date": "2024-01-01T00:00:00", "starred": False},  # no text key
-            {"date": "2024-01-02T00:00:00", "text": "kept", "starred": False},
-        ]},
+        {
+            "entries": [
+                {"date": "2024-01-01T00:00:00", "text": "", "starred": False},
+                {"date": "2024-01-01T00:00:00", "starred": False},  # no text key
+                {"date": "2024-01-02T00:00:00", "text": "kept", "starred": False},
+            ]
+        },
     )
     entries = import_jrnl_json(str(f))
     assert [e.message for e in entries] == ["kept"]
@@ -144,14 +148,22 @@ def test_jrnl_tag_string_coerced_to_list(tmp_path):
     f = _write(
         tmp_path,
         "jrnl.json",
-        {"entries": [{"date": "2024-01-01T00:00:00", "text": "x", "tags": "Solo Tag", "starred": False}]},
+        {
+            "entries": [
+                {"date": "2024-01-01T00:00:00", "text": "x", "tags": "Solo Tag", "starred": False}
+            ]
+        },
     )
     entries = import_jrnl_json(str(f))
     assert entries[0].tags == ["solo-tag"]
 
 
 def test_jrnl_missing_tags_is_empty_list(tmp_path):
-    f = _write(tmp_path, "jrnl.json", {"entries": [{"date": "2024-01-01T00:00:00", "text": "x", "starred": False}]})
+    f = _write(
+        tmp_path,
+        "jrnl.json",
+        {"entries": [{"date": "2024-01-01T00:00:00", "text": "x", "starred": False}]},
+    )
     assert import_jrnl_json(str(f))[0].tags == []
 
 
@@ -173,11 +185,13 @@ def test_dayone_skips_entry_without_text(tmp_path):
     f = _write(
         tmp_path,
         "dayone.json",
-        {"entries": [
-            {"creationDate": "2024-01-01T00:00:00Z", "text": ""},
-            {"creationDate": "2024-01-01T00:00:00Z"},
-            {"creationDate": "2024-01-02T00:00:00Z", "text": "kept"},
-        ]},
+        {
+            "entries": [
+                {"creationDate": "2024-01-01T00:00:00Z", "text": ""},
+                {"creationDate": "2024-01-01T00:00:00Z"},
+                {"creationDate": "2024-01-02T00:00:00Z", "text": "kept"},
+            ]
+        },
     )
     entries = import_dayone_json(str(f))
     assert [e.message for e in entries] == ["kept"]
@@ -203,7 +217,11 @@ def test_dayone_tag_string_coerced_to_list(tmp_path):
 
 
 def test_dayone_missing_tags_empty_and_uuid_minted(tmp_path):
-    f = _write(tmp_path, "dayone.json", {"entries": [{"creationDate": "2024-01-01T00:00:00Z", "text": "x"}]})
+    f = _write(
+        tmp_path,
+        "dayone.json",
+        {"entries": [{"creationDate": "2024-01-01T00:00:00Z", "text": "x"}]},
+    )
     entry = import_dayone_json(str(f))[0]
     assert entry.tags == []
     assert len(entry.id) >= 8
@@ -227,15 +245,17 @@ def test_generic_import_full_round_trip(tmp_path):
     f = _write(
         tmp_path,
         "generic.json",
-        {"entries": [
-            {
-                "id": "generic-1",
-                "message": "hello generic",
-                "created_at": "2024-01-15T10:30:00+02:00",
-                "tags": ["Work Item", "travel"],
-                "updated_at": "2024-01-16T00:00:00Z",
-            }
-        ]},
+        {
+            "entries": [
+                {
+                    "id": "generic-1",
+                    "message": "hello generic",
+                    "created_at": "2024-01-15T10:30:00+02:00",
+                    "tags": ["Work Item", "travel"],
+                    "updated_at": "2024-01-16T00:00:00Z",
+                }
+            ]
+        },
     )
     entries = import_generic_json(str(f))
     assert len(entries) == 1
@@ -251,11 +271,13 @@ def test_generic_skips_entry_without_message(tmp_path):
     f = _write(
         tmp_path,
         "generic.json",
-        {"entries": [
-            {"message": ""},
-            {"id": "no-message"},
-            {"message": "kept", "created_at": "2024-01-01T00:00:00Z"},
-        ]},
+        {
+            "entries": [
+                {"message": ""},
+                {"id": "no-message"},
+                {"message": "kept", "created_at": "2024-01-01T00:00:00Z"},
+            ]
+        },
     )
     entries = import_generic_json(str(f))
     assert [e.message for e in entries] == ["kept"]
@@ -283,17 +305,29 @@ def test_generic_tag_string_coerced_to_list(tmp_path):
 
 
 def test_generic_missing_tags_empty_list(tmp_path):
-    f = _write(tmp_path, "generic.json", {"entries": [{"message": "x", "created_at": "2024-01-01T00:00:00Z"}]})
+    f = _write(
+        tmp_path,
+        "generic.json",
+        {"entries": [{"message": "x", "created_at": "2024-01-01T00:00:00Z"}]},
+    )
     assert import_generic_json(str(f))[0].tags == []
 
 
 def test_generic_missing_id_minted(tmp_path):
-    f = _write(tmp_path, "generic.json", {"entries": [{"message": "x", "created_at": "2024-01-01T00:00:00Z"}]})
+    f = _write(
+        tmp_path,
+        "generic.json",
+        {"entries": [{"message": "x", "created_at": "2024-01-01T00:00:00Z"}]},
+    )
     assert len(import_generic_json(str(f))[0].id) >= 8
 
 
 def test_generic_updated_at_absent_is_none(tmp_path):
-    f = _write(tmp_path, "generic.json", {"entries": [{"message": "x", "created_at": "2024-01-01T00:00:00Z"}]})
+    f = _write(
+        tmp_path,
+        "generic.json",
+        {"entries": [{"message": "x", "created_at": "2024-01-01T00:00:00Z"}]},
+    )
     assert import_generic_json(str(f))[0].updated_at is None
 
 
@@ -301,7 +335,11 @@ def test_generic_updated_at_unparseable_kept_as_is(tmp_path):
     f = _write(
         tmp_path,
         "generic.json",
-        {"entries": [{"message": "x", "created_at": "2024-01-01T00:00:00Z", "updated_at": "raw-updated"}]},
+        {
+            "entries": [
+                {"message": "x", "created_at": "2024-01-01T00:00:00Z", "updated_at": "raw-updated"}
+            ]
+        },
     )
     assert import_generic_json(str(f))[0].updated_at == "raw-updated"
 
@@ -310,9 +348,15 @@ def test_generic_updated_at_normalised(tmp_path):
     f = _write(
         tmp_path,
         "generic.json",
-        {"entries": [
-            {"message": "x", "created_at": "2024-01-01T00:00:00Z", "updated_at": "2024-01-15T10:30:00+02:00"}
-        ]},
+        {
+            "entries": [
+                {
+                    "message": "x",
+                    "created_at": "2024-01-01T00:00:00Z",
+                    "updated_at": "2024-01-15T10:30:00+02:00",
+                }
+            ]
+        },
     )
     assert import_generic_json(str(f))[0].updated_at == "2024-01-15T08:30:00Z"
 
@@ -323,17 +367,27 @@ def test_generic_updated_at_normalised(tmp_path):
 
 
 def test_detect_format_jrnl_shape(tmp_path):
-    f = _write(tmp_path, "j.json", {"entries": [{"text": "hi", "date": "2024-01-01T00:00:00", "starred": False}]})
+    f = _write(
+        tmp_path,
+        "j.json",
+        {"entries": [{"text": "hi", "date": "2024-01-01T00:00:00", "starred": False}]},
+    )
     assert detect_format(str(f)) == "jrnl"
 
 
 def test_detect_format_dayone_shape(tmp_path):
-    f = _write(tmp_path, "d.json", {"entries": [{"creationDate": "2024-01-01T00:00:00Z", "text": "hi"}]})
+    f = _write(
+        tmp_path, "d.json", {"entries": [{"creationDate": "2024-01-01T00:00:00Z", "text": "hi"}]}
+    )
     assert detect_format(str(f)) == "dayone"
 
 
 def test_detect_format_devlog_export_shape(tmp_path):
-    f = _write(tmp_path, "x.json", {"entries": [{"id": "i", "message": "m", "created_at": "2024-01-01T00:00:00Z"}]})
+    f = _write(
+        tmp_path,
+        "x.json",
+        {"entries": [{"id": "i", "message": "m", "created_at": "2024-01-01T00:00:00Z"}]},
+    )
     assert detect_format(str(f)) == "json"
 
 
@@ -387,7 +441,11 @@ def test_import_file_dispatch_jrnl(tmp_path):
 
 
 def test_import_file_dispatch_dayone(tmp_path):
-    f = _write(tmp_path, "dayone.json", {"entries": [{"creationDate": "2024-01-01T00:00:00Z", "text": "from d1"}]})
+    f = _write(
+        tmp_path,
+        "dayone.json",
+        {"entries": [{"creationDate": "2024-01-01T00:00:00Z", "text": "from d1"}]},
+    )
     entries = import_file(str(f), "dayone")
     assert [e.message for e in entries] == ["from d1"]
 
@@ -445,7 +503,11 @@ def test_import_file_auto_markdown_is_unknown_format(tmp_path):
 def test_import_file_auto_detected_devlog_export_has_no_reader(tmp_path):
     # A devlog-export-shaped file auto-detects to "json", for which
     # import_file has no branch -> clean ValueError (not a crash).
-    f = _write(tmp_path, "d.json", {"entries": [{"id": "i", "message": "m", "created_at": "2024-01-01T00:00:00Z"}]})
+    f = _write(
+        tmp_path,
+        "d.json",
+        {"entries": [{"id": "i", "message": "m", "created_at": "2024-01-01T00:00:00Z"}]},
+    )
     assert detect_format(str(f)) == "json"
     with pytest.raises(ValueError, match="Unknown import format: json"):
         import_file(str(f))

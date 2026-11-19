@@ -173,9 +173,7 @@ def test_entries_table_renders_columns(monkeypatch):
     # ``ui`` re-export is a separate binding the render path never
     # reads, so patching it is a no-op (this silently passed on
     # Linux/macOS, where the ambient width lands at exactly 80).
-    monkeypatch.setattr(
-        "devlog.ui.layout._raw_terminal_width", lambda: 120
-    )
+    monkeypatch.setattr("devlog.ui.layout._raw_terminal_width", lambda: 120)
     entries = [_make_entry("hello", ["tag1"])]
     out = render_to_text(ui.entries_table(entries, total=1))
     assert "ID" in out
@@ -216,9 +214,7 @@ def test_entries_table_with_highlight_smart_truncates():
 def test_entries_table_title_and_subtitle():
     entries = [_make_entry("hi")]
     out = render_to_text(
-        ui.entries_table(
-            entries, total=1, title="Journal · 1 entry", subtitle='Query: "hi"'
-        )
+        ui.entries_table(entries, total=1, title="Journal · 1 entry", subtitle='Query: "hi"')
     )
     assert "Journal" in out
     assert "Query" in out
@@ -369,9 +365,7 @@ def test_no_off_by_one_plural_in_captured_outputs():
         ]
         for i, out in enumerate(outputs):
             for needle in forbidden_substrings:
-                assert needle not in out, (
-                    f"output[{i}] contains malformed plural: {needle!r}"
-                )
+                assert needle not in out, f"output[{i}] contains malformed plural: {needle!r}"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
